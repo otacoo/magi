@@ -1,0 +1,248 @@
+//! The on-screen keyboard: passphrases and the hostname.
+
+use crate::canvas::Canvas;
+use crate::font::Fonts;
+use crate::theme::{self, pal};
+
+pub const ROWS: [&str; 5] = [
+    "1234567890",
+    "qwertyuiop",
+    "asdfghjkl.",
+    "zxcvbnm-_@",
+    "SHIFT SPACE DEL CANCEL DONE",
+];
+
+/// What the text is for when Done is pressed.
+#[derive(Clone, PartialEq)]
+pub enum Target {
+    WifiPass(String),
+    Hostname,
+    NtpServer,
+    /// Rename the game at this path (the keyboard is pre-filled with its
+    /// current stem).
+    Rename(String),
+}
+
+pub struct KeyboardState {
+    pub title: String,
+    pub text: String,
+    pub target: Target,
+    pub row: usize,
+    pub col: usize,
+    pub caps: bool,
+}
+
+impl KeyboardState {
+    pub fn new(title: &str, target: Target) -> Self {
+        Self {
+            title: title.to_string(),
+            text: String::new(),
+            target,
+            row: 0,
+            col: 0,
+            caps: false,
+        }
+    }
+
+    fn row_len(&self, row: usize) -> usize {
+        match row {
+            4 => 5,
+            r => ROWS[r].chars().count(),
+        }
+    }
+
+    pub fn up(&mut self) {
+        self.row = (self.row + 4) % 5;
+        self.col = self.col.min(self.row_len(self.row) - 1);
+    }
+
+    pub fn down(&mut self) {
+        self.row = (self.row + 1) % 5;
+        self.col = self.col.min(self.row_len(self.row) - 1);
+    }
+
+    pub fn left(&mut self) {
+        let n = self.row_len(self.row);
+        self.col = (self.col + n - 1) % n;
+    }
+
+    pub fn right(&mut self) {
+        let n = self.row_len(self.row);
+        self.col = (self.col + 1) % n;
+    }
+
+    /// The character or action under the cursor.
+    fn selected(&self) -> String {
+        if self.row == 4 {
+            ["SHIFT", "SPACE", "DEL", "CANCEL", "DONE"][self.col].to_string()
+        } else {
+            let c = ROWS[self.row].chars().nth(self.col).unwrap_or(' ');
+            if self.caps && c.is_ascii_lowercase() {
+                c.to_ascii_uppercase().to_string()
+            } else {
+                c.to_string()
+            }
+        }
+    }
+
+    /// Act on the current key. `None` = still editing; `Some(false)` =
+    /// cancelled; `Some(true)` = committed (the caller reads `text`).
+    pub fn activate(&mut self) -> Option<bool> {
+        match self.selected().as_str() {
+            "SHIFT" => {
+                self.caps = !self.caps;
+                None
+            }
+            "SPACE" => {
+                self.text.push(' ');
+                None
+            }
+            "DEL" => {
+                self.text.pop();
+                None
+            }
+            "CANCEL" => Some(false),
+            "DONE" => Some(true),
+            c => {
+                self.text.push_str(c);
+                None
+            }
+        }
+    }
+}
+
+pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &KeyboardState, t: f32) {
+    let (w, h) = (cv.w, cv.h);
+    cv.clear(pal().bg0);
+    theme::glow_border(
+        cv,
+        8,
+        8,
+        (w - 16) as u32,
+        (h - 16) as u32,
+        pal().border,
+        pal().glow,
+        t,
+        0.2,
+    );
+    fonts.draw_center(cv, w / 2, 40, &st.title, 14.0, pal().title);
+
+    // The buffer, with the cursor as a block.
+    let bw = w - 120;
+    cv.fill_rect(60, 60, bw as u32, 34, pal().bg2);
+    cv.rect_outline(60, 60, bw as u32, 34, pal().border);
+    let shown: String = st
+        .text
+        .chars()
+        .rev()
+        .take(44)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    let tw = fonts.text_width(&shown, 13.0);
+    fonts.draw(cv, 70, 84, &shown, 13.0, pal().text);
+    fonts.draw(cv, 70 + tw + 2, 84, "_", 13.0, pal().signal);
+
+    // The key grid.
+    let cell_w = 52;
+    let cell_h = 44;
+    let gx = (w - cell_w * 10) / 2;
+    let gy = 120;
+    for (r, line) in ROWS.iter().enumerate() {
+        if r == 4 {
+            for (i, item) in ["SHIFT", "SPACE", "DEL", "CANCEL", "DONE"]
+                .iter()
+                .enumerate()
+            {
+                let x = gx + 10 + i as i32 * 100;
+                let y = gy + r as i32 * cell_h;
+                let selected = st.row == r && st.col == i;
+                let base = if *item == "CANCEL" || *item == "DONE" {
+                    pal().text_faint
+                } else {
+                    pal().bg3
+                };
+                cv.fill_rect(x, y, 92, 36, pal().bg2);
+                if selected {
+                    // Same ring as the letter keys: the action buttons had a
+                    // dark base colour and barely showed the cursor.
+                    theme::glow_border(
+                        cv,
+                        x,
+                        y,
+                        92,
+                        36,
+                        pal().glow,
+                        pal().accent,
+                        t,
+                        0.1 * i as f32,
+                    );
+                } else {
+                    cv.rect_outline(x, y, 92, 36, base);
+                }
+                let label = if *item == "SHIFT" && st.caps {
+                    "SHIFT*"
+                } else {
+                    item
+                };
+                let lw = fonts.text_width(label, 10.0);
+                fonts.draw(
+                    cv,
+                    x + (92 - lw) / 2,
+                    y + 25,
+                    label,
+                    10.0,
+                    if selected {
+                        pal().accent
+                    } else {
+                        pal().text_dim
+                    },
+                );
+            }
+            continue;
+        }
+        for (c, ch) in line.chars().enumerate() {
+            let x = gx + c as i32 * cell_w;
+            let y = gy + r as i32 * cell_h;
+            let selected = st.row == r && st.col == c;
+            let shown = if st.caps && ch.is_ascii_lowercase() {
+                ch.to_ascii_uppercase()
+            } else {
+                ch
+            };
+            cv.fill_rect(x, y, (cell_w - 4) as u32, 36, pal().bg2);
+            if selected {
+                theme::glow_border(
+                    cv,
+                    x,
+                    y,
+                    (cell_w - 4) as u32,
+                    36,
+                    pal().glow,
+                    pal().accent,
+                    t,
+                    0.1 * c as f32,
+                );
+            }
+            let cw = fonts.text_width(&shown.to_string(), 13.0);
+            fonts.draw(
+                cv,
+                x + (cell_w - 4 - cw) / 2,
+                y + 26,
+                &shown.to_string(),
+                13.0,
+                if selected { pal().accent } else { pal().text },
+            );
+        }
+    }
+
+    fonts.draw_center(
+        cv,
+        w / 2,
+        h - 16,
+        "U/D/L/R PICK   A TYPE   START DONE   B CANCEL",
+        9.0,
+        pal().text_faint,
+    );
+}

@@ -1,0 +1,198 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  host:
+    name: tests (host)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
+      - name: Unit tests
+        run: cargo test --quiet
+      - name: Render selftest (640x480)
+        run: cargo run --quiet -- --selftest
+      - name: Render selftest (720x480)
+        run: |
+          rm -rf target/selftest-640
+          cp -r target/selftest target/selftest-640
+          MAGI_DEVICE=rg34xxsp cargo run --quiet -- --selftest
+      - uses: actions/upload-artifact@v7
+        with:
+          name: selftest-frames
+          path: |
+            target/selftest/*.ppm
+            target/selftest-640/*.ppm
+
+  cores:
+    name: cores (aarch64)
+    runs-on: ubuntu-24.04
+    container: debian:bullseye
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: System toolchain
+        run: |
+          printf '%s\n' \
+            'deb http://archive.debian.org/debian bullseye main' \
+            'deb http://archive.debian.org/debian-security bullseye-security main' \
+            > /etc/apt/sources.list
+          dpkg --add-architecture arm64
+          apt-get -o Acquire::Check-Valid-Until=false update
+          apt-get install -y --no-install-recommends \
+            build-essential make cmake git pkg-config zlib1g-dev:arm64 \
+            curl ca-certificates \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu
+
+      - name: Build pinned core set
+        run: sh tools/gehirn/cores.sh dist-cores
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: magi-cores
+          path: dist-cores/
+          if-no-files-found: error
+
+  device:
+    name: aarch64 (BaseOS)
+    runs-on: ubuntu-24.04
+    container: debian:bullseye
+    needs: cores
+    steps:
+      - uses: actions/checkout@v5
+
+      # bullseye reached LTS end-of-life in Aug 2026 and its packages moved to
+      # archive.debian.org; the archived Release files need
+      # Acquire::Check-Valid-Until=false. Staying on bullseye keeps the glibc
+      # symbol floor at 2.31.
+      - name: System toolchain
+        run: |
+          printf '%s\n' \
+            'deb http://archive.debian.org/debian bullseye main' \
+            'deb http://archive.debian.org/debian-security bullseye-security main' \
+            > /etc/apt/sources.list
+          dpkg --add-architecture arm64
+          apt-get -o Acquire::Check-Valid-Until=false update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu pkg-config curl ca-certificates
+
+      - name: Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain stable
+          . "$HOME/.cargo/env"
+          rustup target add aarch64-unknown-linux-gnu
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      # bullseye runs glibc 2.31, comfortably below the BaseOS baseline
+      # (Ubuntu 22.04 / glibc 2.35).
+      - name: Build
+        env:
+          MAGI_BUILD: ${{ github.sha }}
+        run: cargo build --release --target aarch64-unknown-linux-gnu
+
+      - name: Verify glibc symbol floor
+        run: |
+          vers=$(aarch64-linux-gnu-objdump -T target/aarch64-unknown-linux-gnu/release/magi \
+            | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -Vu | tail -1 | sed 's/^GLIBC_//')
+          echo "highest glibc symbol: ${vers:-none}"
+          major=${vers%%.*}
+          minor=${vers#*.}
+          if [ "$major" -gt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -gt 31 ]; }; then
+            echo "error: binary requires glibc newer than 2.31" >&2
+            exit 1
+          fi
+
+      - name: Fetch cores
+        uses: actions/download-artifact@v8
+        with:
+          name: magi-cores
+          path: cores-artifact
+
+      - name: Package card payloads (GEHIRN, with cores)
+        run: |
+          for panel in 640x480 720x480; do
+            sh tools/gehirn/package.sh \
+              target/aarch64-unknown-linux-gnu/release/magi \
+              "dist-$panel" cores-artifact/System/magi/cores "$panel"
+          done
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: magi-payload-640
+          path: dist-640x480/
+          if-no-files-found: error
+          include-hidden-files: true
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: magi-payload-720
+          path: dist-720x480/
+          if-no-files-found: error
+          include-hidden-files: true
+
+  release:
+    name: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    needs: [device, host]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check the tag matches the package version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          echo "tag ${GITHUB_REF_NAME}, package ${version}"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "error: the tag does not match Cargo.toml" >&2
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: magi-payload-640
+          path: dist/640
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: magi-payload-720
+          path: dist/720
+
+      - name: Package release zips
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for panel in 640 720; do
+            (cd "dist/$panel" && zip -qr "../../magi-payload-$panel-$version.zip" .)
+          done
+
+      - name: Extract release notes
+        run: |
+          awk 'BEGIN { seen = 0 } /^## \[/ { seen++ } seen == 1 { print }' \
+            CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" magi-payload-*.zip --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "MAGI ${GITHUB_REF_NAME#v}" \
+              --notes-file release-notes.md \
+              magi-payload-*.zip
+          fi

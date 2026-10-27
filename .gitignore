@@ -1,0 +1,41 @@
+# Rust build artifacts
+/target
+
+# GEHIRN card payload output
+/dist
+
+# Local dev-run artifacts (MAGI writes these at its cwd)
+/magi.log
+/magi-run.log
+/Logs/
+
+# release.cmd working directories
+/payload-latest/
+/logs/
+*.zip
+
+# adb scratch and local card folders
+/adb/
+/adbout.txt
+/Config/
+/Games/
+/BIOS/
+/Overlays/
+/Saves/
+/Screenshots/
+/Themes/
+/Covers/
+
+# Headless selftest frames
+*.ppm
+
+# OS cruft
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~

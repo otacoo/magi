@@ -1,0 +1,32 @@
+[package]
+name = "magi"
+version = "1.0.0"
+edition = "2021"
+license = "BSD-2-Clause"
+description = "MAGI - a minimal, beautiful frontend for BaseOS on Anbernic H700 handhelds"
+repository = "https://github.com/otacoo/magi"
+
+[[bin]]
+name = "magi"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+fontdue = "0.9"
+libc = "0.2"
+libloading = "0.8"
+png = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sdl2 = { version = "0.37", features = ["bundled", "static-link"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# A real BlueZ pairing agent: bluetoothctl's own agent fails to register here.
+zbus = { version = "4", default-features = false, features = ["blocking", "async-io"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

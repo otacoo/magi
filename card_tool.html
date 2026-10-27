@@ -1,0 +1,2445 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MAGI // CARD TOOL</title>
+<style>
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("assets/fonts/JetBrainsMono-Regular.ttf") format("truetype");
+  font-display: swap;
+}
+:root {
+  --bg0: #030303;
+  --bg1: #090805;
+  --bg2: #0f0d08;
+  --bg3: #17130c;
+  --title: #ff7a00;
+  --text: #ffb03b;
+  --dim: #d68a2c;
+  --faint: #94601e;
+  --border: #94601e;
+  --glow: #00ff88;
+  --alert: #ff2a1a;
+  --warn: #ffb000;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    linear-gradient(rgba(255,122,0,.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,122,0,.025) 1px, transparent 1px),
+    radial-gradient(circle at 70% 20%, rgba(255,122,0,.045), transparent 45%),
+    var(--bg0);
+  background-size: 34px 34px, 34px 34px, auto, auto;
+  color: var(--text);
+  font: 13px/1.45 var(--mono);
+  letter-spacing: .02em;
+}
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 120px rgba(0,0,0,.85);
+}
+button, input, select { font: inherit; }
+button { cursor: pointer; }
+a { color: var(--title); text-decoration: none; }
+a:hover { text-decoration: underline; }
+::selection { background: var(--title); color: var(--bg0); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--bg2); }
+::-webkit-scrollbar-thumb { background: var(--border); border: 2px solid var(--bg2); }
+::-webkit-scrollbar-thumb:hover { background: var(--title); }
+
+.app {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  height: 100vh;
+  max-width: 1500px;
+  margin: 0 auto;
+}
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px 18px 12px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(9,8,5,.86);
+}
+.brand-title {
+  color: var(--title);
+  font-size: 21px;
+  letter-spacing: .13em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.brand-title span { color: var(--text); }
+.brand-sub {
+  margin-top: 7px;
+  color: var(--faint);
+  font-size: 10px;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+}
+.cardbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.card-state {
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim);
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  border: 1px solid var(--border);
+  padding: 7px 9px;
+  background: var(--bg2);
+}
+.card-state.ready { color: var(--glow); border-color: rgba(0,255,136,.55); }
+.btn {
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  color: var(--text);
+  padding: 8px 11px;
+  text-transform: uppercase;
+  letter-spacing: .09em;
+  font-size: 11px;
+  line-height: 1;
+  transition: color .12s, border-color .12s, box-shadow .12s, background .12s;
+}
+.btn:hover:not(:disabled), .btn:focus-visible {
+  outline: none;
+  border-color: var(--title);
+  color: var(--title);
+  box-shadow: 0 0 14px rgba(255,122,0,.2);
+}
+.btn.primary { border-color: var(--title); color: var(--title); }
+.btn.small { padding: 5px 8px; font-size: 10px; }
+.btn.danger { border-color: rgba(255,42,26,.7); color: var(--alert); }
+.btn:disabled { opacity: .35; cursor: not-allowed; box-shadow: none; }
+.btn.disabled { opacity: .35; pointer-events: none; }
+label.btn { display: inline-block; text-align: center; cursor: pointer; }
+.statusbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 7px 18px;
+  color: var(--dim);
+  border-bottom: 1px solid rgba(148,96,30,.45);
+  background: var(--bg1);
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.statusbar .right { color: var(--faint); overflow: hidden; text-overflow: ellipsis; }
+
+.layout {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr) 330px;
+  min-height: 0;
+  overflow: hidden;
+}
+.pane { min-height: 0; overflow: auto; }
+.systems {
+  border-right: 1px solid var(--border);
+  background: rgba(9,8,5,.68);
+  padding: 12px 10px;
+}
+.listpane {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+.detail {
+  border-left: 1px solid var(--border);
+  background: rgba(9,8,5,.68);
+  padding: 12px;
+  overflow: auto;
+}
+.panel-title {
+  color: var(--title);
+  font-size: 10px;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  margin: 0 0 9px;
+}
+.panel-title::before { content: "// "; color: var(--faint); }
+
+.sysbtn {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: transparent;
+  color: var(--text-dim, var(--dim));
+  padding: 7px 7px;
+  text-align: left;
+  font-size: 11px;
+  letter-spacing: .04em;
+}
+.sysbtn:hover { color: var(--text); background: rgba(255,122,0,.05); }
+.sysbtn.active {
+  color: var(--glow);
+  border-left-color: var(--glow);
+  background: rgba(0,255,136,.055);
+}
+.sysbtn .count { color: var(--faint); font-size: 10px; }
+.sysbtn.active .count { color: var(--glow); }
+.sysbtn .warn { color: var(--alert); }
+
+.toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 11px 12px;
+  border-bottom: 1px solid rgba(148,96,30,.45);
+  background: var(--bg1);
+}
+.toolbar input[type="search"] {
+  flex: 1 1 180px;
+  min-width: 130px;
+  border: 1px solid var(--border);
+  background: var(--bg0);
+  color: var(--text);
+  padding: 8px 9px;
+  outline: none;
+}
+.toolbar input[type="search"]:focus { border-color: var(--title); box-shadow: 0 0 12px rgba(255,122,0,.15); }
+.toolbar select {
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  color: var(--text);
+  padding: 8px 7px;
+  outline: none;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+.toolbar select:focus { border-color: var(--title); }
+.viewtabs { display: flex; gap: 6px; }
+.viewtab {
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  color: var(--dim);
+  padding: 7px 9px;
+  font-size: 10px;
+  letter-spacing: .08em;
+}
+.viewtab.active { color: var(--title); border-color: var(--title); background: rgba(255,122,0,.06); }
+.spacer { flex: 1; }
+
+.tablewrap { overflow: auto; min-height: 0; }
+table { border-collapse: collapse; width: 100%; table-layout: auto; }
+thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg1);
+  color: var(--faint);
+  font-size: 9px;
+  letter-spacing: .14em;
+  text-align: left;
+  padding: 8px 9px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+thead th.status { width: 58px; text-align: center; }
+tbody td {
+  padding: 7px 9px;
+  border-bottom: 1px solid rgba(148,96,30,.18);
+  vertical-align: middle;
+}
+tbody tr { cursor: pointer; }
+tbody td { user-select: text; }
+.btn, .sysbtn, .arttab, .viewtab, .issue { user-select: none; }
+tbody tr:hover td { background: rgba(255,122,0,.035); }
+tbody tr.selected td { background: rgba(0,255,136,.06); }
+tbody tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--glow); }
+.game-title { color: var(--text); font-size: 12px; }
+.game-path { color: var(--faint); font-size: 9px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 520px; }
+.game-stem { color: var(--dim); font-size: 10px; }
+.warnline { color: var(--warn); font-size: 9px; margin-top: 2px; }
+.badge {
+  display: inline-block;
+  min-width: 34px;
+  padding: 3px 4px;
+  border: 1px solid;
+  text-align: center;
+  font-size: 9px;
+  line-height: 1;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+.badge.ok { color: var(--glow); border-color: rgba(0,255,136,.65); }
+.badge.miss { color: var(--faint); border-color: rgba(148,96,30,.55); }
+.badge.bad { color: var(--alert); border-color: rgba(255,42,26,.8); }
+.badge.warn { color: var(--warn); border-color: rgba(255,176,0,.7); }
+.badge.read { color: var(--dim); border-color: var(--border); }
+.cellstatus { text-align: center; padding: 5px 4px; }
+.cellstatus:hover { background: rgba(255,122,0,.08); }
+.empty { padding: 34px 20px; color: var(--faint); text-align: center; font-size: 12px; }
+
+.issues {
+  border-top: 1px solid var(--border);
+  padding: 9px 12px;
+  background: var(--bg1);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  max-height: 95px;
+  overflow: auto;
+}
+.issue {
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  color: var(--dim);
+  padding: 5px 7px;
+  font-size: 10px;
+  letter-spacing: .06em;
+}
+.issue b { color: var(--text); font-weight: normal; }
+.issue:hover { border-color: var(--title); color: var(--title); }
+.issue.alert b { color: var(--alert); }
+.issue.clean { color: var(--glow); border-color: rgba(0,255,136,.5); }
+
+.detail-head { border-bottom: 1px solid rgba(148,96,30,.45); padding-bottom: 9px; margin-bottom: 10px; }
+.detail-title { color: var(--title); font-size: 15px; line-height: 1.2; overflow-wrap: anywhere; }
+.detail-sub { color: var(--faint); font-size: 9px; margin-top: 4px; overflow-wrap: anywhere; }
+.arttabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin: 10px 0; }
+.arttab {
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  color: var(--dim);
+  padding: 6px 2px;
+  font-size: 9px;
+  letter-spacing: .04em;
+}
+.arttab.active { color: var(--title); border-color: var(--title); background: rgba(255,122,0,.06); }
+.arttab .dot { display: inline-block; width: 5px; height: 5px; margin-left: 4px; background: var(--faint); vertical-align: 1px; }
+.arttab .dot.ok { background: var(--glow); }
+.arttab .dot.bad { background: var(--alert); }
+
+.preview {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 250px;
+  max-height: 360px;
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(45deg, rgba(255,122,0,.04) 25%, transparent 25%, transparent 75%, rgba(255,122,0,.04) 75%),
+    linear-gradient(45deg, rgba(255,122,0,.04) 25%, transparent 25%, transparent 75%, rgba(255,122,0,.04) 75%),
+    var(--bg0);
+  background-size: 18px 18px;
+  background-position: 0 0, 9px 9px;
+  overflow: hidden;
+}
+.preview img { max-width: 100%; max-height: 350px; display: block; object-fit: contain; }
+.preview .missing { color: var(--faint); letter-spacing: .14em; font-size: 11px; text-align: center; padding: 20px; }
+.preview.drag { border-color: var(--glow); box-shadow: inset 0 0 25px rgba(0,255,136,.12); }
+.dropnote { color: var(--faint); font-size: 9px; text-align: center; margin-top: 6px; letter-spacing: .08em; }
+.meta { margin: 10px 0; border-top: 1px solid rgba(148,96,30,.3); }
+.metarow { display: grid; grid-template-columns: 68px minmax(0, 1fr); gap: 8px; padding: 4px 0; border-bottom: 1px solid rgba(148,96,30,.14); font-size: 10px; }
+.metarow .k { color: var(--faint); letter-spacing: .08em; }
+.metarow .v { color: var(--dim); overflow-wrap: anywhere; }
+.metarow .v.good { color: var(--glow); }
+.metarow .v.bad { color: var(--alert); }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.hint { color: var(--faint); font-size: 9px; line-height: 1.5; margin-top: 9px; }
+.hint.warn { color: var(--warn); }
+.hint.bad { color: var(--alert); }
+.rowactions { display: flex; gap: 4px; flex-wrap: wrap; }
+
+footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 18px;
+  border-top: 1px solid var(--border);
+  color: var(--faint);
+  background: var(--bg1);
+  font-size: 9px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 40px;
+  transform: translateX(-50%) translateY(20px);
+  opacity: 0;
+  pointer-events: none;
+  background: var(--bg2);
+  border: 1px solid var(--glow);
+  color: var(--glow);
+  padding: 9px 14px;
+  max-width: min(680px, 90vw);
+  font-size: 11px;
+  letter-spacing: .04em;
+  z-index: 20;
+  transition: opacity .15s, transform .15s;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.bad { border-color: var(--alert); color: var(--alert); }
+.toast.warn { border-color: var(--warn); color: var(--warn); }
+
+.sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+
+dialog.libretro {
+  width: min(760px, 92vw);
+  max-height: 82vh;
+  padding: 0;
+  border: 1px solid var(--title);
+  background: var(--bg1);
+  color: var(--text);
+  font: 12px/1.45 var(--mono);
+  box-shadow: 0 0 40px rgba(0,0,0,.8);
+}
+dialog.libretro::backdrop { background: rgba(0,0,0,.78); }
+.dlghead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--title);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.searchbar { display: flex; gap: 8px; padding: 10px 12px 4px; }
+.searchbar input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--bg0);
+  color: var(--text);
+  padding: 8px 9px;
+  outline: none;
+}
+.searchbar input:focus { border-color: var(--title); box-shadow: 0 0 12px rgba(255,122,0,.15); }
+#searchContext, #searchStatus { padding: 0 12px; }
+#searchContext { color: var(--faint); font-size: 9px; padding-top: 7px; }
+#searchStatus { color: var(--dim); min-height: 18px; }
+.searchresults {
+  max-height: 48vh;
+  overflow: auto;
+  margin: 4px 12px 12px;
+  border-top: 1px solid rgba(148,96,30,.4);
+}
+.searchhit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(148,96,30,.2);
+}
+.searchname { color: var(--text); overflow-wrap: anywhere; }
+.searcharts { display: flex; gap: 3px; flex: 0 0 auto; }
+.searcharts .btn { padding: 4px 5px; font-size: 9px; }
+.searcharts .btn.missing { visibility: hidden; }
+.searchhint { padding: 6px 12px 0; color: var(--faint); font-size: 9px; }
+
+@media (max-width: 1100px) {
+  .layout { grid-template-columns: 200px minmax(0, 1fr); }
+  .detail { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--border); max-height: 48vh; }
+  .app { height: auto; min-height: 100vh; }
+}
+@media (max-width: 720px) {
+  header { align-items: flex-start; flex-direction: column; }
+  .cardbar { justify-content: flex-start; }
+  .layout { grid-template-columns: 1fr; }
+  .systems { border-right: 0; border-bottom: 1px solid var(--border); }
+  .statusbar { flex-direction: column; gap: 2px; white-space: normal; }
+  .game-path { max-width: 260px; }
+  .pane { overflow: visible; }
+  .tablewrap { max-height: 55vh; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div>
+      <div class="brand-title">MAGI <span>// CARD TOOL</span></div>
+      <div class="brand-sub">LOCAL CARD TOOL</div>
+    </div>
+    <div class="cardbar">
+      <div id="cardState" class="card-state">NO CARD</div>
+      <button id="openBtn" class="btn primary" type="button">OPEN SD CARD</button>
+      <label id="fallbackLabel" class="btn primary" for="fallbackPicker" hidden>OPEN SD CARD</label>
+      <button id="rescanBtn" class="btn" type="button" disabled>RESCAN</button>
+    </div>
+  </header>
+
+  <div class="statusbar">
+    <span id="statusText">SELECT THE CARD ROOT TO BEGIN</span>
+    <span id="statusRight" class="right"></span>
+  </div>
+
+  <main class="layout">
+    <aside class="pane systems" aria-label="Systems">
+      <div class="panel-title">SYSTEMS</div>
+      <div id="systemList"></div>
+    </aside>
+
+    <section class="listpane">
+      <div class="toolbar">
+        <div class="viewtabs">
+          <button id="gamesTab" class="viewtab active" type="button">GAMES</button>
+          <button id="orphansTab" class="viewtab" type="button">ORPHANS</button>
+          <button id="namesTab" class="viewtab" type="button">NON-ASCII</button>
+        </div>
+        <label class="sr" for="search">Search</label>
+        <input id="search" type="search" placeholder="FILTER TITLE / PATH / STEM" autocomplete="off">
+        <label class="sr" for="filter">Filter</label>
+        <select id="filter">
+          <option value="all">ALL GAMES</option>
+          <option value="nobox">NO BOXART</option>
+          <option value="noart">NO ART AT ALL</option>
+          <option value="issues">ISSUES</option>
+        </select>
+        <button id="copyReportBtn" class="btn small" type="button" title="Copy a text report">REPORT</button>
+      </div>
+
+      <div class="tablewrap">
+        <table id="gamesTable">
+          <thead>
+            <tr>
+              <th>GAME</th>
+              <th>COVER STEM</th>
+              <th class="status">BOX</th>
+              <th class="status">SNAP</th>
+              <th class="status">TITLE</th>
+              <th class="status">LOGO</th>
+            </tr>
+          </thead>
+          <tbody id="gamesBody"></tbody>
+        </table>
+        <table id="orphansTable" hidden>
+          <thead>
+            <tr><th>COVER FILE</th><th>STATE</th><th>SIZE</th><th></th></tr>
+          </thead>
+          <tbody id="orphansBody"></tbody>
+        </table>
+        <table id="namesTable" hidden>
+          <thead>
+            <tr><th>FILE</th><th>KIND</th><th>CHARACTERS</th><th></th></tr>
+          </thead>
+          <tbody id="namesBody"></tbody>
+        </table>
+        <div id="emptyState" class="empty">OPEN THE SD CARD TO SCAN GAMES AND COVERS.</div>
+      </div>
+
+      <div id="issues" class="issues"></div>
+    </section>
+
+    <aside id="detail" class="pane detail" aria-label="Cover details">
+      <div class="panel-title">COVER</div>
+      <div id="detailEmpty" class="empty">SELECT A GAME.</div>
+      <div id="detailBody" hidden></div>
+    </aside>
+  </main>
+
+  <footer>
+    <span>MAGI // CARD TOOL</span>
+    <span>LOCAL ONLY // PNG / FAT32</span>
+  </footer>
+</div>
+
+<dialog id="libretroSearch" class="libretro">
+  <div class="dlghead">
+    <span>MAGI // LIBRETRO SEARCH</span>
+    <button id="searchClose" class="btn small" type="button">CLOSE</button>
+  </div>
+  <div id="searchContext"></div>
+  <div class="searchbar">
+    <input id="searchQuery" type="search" placeholder="SEARCH LIBRETRO NAMES" autocomplete="off">
+    <button id="searchGo" class="btn" type="button">SEARCH</button>
+    <button id="searchCrc" class="btn small" type="button">MATCH CRC</button>
+  </div>
+  <div id="searchStatus" class="hint"></div>
+  <div id="searchResults" class="searchresults"></div>
+  <div class="searchhint">ART COMES FROM LIBRETRO-THUMBNAILS. THE FILE IS SAVED UNDER YOUR ROM STEM.</div>
+</dialog>
+
+<input id="filePicker" class="sr" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" aria-hidden="true">
+<input id="fallbackPicker" class="sr" type="file" webkitdirectory aria-hidden="true">
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script>
+"use strict";
+
+const ART_TYPES = [
+  { key: 0, label: "BOXART", suffix: "", folder: "Named_Boxarts" },
+  { key: 1, label: "SNAP", suffix: ".snap", folder: "Named_Snaps" },
+  { key: 2, label: "TITLE", suffix: ".title", folder: "Named_Titles" },
+  { key: 3, label: "LOGO", suffix: ".logo", folder: "Named_Logos" },
+];
+
+const BUILTIN_SYSTEMS = [
+  { id: "gb",      name: "GAME BOY",         exts: ["gb"],                       folder: "GB",      art: "Nintendo - Game Boy" },
+  { id: "gbc",     name: "GAME BOY COLOR",   exts: ["gbc"],                      folder: "GBC",     art: "Nintendo - Game Boy Color" },
+  { id: "gba",     name: "GAME BOY ADVANCE", exts: ["gba"],                      folder: "GBA",     art: "Nintendo - Game Boy Advance" },
+  { id: "nes",     name: "NES",              exts: ["nes", "fds"],               folder: "NES",     art: "Nintendo - Nintendo Entertainment System" },
+  { id: "snes",    name: "SNES",             exts: ["sfc", "smc"],               folder: "SNES",    art: "Nintendo - Super Nintendo Entertainment System" },
+  { id: "genesis", name: "GENESIS",          exts: ["md", "gen"],                folder: "GENESIS", art: "Sega - Mega Drive - Genesis" },
+  { id: "ngp",     name: "NEO GEO POCKET",   exts: ["ngp", "ngc", "ngpc"],       folder: "NGPC",    art: "SNK - Neo Geo Pocket" },
+  { id: "psx",     name: "PLAYSTATION",      exts: ["cue", "chd", "pbp", "m3u"], folder: "PS1",     art: "Sony - PlayStation" },
+  { id: "neocd",   name: "NEO GEO CD",       exts: ["cue", "chd"],               folder: "NEOCD",   art: "SNK - Neo Geo CD" },
+  { id: "pce",     name: "PC ENGINE / SFX",  exts: ["pce", "sgx", "cue", "chd"], folder: "PCE",     art: "NEC - PC Engine - TurboGrafx 16" },
+  { id: "n64",     name: "NINTENDO 64",      exts: ["z64", "v64", "n64"],        folder: "N64",     art: "Nintendo - Nintendo 64" },
+];
+
+const $ = (id) => document.getElementById(id);
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+function esc(value) {
+  return String(value).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+function lower(value) { return String(value).toLowerCase(); }
+function normPath(value) {
+  return String(value).replace(/\\/g, "/").replace(/^\.?\//, "").replace(/\/+/g, "/");
+}
+function splitPath(value) { return normPath(value).split("/").filter(Boolean); }
+function dirname(value) {
+  const p = normPath(value);
+  const i = p.lastIndexOf("/");
+  return i < 0 ? "" : p.slice(0, i);
+}
+function basename(value) {
+  const p = normPath(value);
+  return p.slice(p.lastIndexOf("/") + 1);
+}
+function extname(value) {
+  const b = basename(value);
+  const i = b.lastIndexOf(".");
+  return i <= 0 ? "" : b.slice(i + 1);
+}
+function fileStem(value) {
+  const b = basename(value);
+  const i = b.lastIndexOf(".");
+  return i <= 0 ? b : b.slice(0, i);
+}
+function naturalCmp(a, b) {
+  return collator.compare(String(a), String(b));
+}
+function cleanTitle(stem) {
+  let out = "";
+  let depth = 0;
+  for (const ch of String(stem)) {
+    if (ch === "(" || ch === "[") depth++;
+    else if (ch === ")" || ch === "]") depth = Math.max(0, depth - 1);
+    else if (depth === 0) out += ch;
+  }
+  return out.replace(/_/g, " ").split(/\s+/).filter(Boolean).join(" ");
+}
+function coverStem(relPath) {
+  const parts = splitPath(relPath);
+  if (!parts.length) return "";
+  return parts.length > 1 ? parts[0] : fileStem(parts[0]);
+}
+function coverPath(folder, stem, artType) {
+  const art = ART_TYPES[artType] || ART_TYPES[0];
+  return `Covers/${folder}/${stem}${art.suffix}.png`;
+}
+function normalizePath(value) {
+  const out = [];
+  for (const part of String(value).replace(/\\/g, "/").split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") out.pop();
+    else out.push(part);
+  }
+  return out.join("/");
+}
+function formatBytes(n) {
+  if (!Number.isFinite(n) || n < 0) return "--";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+function pngInfo(buffer) {
+  const b = new Uint8Array(buffer);
+  if (b.length < 24) return { valid: false, w: 0, h: 0 };
+  const sig = [137, 80, 78, 71, 13, 10, 26, 10];
+  for (let i = 0; i < sig.length; i++) if (b[i] !== sig[i]) return { valid: false, w: 0, h: 0 };
+  const dv = new DataView(buffer);
+  const len = dv.getUint32(8);
+  const type = String.fromCharCode(b[12], b[13], b[14], b[15]);
+  const w = dv.getUint32(16);
+  const h = dv.getUint32(20);
+  return { valid: len === 13 && type === "IHDR" && w > 0 && h > 0, w, h };
+}
+async function readHead(file, n) {
+  return file.slice(0, Math.min(n, file.size)).arrayBuffer();
+}
+
+// ---- directory readers -----------------------------------------------------
+
+function makeFsCard(handle, canWrite) {
+  const split = (p) => splitPath(p);
+
+  async function child(parent, name, kind, create) {
+    const low = lower(name);
+    if (!create) {
+      try {
+        const h = kind === "directory"
+          ? await parent.getDirectoryHandle(name)
+          : await parent.getFileHandle(name);
+        if (h.kind === kind) return h;
+      } catch (_) { /* fall through to a case-insensitive listing */ }
+    }
+    try {
+      for await (const [n, h] of parent.entries()) {
+        if (lower(n) === low && h.kind === kind) return h;
+      }
+    } catch (_) { /* ignore */ }
+    if (create) {
+      return kind === "directory"
+        ? parent.getDirectoryHandle(name, { create: true })
+        : parent.getFileHandle(name, { create: true });
+    }
+    return null;
+  }
+
+  async function dir(path, create = false) {
+    let d = handle;
+    for (const part of split(path)) {
+      const next = await child(d, part, "directory", create);
+      if (!next) throw new Error(`missing folder: ${path}`);
+      d = next;
+    }
+    return d;
+  }
+
+  async function fileHandle(path) {
+    const parts = split(path);
+    const name = parts.pop();
+    if (!name) throw new Error(`missing file: ${path}`);
+    const d = await dir(parts.join("/"));
+    const f = await child(d, name, "file", false);
+    if (!f) throw new Error(`missing file: ${path}`);
+    return f;
+  }
+
+  async function file(path) {
+    return (await fileHandle(path)).getFile();
+  }
+
+  async function walk(d, prefix, out) {
+    for await (const [name, h] of d.entries()) {
+      const rel = prefix ? `${prefix}/${name}` : name;
+      if (h.kind === "file") out.push(rel);
+      else await walk(h, rel, out);
+    }
+  }
+
+  return {
+    mode: "fs",
+    name: handle.name || "SD CARD",
+    canWrite,
+    handle,
+    async dirExists(path) {
+      try { await dir(path); return true; } catch (_) { return false; }
+    },
+    async walkRel(path) {
+      const out = [];
+      try { await walk(await dir(path), "", out); } catch (_) { return out; }
+      return out;
+    },
+    async readText(path) {
+      return (await file(path)).text();
+    },
+    async readFile(path) {
+      return file(path);
+    },
+    async writeFile(path, blob) {
+      const parts = split(path);
+      const name = parts.pop();
+      const d = await dir(parts.join("/"), true);
+      let f = await child(d, name, "file", false);
+      if (!f) f = await child(d, name, "file", true);
+      const w = await f.createWritable();
+      await w.write(blob);
+      await w.close();
+      return "written";
+    },
+    async removeFile(path) {
+      const parts = split(path);
+      const name = parts.pop();
+      const d = await dir(parts.join("/"));
+      const f = await child(d, name, "file", false);
+      if (!f) throw new Error(`missing file: ${path}`);
+      await d.removeEntry(f.name);
+      return "removed";
+    },
+    async renameFile(from, to) {
+      if (lower(dirname(from)) !== lower(dirname(to))) {
+        throw new Error("rename must stay in the same folder");
+      }
+      const name = basename(to);
+      if (!name || name.includes("/") || name.includes("\\")) throw new Error("invalid file name");
+      const d = await dir(dirname(from));
+      const src = await child(d, basename(from), "file", false);
+      if (!src) throw new Error(`missing file: ${from}`);
+      const dst = await child(d, name, "file", false);
+      if (dst && lower(dst.name) !== lower(src.name)) throw new Error(`target exists: ${name}`);
+      if (dst && dst.name === src.name) return "renamed";
+      if (typeof src.move === "function") {
+        try { await src.move(name); return "renamed"; } catch (_) { /* copy below */ }
+      }
+      const data = await src.getFile();
+      const created = !dst;
+      const out = await (dst || await child(d, name, "file", true)).createWritable();
+      try {
+        await out.write(data);
+        await out.close();
+      } catch (error) {
+        await out.abort().catch(() => {});
+        if (created) await d.removeEntry(name).catch(() => {});
+        throw error;
+      }
+      if (lower(src.name) !== lower(name)) await d.removeEntry(src.name);
+      return "renamed";
+    },
+  };
+}
+
+function makeInputCard(fileList) {
+  const entries = new Map();
+  let root = "";
+  const known = new Set(["games", "covers", "system", "config", "bios", "overlays", "saves", "screenshots", "themes", "logs"]);
+  const keep = new Set(["games", "covers", "system", "config"]);
+  for (const f of fileList) {
+    const raw = normPath(f.webkitRelativePath || f.name);
+    const parts = raw.split("/");
+    if (parts.length > 1 && !known.has(lower(parts[0]))) {
+      if (!root) root = parts[0];
+      if (lower(parts[0]) === lower(root)) parts.shift();
+    }
+    if (!keep.has(lower(parts[0] || ""))) continue;
+    const rel = parts.join("/");
+    if (rel) entries.set(lower(rel), { path: rel, file: f });
+  }
+  const paths = () => [...entries.keys()];
+  return {
+    mode: "input",
+    name: root || "CARD (READ ONLY)",
+    canWrite: false,
+    entries,
+    async dirExists(path) {
+      const p = lower(normPath(path));
+      return paths().some((k) => k === p || k.startsWith(`${p}/`));
+    },
+    async walkRel(path) {
+      const p = lower(normPath(path));
+      const prefix = p ? `${p}/` : "";
+      const out = [];
+      for (const [k, v] of entries) {
+        if (k.startsWith(prefix)) out.push(v.path.slice(normPath(path).length ? normPath(path).length + 1 : 0));
+      }
+      return out;
+    },
+    async readText(path) {
+      const e = entries.get(lower(normPath(path)));
+      if (!e) throw new Error(`missing file: ${path}`);
+      return e.file.text();
+    },
+    async readFile(path) {
+      const e = entries.get(lower(normPath(path)));
+      if (!e) throw new Error(`missing file: ${path}`);
+      return e.file;
+    },
+    async writeFile(path, blob) {
+      downloadBlob(blob, basename(path));
+      return "downloaded";
+    },
+    async removeFile() {
+      throw new Error("read only");
+    },
+    async renameFile() {
+      throw new Error("read only");
+    },
+  };
+}
+
+class MemoryCard {
+  constructor(files = {}, name = "MEMORY CARD", canWrite = true) {
+    this.mode = "memory";
+    this.name = name;
+    this.canWrite = canWrite;
+    this.entries = new Map();
+    for (const [path, value] of Object.entries(files)) {
+      const p = normPath(path);
+      let file;
+      if (value instanceof Blob) file = new File([value], basename(p), { type: value.type || "application/octet-stream" });
+      else file = new File([String(value)], basename(p), { type: "text/plain" });
+      this.entries.set(lower(p), { path: p, file });
+    }
+  }
+  async dirExists(path) {
+    const p = lower(normPath(path));
+    return [...this.entries.keys()].some((k) => k === p || k.startsWith(`${p}/`));
+  }
+  async walkRel(path) {
+    const p = lower(normPath(path));
+    const prefix = p ? `${p}/` : "";
+    const out = [];
+    for (const [k, v] of this.entries) {
+      if (k.startsWith(prefix)) out.push(v.path.slice(normPath(path).length ? normPath(path).length + 1 : 0));
+    }
+    return out;
+  }
+  async readText(path) {
+    const e = this.entries.get(lower(normPath(path)));
+    if (!e) throw new Error(`missing file: ${path}`);
+    return e.file.text();
+  }
+  async readFile(path) {
+    const e = this.entries.get(lower(normPath(path)));
+    if (!e) throw new Error(`missing file: ${path}`);
+    return e.file;
+  }
+  async writeFile(path, blob) {
+    const p = normPath(path);
+    this.entries.set(lower(p), { path: p, file: new File([blob], basename(p), { type: "image/png" }) });
+    return "written";
+  }
+  async removeFile(path) {
+    const k = lower(normPath(path));
+    if (!this.entries.delete(k)) throw new Error(`missing file: ${path}`);
+    return "removed";
+  }
+  async renameFile(from, to) {
+    const src = lower(normPath(from));
+    const dst = normPath(to);
+    const entry = this.entries.get(src);
+    if (!entry) throw new Error(`missing file: ${from}`);
+    if (this.entries.has(lower(dst))) throw new Error(`target exists: ${basename(dst)}`);
+    this.entries.delete(src);
+    entry.path = dst;
+    this.entries.set(lower(dst), entry);
+    return "renamed";
+  }
+}
+
+// ---- scanning --------------------------------------------------------------
+
+function normalizeSystem(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const id = String(raw.id || "").trim();
+  if (!id) return null;
+  const exts = Array.isArray(raw.exts) ? raw.exts.map((e) => String(e).toLowerCase()) : [];
+  const folder = String(raw.folder || id.toUpperCase()).trim() || id.toUpperCase();
+  return { id, name: String(raw.name || id).trim() || id, exts, folder, art: raw.art || null };
+}
+
+async function loadSystems(card) {
+  for (const path of ["Config/systems.json", "System/magi/systems.json"]) {
+    try {
+      const text = (await card.readText(path)).replace(/^\uFEFF/, "");
+      const json = JSON.parse(text);
+      const list = Array.isArray(json) ? json : json.systems;
+      if (Array.isArray(list) && list.length) {
+        const systems = list.map(normalizeSystem).filter(Boolean);
+        if (systems.length) return systems;
+      }
+    } catch (_) { /* try the next catalogue */ }
+  }
+  return BUILTIN_SYSTEMS.map(normalizeSystem);
+}
+
+function gameRecord(sys, path, rel, stem, title) {
+  return {
+    id: lower(path),
+    systemId: sys.id,
+    systemName: sys.name,
+    folder: sys.folder,
+    path,
+    rel,
+    stem,
+    title,
+    covers: [null, null, null, null],
+    conflicts: [false, false, false, false],
+    shared: false,
+  };
+}
+
+async function scanSystem(card, sys) {
+  const base = `Games/${sys.folder}`;
+  let rels = [];
+  try { rels = await card.walkRel(base); } catch (_) { return []; }
+  const games = [];
+
+  if (sys.id === "n64") {
+    const folders = new Set();
+    for (const rel of rels) {
+      const parts = rel.split("/");
+      if (parts.length === 2 && lower(parts[1]) === "rom.z64") folders.add(parts[0]);
+    }
+    for (const folder of folders) {
+      let title = cleanTitle(folder);
+      try {
+        const cfg = JSON.parse((await card.readText(`${base}/${folder}/config.json`)).replace(/^\uFEFF/, ""));
+        if (cfg && typeof cfg.label === "string" && cfg.label.trim()) title = cfg.label.trim();
+      } catch (_) { /* no label */ }
+      games.push(gameRecord(sys, `${base}/${folder}/rom.z64`, `${folder}/rom.z64`, folder, title));
+    }
+  } else {
+    const exts = new Set(sys.exts);
+    // Cards packaged before playlist support may omit m3u.
+    if (sys.id === "psx" && !exts.has("m3u")) exts.add("m3u");
+    for (const rel of rels) {
+      const parts = rel.split("/");
+      if (!exts.has(lower(extname(parts[parts.length - 1])))) continue;
+      const stem = coverStem(rel);
+      if (!stem) continue;
+      games.push(gameRecord(sys, `${base}/${rel}`, rel, stem, cleanTitle(fileStem(parts[parts.length - 1]))));
+    }
+
+    // A playlist is the game; the discs it lists are not separate titles.
+    const hidden = new Set();
+    for (const g of games.filter((entry) => lower(entry.rel).endsWith(".m3u"))) {
+      let text = "";
+      try { text = await card.readText(g.path); } catch (_) { continue; }
+      const dir = dirname(g.path);
+      for (const raw of text.replace(/^\uFEFF/, "").split(/\r?\n/)) {
+        let line = raw.trim();
+        if (!line || line.startsWith("#")) continue;
+        let path;
+        if (line.startsWith("/mnt/sdcard/")) path = line.slice("/mnt/sdcard/".length);
+        else if (line.startsWith("/")) continue;
+        else path = normalizePath(dir ? `${dir}/${line}` : line);
+        if (path) hidden.add(lower(path));
+      }
+    }
+    for (let i = games.length - 1; i >= 0; i--) {
+      if (hidden.has(lower(games[i].path))) games.splice(i, 1);
+    }
+  }
+
+  games.sort((a, b) => naturalCmp(a.title, b.title) || naturalCmp(a.path, b.path));
+  return games;
+}
+
+async function scanCoverFiles(card) {
+  let rels = [];
+  try { rels = await card.walkRel("Covers"); } catch (_) { return []; }
+  const out = [];
+  for (const rel of rels) {
+    const path = `Covers/${rel}`;
+    let file;
+    try { file = await card.readFile(path); } catch (_) { continue; }
+    let info = { valid: false, w: 0, h: 0 };
+    try { info = pngInfo(await readHead(file, 24)); } catch (_) { /* unreadable */ }
+    out.push({
+      path,
+      rel,
+      name: basename(rel),
+      folder: rel.split("/")[0] || "",
+      size: file.size,
+      valid: info.valid,
+      w: info.w,
+      h: info.h,
+      file,
+    });
+  }
+  return out;
+}
+
+async function scanCard(card, onProgress = () => {}) {
+  const systems = await loadSystems(card);
+  const games = [];
+  for (let i = 0; i < systems.length; i++) {
+    onProgress(i, systems.length, systems[i]);
+    games.push(...await scanSystem(card, systems[i]));
+  }
+  const covers = await scanCoverFiles(card);
+  return buildModel(systems, games, covers);
+}
+
+function buildModel(systems, games, covers) {
+  const expected = new Map();
+  const gameKeys = new Map();
+
+  for (const game of games) {
+    game.covers = [null, null, null, null];
+    game.conflicts = [false, false, false, false];
+    game.shared = false;
+    for (const art of ART_TYPES) {
+      const path = coverPath(game.folder, game.stem, art.key);
+      const key = lower(path);
+      if (!expected.has(key)) expected.set(key, []);
+      expected.get(key).push({ game, art: art.key, path });
+      if (!gameKeys.has(key)) gameKeys.set(key, new Set());
+      gameKeys.get(key).add(game.id);
+    }
+  }
+
+  const byPath = new Map();
+  for (const cover of covers) {
+    const key = lower(cover.path);
+    if (!byPath.has(key)) byPath.set(key, []);
+    byPath.get(key).push(cover);
+  }
+
+  for (const [key, refs] of expected) {
+    const files = byPath.get(key) || [];
+    if (!files.length) continue;
+    for (const ref of refs) {
+      ref.game.covers[ref.art] = files[0];
+      if (files.length > 1) ref.game.conflicts[ref.art] = true;
+    }
+  }
+
+  for (const [key, ids] of gameKeys) {
+    if (ids.size > 1 && byPath.has(key)) {
+      for (const ref of expected.get(key) || []) ref.game.shared = true;
+    }
+  }
+
+  const orphans = [];
+  const systemFolders = new Set(systems.map((sys) => lower(sys.folder)));
+  for (const cover of covers) {
+    const key = lower(cover.path);
+    if (expected.has(key)) {
+      const files = byPath.get(key) || [];
+      if (files.length > 1 && files[0] !== cover) orphans.push({ ...cover, reason: "DUPLICATE" });
+      continue;
+    }
+    const depth = cover.rel.split("/").length;
+    let reason = "ORPHAN";
+    if (!lower(cover.name).endsWith(".png")) reason = "NOT PNG";
+    else if (depth > 2) reason = "NESTED";
+    else if (!systemFolders.has(lower(cover.folder))) reason = "NO SYSTEM";
+    orphans.push({ ...cover, reason });
+  }
+
+  let missingFiles = 0;
+  let missingBox = 0;
+  let missingAny = 0;
+  let invalid = 0;
+  let conflicts = 0;
+  let shared = 0;
+  for (const game of games) {
+    if (game.shared) shared++;
+    const box = game.covers[0];
+    if (!box || !box.valid) missingBox++;
+    if (game.covers.every((cover) => !cover || !cover.valid)) missingAny++;
+    for (let art = 0; art < ART_TYPES.length; art++) {
+      const cover = game.covers[art];
+      if (!cover) missingFiles++;
+      else if (!cover.valid) invalid++;
+      if (game.conflicts[art]) conflicts++;
+    }
+  }
+
+  orphans.sort((a, b) => naturalCmp(a.path, b.path));
+
+  const nonAscii = [];
+  const seenNames = new Set();
+  const systemByFolder = new Map(systems.map((sys) => [lower(sys.folder), sys]));
+  const noteName = (path, kind, folder) => {
+    const key = lower(path);
+    if (seenNames.has(key)) return;
+    const bad = [...new Set([...path].filter((ch) => ch.codePointAt(0) > 127))];
+    if (!bad.length) return;
+    seenNames.add(key);
+    const sys = systemByFolder.get(lower(folder));
+    nonAscii.push({
+      path,
+      name: basename(path),
+      kind,
+      folder,
+      inName: [...basename(path)].some((ch) => ch.codePointAt(0) > 127),
+      systemId: sys ? sys.id : null,
+      systemName: sys ? sys.name : "",
+      chars: bad.map((ch) => `${ch} U+${ch.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}`),
+    });
+  };
+  for (const game of games) noteName(game.path, "GAME", game.folder);
+  for (const cover of covers) noteName(cover.path, "COVER", cover.folder);
+  nonAscii.sort((a, b) => naturalCmp(a.path, b.path));
+
+  return {
+    systems,
+    games,
+    covers,
+    orphans,
+    nonAscii,
+    expected,
+    stats: {
+      missingFiles,
+      missingBox,
+      missingAny,
+      invalid,
+      conflicts,
+      shared,
+      orphans: orphans.length,
+      nonAscii: nonAscii.length,
+      complete: games.filter((g) => g.covers[0] && g.covers[0].valid).length,
+    },
+  };
+}
+
+// ---- UI --------------------------------------------------------------------
+
+let card = null;
+let model = { systems: [], games: [], covers: [], orphans: [], nonAscii: [], expected: new Map(), stats: {} };
+let selectedGameId = null;
+let selectedArt = 0;
+let view = "games";
+let filter = "all";
+let search = "";
+let systemFilter = "all";
+let scanning = false;
+let directPickerBroken = false;
+let fallbackLoading = false;
+let previewUrl = null;
+let toastTimer = 0;
+
+function setStatus(text, right = "") {
+  $("statusText").textContent = text;
+  $("statusRight").textContent = right;
+}
+
+function directPicker() {
+  return typeof window.showDirectoryPicker === "function";
+}
+
+function openHint() {
+  return directPicker()
+    ? "OPEN THE SD CARD TO SCAN GAMES AND COVERS."
+    : "OPEN THE SD CARD (READ-ONLY IN FIREFOX) OR USE CHROME/EDGE TO WRITE.";
+}
+
+function toast(message, kind = "") {
+  const el = $("toast");
+  el.textContent = message;
+  el.className = `toast show ${kind}`.trim();
+  clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => { el.className = "toast"; }, 4200);
+}
+
+function setCardState() {
+  const el = $("cardState");
+  if (!card) {
+    el.textContent = "NO CARD";
+    el.className = "card-state";
+    return;
+  }
+  el.textContent = `${card.name} // ${card.canWrite ? "READ/WRITE" : "READ ONLY"}`;
+  el.className = "card-state ready";
+}
+
+function currentGame() {
+  return model.games.find((g) => g.id === selectedGameId) || null;
+}
+
+function systemCounts() {
+  const counts = new Map();
+  for (const sys of model.systems) counts.set(sys.id, { games: 0, nobox: 0 });
+  for (const game of model.games) {
+    const c = counts.get(game.systemId);
+    if (!c) continue;
+    c.games++;
+    if (!game.covers[0] || !game.covers[0].valid) c.nobox++;
+  }
+  return counts;
+}
+
+function renderSystems() {
+  const counts = systemCounts();
+  const rows = [];
+  const allGames = model.games.length;
+  const allNoBox = model.games.filter((g) => !g.covers[0] || !g.covers[0].valid).length;
+  rows.push(`<button type="button" class="sysbtn ${systemFilter === "all" ? "active" : ""}" data-system="all">
+    <span>ALL SYSTEMS</span><span class="count" title="games / without boxart">${allGames}${allNoBox ? ` / <span class="warn">${allNoBox}</span>` : ""}</span>
+  </button>`);
+  for (const sys of model.systems) {
+    const c = counts.get(sys.id) || { games: 0, nobox: 0 };
+    rows.push(`<button type="button" class="sysbtn ${systemFilter === sys.id ? "active" : ""}" data-system="${esc(sys.id)}">
+      <span>${esc(sys.name)}</span><span class="count" title="games / without boxart">${c.games}${c.nobox ? ` / <span class="warn">${c.nobox}</span>` : ""}</span>
+    </button>`);
+  }
+  $("systemList").innerHTML = rows.join("");
+}
+
+function statusFor(game, art) {
+  if (game.conflicts[art]) return "warn";
+  const cover = game.covers[art];
+  if (!cover) return "miss";
+  return cover.valid ? "ok" : "bad";
+}
+
+function badgeFor(game, art) {
+  const kind = statusFor(game, art);
+  const label = kind === "ok" ? "OK" : kind === "bad" ? "BAD" : kind === "warn" ? "DUP" : "--";
+  return `<span class="badge ${kind}">${label}</span>`;
+}
+
+function visibleGames() {
+  const q = lower(search.trim());
+  return model.games.filter((game) => {
+    if (systemFilter !== "all" && game.systemId !== systemFilter) return false;
+    if (q && !lower(`${game.title} ${game.path} ${game.stem}`).includes(q)) return false;
+    const noBox = !game.covers[0] || !game.covers[0].valid;
+    const noArt = game.covers.every((cover) => !cover || !cover.valid);
+    const issues = game.covers.some((cover) => cover && !cover.valid) || game.conflicts.some(Boolean) || game.shared;
+    if (filter === "nobox" && !noBox) return false;
+    if (filter === "noart" && !noArt) return false;
+    if (filter === "issues" && !issues) return false;
+    return true;
+  });
+}
+
+function visibleOrphans() {
+  const q = lower(search.trim());
+  return model.orphans.filter((cover) => {
+    if (systemFilter !== "all") {
+      const sys = model.systems.find((s) => s.id === systemFilter);
+      if (!sys || lower(cover.folder) !== lower(sys.folder)) return false;
+    }
+    if (q && !lower(`${cover.path} ${cover.reason}`).includes(q)) return false;
+    return true;
+  });
+}
+
+function visibleNonAscii() {
+  const q = lower(search.trim());
+  return (model.nonAscii || []).filter((item) => {
+    if (systemFilter !== "all" && item.systemId !== systemFilter) return false;
+    if (q && !lower(`${item.path} ${item.kind} ${item.chars.join(" ")}`).includes(q)) return false;
+    return true;
+  });
+}
+
+function renderGames() {
+  const list = visibleGames();
+  $("emptyState").hidden = list.length > 0 || view !== "games";
+  $("gamesTable").hidden = view !== "games";
+  $("orphansTable").hidden = view !== "orphans";
+  $("namesTable").hidden = view !== "names";
+  if (view === "orphans") return renderOrphans();
+  if (view === "names") return renderNames();
+  if (!list.length) {
+    $("emptyState").textContent = card ? "NO GAMES MATCH THIS FILTER." : openHint();
+    $("gamesBody").innerHTML = "";
+    return;
+  }
+  $("gamesBody").innerHTML = list.map((game) => {
+    const shared = game.shared ? `<div class="warnline">SHARED COVER STEM</div>` : "";
+    const bad = game.conflicts.some(Boolean) ? `<div class="warnline">DUPLICATE COVER FILE</div>` : "";
+    return `<tr data-id="${esc(game.id)}" class="${game.id === selectedGameId ? "selected" : ""}">
+      <td>
+        <div class="game-title">${esc(game.title)}</div>
+        <div class="game-path">${esc(game.path)}</div>
+        ${shared}${bad}
+      </td>
+      <td><span class="game-stem">${esc(game.stem)}</span></td>
+      ${ART_TYPES.map((art) => `<td class="cellstatus" data-art="${art.key}">${badgeFor(game, art.key)}</td>`).join("")}
+    </tr>`;
+  }).join("");
+}
+
+function renderOrphans() {
+  const list = visibleOrphans();
+  $("gamesTable").hidden = true;
+  $("orphansTable").hidden = false;
+  $("namesTable").hidden = true;
+  if (!list.length) {
+    $("emptyState").hidden = false;
+    $("emptyState").textContent = card ? "NO ORPHAN COVER FILES." : openHint();
+    $("orphansBody").innerHTML = "";
+    return;
+  }
+  $("emptyState").hidden = true;
+  $("orphansBody").innerHTML = list.map((cover) => {
+    const kind = cover.reason === "DUPLICATE" || cover.reason === "NOT PNG" ? "warn" : "miss";
+    const rename = card && card.canWrite
+      ? `<button class="btn small" type="button" data-rename="${esc(cover.path)}" data-kind="COVER">RENAME</button>`
+      : "";
+    const remove = card && card.canWrite
+      ? `<button class="btn small danger" type="button" data-remove="${esc(cover.path)}">REMOVE</button>`
+      : "";
+    return `<tr>
+      <td><div class="game-title">${esc(cover.name)}</div><div class="game-path">${esc(cover.path)}</div></td>
+      <td><span class="badge ${kind}">${esc(cover.reason)}</span></td>
+      <td>${formatBytes(cover.size)}</td>
+      <td><div class="rowactions">${rename}${remove}</div></td>
+    </tr>`;
+  }).join("");
+}
+
+function renderNames() {
+  const list = visibleNonAscii();
+  $("gamesTable").hidden = true;
+  $("orphansTable").hidden = true;
+  $("namesTable").hidden = false;
+  if (!list.length) {
+    $("emptyState").hidden = false;
+    $("emptyState").textContent = card ? "NO NON-ASCII FILE NAMES." : openHint();
+    $("namesBody").innerHTML = "";
+    return;
+  }
+  $("emptyState").hidden = true;
+  $("namesBody").innerHTML = list.map((item) => {
+    const rename = card && card.canWrite && item.inName
+      ? `<button class="btn small" type="button" data-rename="${esc(item.path)}" data-kind="${esc(item.kind)}">RENAME</button>`
+      : "";
+    const where = item.inName ? "" : `<div class="warnline">FOLDER NAME</div>`;
+    return `<tr>
+      <td><div class="game-title">${esc(item.name)}</div><div class="game-path">${esc(item.path)}</div>${where}</td>
+      <td><span class="badge warn">${esc(item.kind)}</span></td>
+      <td><span class="game-path">${esc(item.chars.join("  "))}</span></td>
+      <td><div class="rowactions">${rename}</div></td>
+    </tr>`;
+  }).join("");
+}
+
+function renderIssues() {
+  const s = model.stats;
+  if (!card) {
+    $("issues").innerHTML = `<span class="issue">NO CARD LOADED</span>`;
+    return;
+  }
+  const items = [];
+  if (s.missingBox) items.push(`<button type="button" class="issue" data-issue="nobox">NO BOXART <b>${s.missingBox}</b></button>`);
+  if (s.missingAny) items.push(`<button type="button" class="issue" data-issue="noart">NO ART <b>${s.missingAny}</b></button>`);
+  if (s.invalid) items.push(`<button type="button" class="issue alert" data-issue="issues">INVALID <b>${s.invalid}</b></button>`);
+  if (s.conflicts) items.push(`<button type="button" class="issue alert" data-issue="issues">DUPLICATE <b>${s.conflicts}</b></button>`);
+  if (s.shared) items.push(`<button type="button" class="issue alert" data-issue="issues">SHARED STEM <b>${s.shared}</b></button>`);
+  if (s.orphans) items.push(`<button type="button" class="issue" data-issue="orphans">ORPHANS <b>${s.orphans}</b></button>`);
+  if (s.nonAscii) items.push(`<button type="button" class="issue alert" data-issue="names">NON-ASCII <b>${s.nonAscii}</b></button>`);
+  if (!items.length) items.push(`<span class="issue clean">CARD IS CLEAN</span>`);
+  $("issues").innerHTML = items.join("");
+}
+
+function renderDetail() {
+  const game = currentGame();
+  const empty = $("detailEmpty");
+  const body = $("detailBody");
+  if (!game) {
+    empty.hidden = false;
+    body.hidden = true;
+    if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
+    return;
+  }
+  empty.hidden = true;
+  body.hidden = false;
+  const art = ART_TYPES[selectedArt] || ART_TYPES[0];
+  const cover = game.covers[selectedArt];
+  const path = coverPath(game.folder, game.stem, selectedArt);
+  const status = statusFor(game, selectedArt);
+  const statusText = status === "ok" ? "OK" : status === "bad" ? "INVALID PNG" : status === "warn" ? "DUPLICATE FILE" : "MISSING";
+
+  if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
+  let preview = `<div class="missing">NO COVER<br><span class="game-path">${esc(path)}</span></div>`;
+  if (cover) {
+    previewUrl = URL.createObjectURL(cover.file);
+    preview = `<img id="coverImg" alt="" src="${previewUrl}">`;
+  }
+
+  const meta = [];
+  meta.push(`<div class="metarow"><span class="k">EXPECTED</span><span class="v">${esc(path)}</span></div>`);
+  if (cover) {
+    meta.push(`<div class="metarow"><span class="k">FOUND</span><span class="v">${esc(cover.path)}</span></div>`);
+    meta.push(`<div class="metarow"><span class="k">PNG</span><span class="v ${cover.valid ? "good" : "bad"}">${cover.valid ? `${cover.w} x ${cover.h}` : "INVALID HEADER"}</span></div>`);
+    meta.push(`<div class="metarow"><span class="k">SIZE</span><span class="v">${formatBytes(cover.size)}</span></div>`);
+  }
+  meta.push(`<div class="metarow"><span class="k">STATUS</span><span class="v ${status === "ok" ? "good" : status === "miss" ? "" : "bad"}">${statusText}</span></div>`);
+
+  const tabs = ART_TYPES.map((entry) => {
+    const st = statusFor(game, entry.key);
+    return `<button type="button" class="arttab ${entry.key === selectedArt ? "active" : ""}" data-art="${entry.key}">
+      ${entry.label}<span class="dot ${st === "ok" ? "ok" : st === "bad" ? "bad" : ""}"></span>
+    </button>`;
+  }).join("");
+
+  const addLabel = cover ? "REPLACE COVER" : "ADD COVER";
+  const remove = cover && card && card.canWrite
+    ? `<button type="button" class="btn small danger" data-action="remove">REMOVE</button>`
+    : "";
+  const deleteRomButton = card && card.canWrite
+    ? `<button type="button" class="btn small danger" data-action="delete-rom">DELETE ROM</button>`
+    : "";
+  const modeHint = card && !card.canWrite
+    ? `<div class="hint warn">READ ONLY: the PNG downloads with the expected name; copy it to the card.</div>`
+    : `<div class="hint">PNG only. JPG, WebP, GIF and BMP are converted locally before writing.</div>`;
+  const shared = game.shared ? `<div class="hint warn">This cover path is shared by another game with the same stem.</div>` : "";
+  const conflict = game.conflicts[selectedArt] ? `<div class="hint bad">More than one file matches this cover path.</div>` : "";
+
+  body.innerHTML = `
+    <div class="detail-head">
+      <div class="detail-title">${esc(game.title)}</div>
+      <div class="detail-sub">${esc(game.systemName)} // ${esc(game.path)}</div>
+    </div>
+    <div class="arttabs">${tabs}</div>
+    <div id="preview" class="preview">${preview}</div>
+    <div class="dropnote">DROP AN IMAGE HERE TO SET THIS ART TYPE</div>
+    <div class="meta">${meta.join("")}</div>
+    <div class="actions">
+      <button type="button" class="btn primary" data-action="add">${addLabel}</button>
+      ${remove}
+      <button type="button" class="btn small" data-action="search">LIBRETRO SEARCH</button>
+      <button type="button" class="btn small" data-action="copy">COPY PATH</button>
+      ${deleteRomButton}
+    </div>
+    ${modeHint}${shared}${conflict}
+  `;
+  const img = $("coverImg");
+  if (img) {
+    img.addEventListener("error", () => {
+      const p = $("preview");
+      if (p) p.innerHTML = `<div class="missing">IMAGE CANNOT BE DECODED<br><span class="game-path">${esc(path)}</span></div>`;
+    });
+  }
+}
+
+function renderAll() {
+  renderSystems();
+  renderGames();
+  renderIssues();
+  renderDetail();
+  const counts = `${model.games.length} GAMES // ${model.covers.length} COVERS`;
+  setStatus(card ? `READY // ${model.systems.length} SYSTEMS // ${counts}` : "SELECT THE CARD ROOT TO BEGIN",
+    card ? (card.canWrite ? "READ/WRITE" : "READ ONLY") : (directPicker() ? "" : "READ ONLY // CHROME OR EDGE CAN WRITE"));
+}
+
+function setView(next) {
+  view = next;
+  $("gamesTab").classList.toggle("active", view === "games");
+  $("orphansTab").classList.toggle("active", view === "orphans");
+  $("namesTab").classList.toggle("active", view === "names");
+  $("filter").disabled = view === "names";
+  renderGames();
+}
+
+function refreshButtons() {
+  $("openBtn").disabled = scanning;
+  $("rescanBtn").disabled = !card || scanning;
+  $("gamesTab").disabled = !card;
+  $("orphansTab").disabled = !card;
+  $("namesTab").disabled = !card;
+  $("copyReportBtn").disabled = !card;
+  $("fallbackLabel").classList.toggle("disabled", scanning || fallbackLoading);
+}
+
+async function beginScan() {
+  if (!card || scanning) return;
+  scanning = true;
+  refreshButtons();
+  const active = card;
+  try {
+    setStatus("SCANNING SYSTEMS..");
+    const next = await scanCard(active, (i, total, sys) => {
+      setStatus(`SCANNING ${sys.name}..`, `${i + 1}/${total}`);
+    });
+    if (card !== active) return;
+    model = next;
+    if (!model.games.some((g) => g.id === selectedGameId)) {
+      selectedGameId = model.games.length ? model.games[0].id : null;
+    }
+    renderAll();
+    setStatus(`READY // ${model.systems.length} SYSTEMS // ${model.games.length} GAMES // ${model.covers.length} COVERS`,
+      card.canWrite ? "READ/WRITE" : "READ ONLY");
+  } catch (error) {
+    console.error(error);
+    toast(`SCAN FAILED: ${error.message || error}`, "bad");
+    setStatus("SCAN FAILED");
+  } finally {
+    if (card === active) {
+      scanning = false;
+      refreshButtons();
+    }
+  }
+}
+
+async function isCardRoot(reader) {
+  return (await reader.dirExists("Games")) &&
+    ((await reader.dirExists("Covers")) || (await reader.dirExists("System")) || (await reader.dirExists("Config")));
+}
+
+async function openCard() {
+  if (scanning) return;
+  if (!directPicker() || directPickerBroken) {
+    openFallbackCard();
+    return;
+  }
+  try {
+    const handle = await window.showDirectoryPicker({ mode: "readwrite", id: "magi-card" });
+    directPickerBroken = false;
+    let canWrite = true;
+    try {
+      if (handle.queryPermission) {
+        let state = await handle.queryPermission({ mode: "readwrite" });
+        if (state !== "granted" && handle.requestPermission) {
+          state = await handle.requestPermission({ mode: "readwrite" });
+        }
+        canWrite = state === "granted";
+      }
+    } catch (_) { canWrite = false; }
+    const fsCard = makeFsCard(handle, canWrite);
+    if (!(await isCardRoot(fsCard))) {
+      toast("SELECT THE CARD ROOT, NOT A SUBFOLDER.", "bad");
+      return;
+    }
+    card = fsCard;
+    selectedGameId = null;
+    systemFilter = "all";
+    filter = "all";
+    view = "games";
+    $("filter").value = "all";
+    $("filter").disabled = false;
+    $("search").value = "";
+    $("gamesTab").classList.add("active");
+    $("orphansTab").classList.remove("active");
+    $("namesTab").classList.remove("active");
+    setCardState();
+    toast(`CARD OPENED: ${card.name}`);
+    await beginScan();
+  } catch (error) {
+    if (error && error.name === "AbortError") return;
+    console.error(error);
+    directPickerBroken = true;
+    $("openBtn").hidden = true;
+    $("fallbackLabel").hidden = false;
+    toast("DIRECT ACCESS UNAVAILABLE — SELECT THE CARD FOLDER READ-ONLY", "warn");
+    openFallbackCard();
+  }
+}
+
+function openFallbackCard() {
+  $("fallbackPicker").value = "";
+  $("fallbackPicker").click();
+}
+
+async function loadFallbackCard() {
+  if (fallbackLoading) return;
+  fallbackLoading = true;
+  try {
+    const input = $("fallbackPicker");
+    const list = input.files;
+    if (!list || !list.length) {
+      setStatus("NO FILES RETURNED");
+      toast("NO FILES RETURNED — FIREFOX CAN FAIL ON HIDDEN FOLDERS OR NON-ASCII NAMES; SELECT THE CARD ROOT OR USE CHROME/EDGE.", "bad");
+      return;
+    }
+    setStatus(`READING ${list.length} FILES..`);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const files = Array.from(list);
+    input.value = "";
+    const fallback = makeInputCard(files);
+    if (!(await isCardRoot(fallback))) {
+      const sample = files.slice(0, 3).map((f) => f.webkitRelativePath || f.name).join(" | ");
+      setStatus("CARD ROOT NOT FOUND");
+      toast(`CARD ROOT NOT FOUND — SELECT THE FOLDER WITH Games AND System. SAW: ${sample}`, "bad");
+      return;
+    }
+    setStatus(`READING ${fallback.entries.size} CARD FILES..`);
+    card = fallback;
+    selectedGameId = null;
+    systemFilter = "all";
+    filter = "all";
+    view = "games";
+    $("filter").value = "all";
+    $("filter").disabled = false;
+    $("search").value = "";
+    $("gamesTab").classList.add("active");
+    $("orphansTab").classList.remove("active");
+    $("namesTab").classList.remove("active");
+    setCardState();
+    toast("CARD OPENED READ ONLY");
+    await beginScan();
+  } finally {
+    fallbackLoading = false;
+    refreshButtons();
+  }
+}
+
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("not a decodable image"));
+    img.src = src;
+  });
+}
+
+async function toPng(file) {
+  if (file.type === "image/png") {
+    let headerOk = false;
+    try { headerOk = pngInfo(await readHead(file, 24)).valid; } catch (_) { headerOk = false; }
+    if (headerOk) {
+      const probe = URL.createObjectURL(file);
+      try {
+        await loadImage(probe);
+        return file;
+      } finally {
+        URL.revokeObjectURL(probe);
+      }
+    }
+  }
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await loadImage(url);
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    if (!w || !h) throw new Error("zero-size image");
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("canvas unavailable");
+    ctx.drawImage(img, 0, 0);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    if (!blob) throw new Error("PNG conversion failed");
+    return blob;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function saveCoverBlob(png, path, game) {
+  if (card.mode === "fs" && !card.canWrite) {
+    downloadBlob(png, basename(path));
+    toast(`DOWNLOADED ${basename(path)} — COPY TO Covers/${game.folder}/`, "warn");
+    return "downloaded";
+  }
+  await card.writeFile(path, png);
+  toast(`SAVED ${path}`);
+  await refreshCovers();
+  return "written";
+}
+
+async function addCover(file) {
+  const game = currentGame();
+  if (!game || !card) return;
+  const imageName = (file && file.name) || "";
+  const imageType = (file && file.type) || "";
+  const image = imageType.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp)$/i.test(imageName);
+  if (!file || !image) {
+    toast("SELECT AN IMAGE FILE.", "bad");
+    return;
+  }
+  const path = coverPath(game.folder, game.stem, selectedArt);
+  try {
+    toast("PREPARING PNG..");
+    const png = await toPng(file);
+    await saveCoverBlob(png, path, game);
+  } catch (error) {
+    console.error(error);
+    toast(`WRITE FAILED: ${error.message || error}`, "bad");
+  }
+}
+
+async function removeCover() {
+  const game = currentGame();
+  if (!game || !card || !card.canWrite) return;
+  const cover = game.covers[selectedArt];
+  if (!cover) return;
+  if (!window.confirm(`REMOVE ${cover.path}?`)) return;
+  try {
+    await card.removeFile(cover.path);
+    toast(`REMOVED ${cover.path}`);
+    await refreshCovers();
+  } catch (error) {
+    console.error(error);
+    toast(`REMOVE FAILED: ${error.message || error}`, "bad");
+  }
+}
+
+async function deleteRom() {
+  const game = currentGame();
+  if (!game || !card || !card.canWrite) return;
+  const ok = window.confirm(
+    `DELETE ${game.path}?\n\nThe ROM file is removed from the card. Covers, saves and states are left alone.`,
+  );
+  if (!ok) return;
+  try {
+    await card.removeFile(game.path);
+    toast(`DELETED ${game.path}`);
+    selectedGameId = null;
+    await beginScan();
+  } catch (error) {
+    console.error(error);
+    toast(`DELETE FAILED: ${error.message || error}`, "bad");
+  }
+}
+
+async function renameEntry(path, kind) {
+  if (!card || !card.canWrite) return;
+  const current = basename(path);
+  const answer = window.prompt(`RENAME ${current}\nNEW FILE NAME`, current);
+  if (answer === null) return;
+  let name = answer.trim();
+  if (!name || name === current) return;
+  if (name.includes("/") || name.includes("\\")) {
+    toast("USE A FILE NAME, NOT A PATH.", "bad");
+    return;
+  }
+  if (kind === "COVER") {
+    if (!lower(name).endsWith(".png")) name += ".png";
+    if (!window.confirm(`RENAME ${current} TO ${name}?\n\nA cover only matches a game when it uses that game's stem.`)) return;
+  } else {
+    const ext = extname(current);
+    if (ext && !extname(name)) name += `.${ext}`;
+    if (!window.confirm(`RENAME ${current} TO ${name}?\n\nRenaming a ROM changes its save, favorites and cover stem.`)) return;
+  }
+  const target = `${dirname(path)}/${name}`;
+  if (lower(target) === lower(path)) return;
+  try {
+    await card.renameFile(path, target);
+    toast(`RENAMED TO ${name}`);
+    if (kind === "GAME") await beginScan();
+    else await refreshCovers();
+  } catch (error) {
+    console.error(error);
+    toast(`RENAME FAILED: ${error.message || error}`, "bad");
+  }
+}
+
+// ---- libretro search --------------------------------------------------------
+
+const REDUMP_COLLECTIONS = new Set([
+  "Sony - PlayStation",
+  "SNK - Neo Geo CD",
+  "NEC - PC Engine CD - TurboGrafx-CD",
+]);
+const searchCache = new Map();
+let searchGameId = null;
+let searchCollection = "";
+let searchIndex = null;
+let searchRows = [];
+let searchToken = 0;
+
+function collectionFor(game) {
+  const sys = model.systems.find((entry) => entry.id === game.systemId);
+  const builtin = BUILTIN_SYSTEMS.find((entry) => entry.id === game.systemId);
+  let collection = (sys && sys.art) || (builtin && builtin.art) || null;
+  if (!collection) return null;
+  const ext = lower(extname(game.path));
+  if (collection === "SNK - Neo Geo Pocket" && (ext === "ngc" || ext === "ngpc")) {
+    return "SNK - Neo Geo Pocket Color";
+  }
+  if (collection === "NEC - PC Engine - TurboGrafx 16") {
+    if (ext === "cue" || ext === "chd") return "NEC - PC Engine CD - TurboGrafx-CD";
+    if (ext === "sgx") return "NEC - PC Engine SuperGrafx";
+  }
+  return collection;
+}
+
+function datSetFor(collection) {
+  return REDUMP_COLLECTIONS.has(collection) ? "redump" : "no-intro";
+}
+
+function thumbnailName(name) {
+  return [...name].map((ch) => ("&*/:`<>?\\|\"".includes(ch) ? "_" : ch)).join("");
+}
+
+function encodePath(value) {
+  return value.split("/").map((part) =>
+    encodeURIComponent(part).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
+  ).join("/");
+}
+
+function libretroRepo(collection) {
+  return collection.replace(/ /g, "_");
+}
+
+const datCache = new Map();
+
+function parseDat(text) {
+  const byName = new Map();
+  const byCrc = new Map();
+  let current = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith("game (")) {
+      current = null;
+      continue;
+    }
+    const nameMatch = /^name\s+"([^"]+)"/.exec(line);
+    if (nameMatch) {
+      current = nameMatch[1];
+      byName.set(lower(current), current);
+      continue;
+    }
+    if (current && line.startsWith("rom (")) {
+      const tokens = line.split(/\s+/);
+      const at = tokens.indexOf("crc");
+      if (at >= 0 && tokens[at + 1]) {
+        const crc = parseInt(tokens[at + 1].replace(/[^0-9a-f]/gi, ""), 16);
+        if (Number.isFinite(crc)) byCrc.set(crc >>> 0, current);
+      }
+    }
+  }
+  const names = new Map();
+  for (const name of byName.values()) {
+    const file = `${thumbnailName(name)}.png`;
+    names.set(lower(name), {
+      name,
+      paths: ART_TYPES.map((art) => `${art.folder}/${file}`),
+    });
+  }
+  return { names, crcs: byCrc };
+}
+
+async function loadDatData(collection) {
+  if (datCache.has(collection)) return datCache.get(collection);
+  const promise = (async () => {
+    const url = `https://raw.githubusercontent.com/libretro/libretro-database/master/metadat/${datSetFor(collection)}/${encodePath(collection)}.dat`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`DATABASE ${response.status}`);
+    const data = parseDat(await response.text());
+    if (!data.names.size) throw new Error("DATABASE EMPTY");
+    return data;
+  })();
+  datCache.set(collection, promise);
+  promise.catch(() => datCache.delete(collection));
+  return promise;
+}
+
+function loadSearchIndex(collection) {
+  if (searchCache.has(collection)) return searchCache.get(collection);
+  const promise = (async () => {
+    const repo = libretroRepo(collection);
+    let names = new Map();
+    let source = "LIBRETRO THUMBNAILS";
+    try {
+      const response = await fetch(
+        `https://api.github.com/repos/libretro-thumbnails/${encodeURIComponent(repo)}/git/trees/master?recursive=1`,
+        { headers: { Accept: "application/vnd.github+json" } },
+      );
+      if (!response.ok) throw new Error(`GITHUB ${response.status}`);
+      const data = await response.json();
+      if (data.truncated) throw new Error("INDEX TRUNCATED");
+      const byFolder = new Map(ART_TYPES.map((art) => [lower(art.folder), art.key]));
+      for (const entry of data.tree || []) {
+        const match = /^(Named_Boxarts|Named_Snaps|Named_Titles|Named_Logos)\/(.+)\.png$/i.exec(entry.path);
+        if (!match) continue;
+        const art = byFolder.get(lower(match[1]));
+        if (art === undefined) continue;
+        const name = match[2];
+        const key = lower(name);
+        let item = names.get(key);
+        if (!item) {
+          item = { name, paths: [null, null, null, null] };
+          names.set(key, item);
+        }
+        item.paths[art] = entry.path;
+      }
+      if (!names.size) throw new Error("NO ART");
+    } catch (error) {
+      console.warn("libretro art index", error);
+      const dat = await loadDatData(collection);
+      names = dat.names;
+      source = "LIBRETRO DATABASE";
+    }
+    return { repo, names, source };
+  })();
+  searchCache.set(collection, promise);
+  promise.catch(() => searchCache.delete(collection));
+  return promise;
+}
+
+let crcTableCache = null;
+function crcTable() {
+  if (crcTableCache) return crcTableCache;
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    table[i] = c >>> 0;
+  }
+  crcTableCache = table;
+  return table;
+}
+
+function crc32Bytes(bytes, start = 0) {
+  const table = crcTable();
+  let crc = 0xffffffff;
+  for (let i = start; i < bytes.length; i++) {
+    crc = table[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
+  }
+  return (~crc) >>> 0;
+}
+
+function isDiscGame(game) {
+  const ext = lower(extname(game.path));
+  return game.systemId === "psx" || game.systemId === "neocd" ||
+    (game.systemId === "pce" && (ext === "cue" || ext === "chd"));
+}
+
+function withoutDisc(stem) {
+  return stem.split(" (Disc ")[0];
+}
+
+async function discStemFor(game) {
+  if (lower(extname(game.path)) !== "m3u") return fileStem(game.path);
+  const text = await card.readText(game.path);
+  for (const raw of text.replace(/^\uFEFF/, "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    let path = line;
+    if (path.startsWith("/mnt/sdcard/")) path = path.slice("/mnt/sdcard/".length);
+    else if (path.startsWith("/")) continue;
+    return fileStem(basename(path));
+  }
+  return null;
+}
+
+async function matchSearchCrc() {
+  const game = model.games.find((entry) => entry.id === searchGameId);
+  if (!game || !card) return;
+  const token = ++searchToken;
+  $("searchStatus").textContent = "MATCHING AGAINST DAT..";
+  try {
+    const dat = await loadDatData(searchCollection);
+    if (token !== searchToken) return;
+    let name = null;
+    let detail = "";
+    if (isDiscGame(game)) {
+      const stem = await discStemFor(game);
+      if (stem) {
+        name = (dat.names.get(lower(stem)) || {}).name ||
+          (dat.names.get(lower(withoutDisc(stem))) || {}).name || null;
+        detail = `DISC ${stem}`;
+      }
+    } else {
+      const file = await card.readFile(game.path);
+      if (file.size > 128 * 1024 * 1024) throw new Error("ROM TOO LARGE FOR CRC");
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const values = [crc32Bytes(bytes)];
+      if (bytes.length % 1024 === 512) values.push(crc32Bytes(bytes, 512));
+      for (const crc of values) {
+        const hit = dat.crcs.get(crc);
+        if (hit) {
+          name = hit;
+          detail = `CRC ${crc.toString(16).toUpperCase().padStart(8, "0")}`;
+          break;
+        }
+      }
+      if (!name) detail = values.map((crc) => `CRC ${crc.toString(16).toUpperCase().padStart(8, "0")}`).join(" / ");
+    }
+    if (token !== searchToken) return;
+    if (name) {
+      $("searchQuery").value = name;
+      renderSearchResults();
+      $("searchStatus").textContent = `${isDiscGame(game) ? "DAT NAME" : "CRC"} MATCH // ${name}`;
+      $("searchQuery").focus();
+      $("searchQuery").select();
+    } else {
+      $("searchStatus").textContent = `NO DAT MATCH${detail ? ` // ${detail}` : ""}`;
+    }
+  } catch (error) {
+    if (token !== searchToken) return;
+    $("searchStatus").textContent = `MATCH FAILED: ${error.message || error}`;
+  }
+}
+
+async function openLibretroSearch() {
+  const game = currentGame();
+  if (!game || !card) return;
+  const collection = collectionFor(game);
+  if (!collection) {
+    toast("NO LIBRETRO COLLECTION FOR THIS SYSTEM.", "bad");
+    return;
+  }
+  const dialog = $("libretroSearch");
+  const token = ++searchToken;
+  searchGameId = game.id;
+  searchCollection = collection;
+  searchIndex = null;
+  searchRows = [];
+  $("searchContext").textContent = `${game.systemName} // ${collection}`;
+  $("searchCrc").textContent = isDiscGame(game) ? "MATCH DISC" : "MATCH CRC";
+  $("searchQuery").value = game.title || game.stem;
+  $("searchStatus").textContent = "LOADING LIBRETRO INDEX..";
+  $("searchResults").innerHTML = "";
+  if (!dialog.open) dialog.showModal();
+  try {
+    const index = await loadSearchIndex(collection);
+    if (token !== searchToken || !dialog.open) return;
+    searchIndex = index;
+    $("searchStatus").textContent = index.source === "LIBRETRO DATABASE"
+      ? `DATABASE NAMES (${index.names.size}) // THUMBNAILS CHECKED ON FETCH`
+      : `${index.names.size} ART NAMES // ${index.source}`;
+    renderSearchResults();
+    $("searchQuery").focus();
+    $("searchQuery").select();
+  } catch (error) {
+    if (token !== searchToken) return;
+    $("searchStatus").textContent = `INDEX UNAVAILABLE: ${error.message || error}`;
+  }
+}
+
+function renderSearchResults() {
+  if (!searchIndex) return;
+  const source = searchIndex.source === "LIBRETRO DATABASE" ? " // DATABASE" : "";
+  const query = lower($("searchQuery").value.trim());
+  if (!query) {
+    searchRows = [];
+    $("searchResults").innerHTML = "";
+    $("searchStatus").textContent = `${searchIndex.names.size} NAMES // TYPE TO FILTER${source}`;
+    return;
+  }
+  const hits = [...searchIndex.names.values()]
+    .filter((item) => lower(item.name).includes(query));
+  hits.sort((a, b) => naturalCmp(a.name, b.name));
+  searchRows = hits.slice(0, 80);
+  if (!hits.length) {
+    $("searchResults").innerHTML = `<div class="empty">NO LIBRETRO NAMES MATCH.</div>`;
+    $("searchStatus").textContent = `NO MATCHES${source}`;
+    return;
+  }
+  $("searchResults").innerHTML = searchRows.map((item, i) => {
+    const buttons = ART_TYPES.map((art) => {
+      const present = !!item.paths[art.key];
+      return `<button type="button" class="btn small ${present ? "" : "missing"}" data-search-i="${i}" data-search-art="${art.key}" ${present ? "" : "disabled"}>${art.label}</button>`;
+    }).join("");
+    return `<div class="searchhit">
+      <div class="searchname">${esc(item.name)}</div>
+      <div class="searcharts">${buttons}</div>
+    </div>`;
+  }).join("");
+  $("searchStatus").textContent = (hits.length > searchRows.length
+    ? `${searchRows.length} OF ${hits.length} RESULTS`
+    : `${hits.length} RESULTS`) + source;
+}
+
+async function applySearchHit(index, art) {
+  const hit = searchRows[index];
+  const game = model.games.find((entry) => entry.id === searchGameId);
+  if (!hit || !game || !card || !searchIndex) return;
+  const path = hit.paths[art];
+  if (!path) return;
+  const target = coverPath(game.folder, game.stem, art);
+  if (game.covers[art] && !window.confirm(`REPLACE ${basename(target)} WITH ${hit.name}?`)) return;
+  const token = ++searchToken;
+  $("searchStatus").textContent = `FETCHING ${hit.name}..`;
+  try {
+    const url = `https://raw.githubusercontent.com/libretro-thumbnails/${encodeURIComponent(searchIndex.repo)}/master/${encodePath(path)}`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const blob = await response.blob();
+    if (token !== searchToken) return;
+    const png = await toPng(new File([blob], "cover.png", { type: blob.type || "image/png" }));
+    if (token !== searchToken) return;
+    selectedArt = art;
+    $("libretroSearch").close();
+    await saveCoverBlob(png, target, game);
+  } catch (error) {
+    console.error(error);
+    if (token === searchToken) $("searchStatus").textContent = `FETCH FAILED: ${error.message || error}`;
+  }
+}
+
+async function refreshCovers() {
+  if (!card) return;
+  try {
+    const covers = await scanCoverFiles(card);
+    model = buildModel(model.systems, model.games, covers);
+    if (!model.games.some((g) => g.id === selectedGameId)) selectedGameId = null;
+    renderAll();
+  } catch (error) {
+    console.error(error);
+    toast(`RESCAN FAILED: ${error.message || error}`, "bad");
+  }
+}
+
+async function copyPath() {
+  const game = currentGame();
+  if (!game) return;
+  const path = coverPath(game.folder, game.stem, selectedArt);
+  try {
+    await navigator.clipboard.writeText(path);
+    toast("PATH COPIED");
+  } catch (_) {
+    toast(path, "warn");
+  }
+}
+
+function reportText() {
+  const lines = [];
+  lines.push(`MAGI CARD TOOL REPORT`);
+  lines.push(`CARD: ${card ? card.name : "none"}`);
+  lines.push(`GAMES: ${model.games.length}  COVERS: ${model.covers.length}  NO BOXART: ${model.stats.missingBox || 0}  INVALID: ${model.stats.invalid || 0}  ORPHANS: ${model.stats.orphans || 0}  NON-ASCII: ${model.stats.nonAscii || 0}`);
+  for (const sys of model.systems) {
+    const games = model.games.filter((g) => g.systemId === sys.id);
+    const missing = games.filter((g) => !g.covers[0] || !g.covers[0].valid).length;
+    lines.push(`\n[${sys.name}] games=${games.length} no_boxart=${missing}`);
+    for (const game of games) {
+      const bits = ART_TYPES.map((art) => {
+        const c = game.covers[art.key];
+        return `${art.label}:${game.conflicts[art.key] ? "DUP" : !c ? "MISS" : c.valid ? "OK" : "BAD"}`;
+      }).join(" ");
+      lines.push(`  ${game.title} | ${game.path} | ${bits}`);
+    }
+  }
+  for (const orphan of model.orphans) lines.push(`ORPHAN: ${orphan.path} (${orphan.reason})`);
+  for (const item of model.nonAscii) lines.push(`NON-ASCII: ${item.path} [${item.chars.join(", ")}]`);
+  return lines.join("\n");
+}
+
+async function copyReport() {
+  const text = reportText();
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("REPORT COPIED");
+  } catch (_) {
+    downloadBlob(new Blob([text], { type: "text/plain" }), "magi-covers-report.txt");
+    toast("REPORT DOWNLOADED", "warn");
+  }
+}
+
+function selectGame(id, art = null) {
+  selectedGameId = id;
+  if (art !== null) selectedArt = art;
+  for (const row of document.querySelectorAll("#gamesBody tr[data-id]")) {
+    row.classList.toggle("selected", row.dataset.id === id);
+  }
+  renderDetail();
+}
+
+// ---- events ----------------------------------------------------------------
+
+function init() {
+  $("openBtn").addEventListener("click", () => {
+    if (directPicker()) openCard();
+    else openFallbackCard();
+  });
+  $("fallbackLabel").addEventListener("click", (event) => {
+    if (scanning || fallbackLoading) {
+      event.preventDefault();
+      return;
+    }
+    // The label's native file-input activation is the most reliable path in Firefox.
+    setStatus("CHOOSE THE CARD ROOT");
+  });
+  $("rescanBtn").addEventListener("click", beginScan);
+  $("fallbackPicker").addEventListener("change", loadFallbackCard);
+  $("fallbackPicker").addEventListener("input", loadFallbackCard);
+  $("gamesTab").addEventListener("click", () => setView("games"));
+  $("orphansTab").addEventListener("click", () => setView("orphans"));
+  $("namesTab").addEventListener("click", () => setView("names"));
+  $("copyReportBtn").addEventListener("click", copyReport);
+
+  $("systemList").addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-system]");
+    if (!btn) return;
+    systemFilter = btn.dataset.system;
+    renderSystems();
+    renderGames();
+  });
+
+  $("search").addEventListener("input", (event) => {
+    search = event.target.value;
+    renderGames();
+  });
+  $("filter").addEventListener("change", (event) => {
+    filter = event.target.value;
+    renderGames();
+  });
+
+  $("gamesBody").addEventListener("click", (event) => {
+    const row = event.target.closest("tr[data-id]");
+    if (!row) return;
+    const artCell = event.target.closest("[data-art]");
+    selectGame(row.dataset.id, artCell ? Number(artCell.dataset.art) : null);
+  });
+
+  $("orphansBody").addEventListener("click", async (event) => {
+    const rename = event.target.closest("[data-rename]");
+    if (rename) {
+      await renameEntry(rename.dataset.rename, rename.dataset.kind || "COVER");
+      return;
+    }
+    const btn = event.target.closest("[data-remove]");
+    if (!btn || !card || !card.canWrite) return;
+    if (!window.confirm(`REMOVE ${btn.dataset.remove}?`)) return;
+    try {
+      await card.removeFile(btn.dataset.remove);
+      toast(`REMOVED ${btn.dataset.remove}`);
+      await refreshCovers();
+    } catch (error) {
+      toast(`REMOVE FAILED: ${error.message || error}`, "bad");
+    }
+  });
+
+  $("namesBody").addEventListener("click", async (event) => {
+    const rename = event.target.closest("[data-rename]");
+    if (!rename) return;
+    await renameEntry(rename.dataset.rename, rename.dataset.kind || "GAME");
+  });
+
+  $("issues").addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-issue]");
+    if (!btn) return;
+    const issue = btn.dataset.issue;
+    if (issue === "orphans" || issue === "names") {
+      setView(issue);
+    } else {
+      filter = issue;
+      $("filter").value = filter;
+      setView("games");
+      renderGames();
+    }
+  });
+
+  $("detailBody").addEventListener("click", (event) => {
+    const art = event.target.closest("[data-art]");
+    if (art) {
+      selectedArt = Number(art.dataset.art);
+      renderDetail();
+      return;
+    }
+    const action = event.target.closest("[data-action]");
+    if (!action) return;
+    if (action.dataset.action === "add") $("filePicker").click();
+    else if (action.dataset.action === "remove") removeCover();
+    else if (action.dataset.action === "search") openLibretroSearch();
+    else if (action.dataset.action === "delete-rom") deleteRom();
+    else if (action.dataset.action === "copy") copyPath();
+  });
+
+  $("filePicker").addEventListener("change", async (event) => {
+    const file = event.target.files && event.target.files[0];
+    event.target.value = "";
+    if (file) await addCover(file);
+  });
+
+  $("searchGo").addEventListener("click", renderSearchResults);
+  $("searchCrc").addEventListener("click", matchSearchCrc);
+  $("searchQuery").addEventListener("input", renderSearchResults);
+  $("searchQuery").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      renderSearchResults();
+    }
+  });
+  $("searchResults").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-search-i]");
+    if (!button) return;
+    await applySearchHit(Number(button.dataset.searchI), Number(button.dataset.searchArt));
+  });
+  $("searchClose").addEventListener("click", () => {
+    searchToken++;
+    $("libretroSearch").close();
+  });
+  $("libretroSearch").addEventListener("cancel", () => {
+    searchToken++;
+  });
+
+  const detail = $("detail");
+  detail.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    $("preview")?.classList.add("drag");
+  });
+  detail.addEventListener("dragleave", (event) => {
+    if (!detail.contains(event.relatedTarget)) $("preview")?.classList.remove("drag");
+  });
+  detail.addEventListener("drop", async (event) => {
+    event.preventDefault();
+    $("preview")?.classList.remove("drag");
+    const files = event.dataTransfer && event.dataTransfer.files;
+    if (!files || !files.length) return;
+    if (files.length > 1) toast("ONE IMAGE AT A TIME.", "warn");
+    await addCover(files[0]);
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
+    }
+  });
+
+  setCardState();
+  refreshButtons();
+  renderAll();
+  const direct = directPicker();
+  $("openBtn").hidden = !direct;
+  $("fallbackLabel").hidden = direct;
+  if (!direct) {
+    $("openBtn").title = "Firefox can only give the page a read-only copy; use Chrome or Edge to write.";
+    $("fallbackLabel").title = "Read-only folder selection; use Chrome or Edge to write.";
+  }
+}
+
+if (typeof window !== "undefined") {
+  window.MAGI_ART = {
+    ART_TYPES,
+    BUILTIN_SYSTEMS,
+    MemoryCard,
+    makeInputCard,
+    cleanTitle,
+    coverPath,
+    coverStem,
+    pngInfo,
+    scanCard,
+    buildModel,
+    naturalCmp,
+    crc32Bytes,
+    // Debug hooks for the local test harness; they do not touch the card.
+    showModel(nextCard, nextModel) {
+      card = nextCard;
+      model = nextModel;
+      selectedGameId = nextModel.games.length ? nextModel.games[0].id : null;
+      selectedArt = 0;
+      systemFilter = "all";
+      filter = "all";
+      view = "games";
+      setCardState();
+      refreshButtons();
+      renderAll();
+    },
+    select(id, art = 0) {
+      selectedGameId = id;
+      selectedArt = art;
+      renderAll();
+    },
+    addCover,
+    removeCover,
+    renameEntry,
+    refreshCovers,
+    getModel() { return model; },
+  };
+}
+if (typeof document !== "undefined") {
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+  else init();
+}
+</script>
+</body>
+</html>
