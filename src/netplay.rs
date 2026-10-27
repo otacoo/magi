@@ -152,7 +152,7 @@ impl Session {
         Self::host_with(transport, game, LOCAL_PORT, false)
     }
 
-    fn host_with(transport: Transport, game: Game, local_port: u16, skip_wifi: bool) -> Session {
+    fn host_with(transport: Transport, game: Game, local_port: u16, loopback: bool) -> Session {
         let code = new_code();
         crate::util::log(&format!(
             "netplay: hosting {} code={code}",
@@ -172,7 +172,7 @@ impl Session {
             let radio = radio.clone();
             thread::spawn(move || {
                 host_worker(
-                    transport, game, code, local_port, skip_wifi, status, cancel, sockets, radio,
+                    transport, game, code, local_port, loopback, status, cancel, sockets, radio,
                 );
             })
         };
@@ -196,7 +196,7 @@ impl Session {
         Self::join_with(transport, game, LOCAL_PORT, false)
     }
 
-    fn join_with(transport: Transport, game: Game, local_port: u16, skip_wifi: bool) -> Session {
+    fn join_with(transport: Transport, game: Game, local_port: u16, loopback: bool) -> Session {
         crate::util::log(&format!("netplay: scanning {}", transport.label()));
         let status = Arc::new(Mutex::new(Status::Scanning));
         let hosts = Arc::new(Mutex::new(Vec::new()));
@@ -208,7 +208,7 @@ impl Session {
             let hosts = hosts.clone();
             let cancel = cancel.clone();
             thread::spawn(move || {
-                join_scan_worker(transport, skip_wifi, status, hosts, cancel);
+                join_scan_worker(transport, loopback, status, hosts, cancel);
             })
         };
         Session {
@@ -324,7 +324,7 @@ fn host_worker(
     game: Game,
     code: String,
     local_port: u16,
-    skip_wifi: bool,
+    loopback: bool,
     status: SharedStatus,
     cancel: Arc<AtomicBool>,
     sockets: SharedSockets,
@@ -343,7 +343,7 @@ fn host_worker(
             return;
         }
         *lock(&radio_slot) = Some(radio);
-    } else if !skip_wifi {
+    } else if !loopback {
         if let Err(e) = ensure_wifi(&cancel) {
             fail(&status, &cancel, e);
             return;
@@ -351,7 +351,8 @@ fn host_worker(
     }
 
     crate::util::log(&format!("netplay: host {} code={code}", transport.label()));
-    let listener = match TcpListener::bind(("0.0.0.0", PEER_PORT)) {
+    let bind = if loopback { "127.0.0.1" } else { "0.0.0.0" };
+    let listener = match TcpListener::bind((bind, PEER_PORT)) {
         Ok(l) => l,
         Err(e) => {
             fail(&status, &cancel, format!("PORT {PEER_PORT}: {e}"));
@@ -371,7 +372,7 @@ fn host_worker(
         let game = game.clone();
         let code = code.clone();
         let stop = advertise.clone();
-        thread::spawn(move || advertise_host(&game, &code, &stop))
+        thread::spawn(move || advertise_host(&game, &code, &stop, loopback))
     };
 
     let mut peer = None;
@@ -417,13 +418,13 @@ fn host_worker(
 
 fn join_scan_worker(
     transport: Transport,
-    skip_wifi: bool,
+    loopback: bool,
     status: SharedStatus,
     hosts: SharedHosts,
     cancel: Arc<AtomicBool>,
 ) {
     let result = match transport {
-        Transport::Wifi => scan_wifi(&status, &hosts, &cancel, skip_wifi),
+        Transport::Wifi => scan_wifi(&status, &hosts, &cancel, loopback),
         Transport::Hotspot => scan_hotspot(&status, &hosts, &cancel),
     };
     if let Err(e) = result {
@@ -673,8 +674,9 @@ fn set_keepalive(stream: &TcpStream) {
 #[cfg(not(target_os = "linux"))]
 fn set_keepalive(_stream: &TcpStream) {}
 
-fn advertise_host(game: &Game, code: &str, stop: &AtomicBool) {
-    let sock = match UdpSocket::bind(("0.0.0.0", 0)) {
+fn advertise_host(game: &Game, code: &str, stop: &AtomicBool, loopback: bool) {
+    let bind = if loopback { "127.0.0.1" } else { "0.0.0.0" };
+    let sock = match UdpSocket::bind((bind, 0)) {
         Ok(sock) => sock,
         Err(e) => {
             crate::util::log(&format!("netplay: advertise socket: {e}"));
@@ -682,14 +684,16 @@ fn advertise_host(game: &Game, code: &str, stop: &AtomicBool) {
         }
     };
     #[cfg(target_os = "linux")]
-    let _ = sock.set_broadcast(true);
+    if !loopback {
+        let _ = sock.set_broadcast(true);
+    }
     let _ = sock.set_nonblocking(true);
     let line = discovery_line(game, code);
     crate::util::log(&format!("netplay: advertising code={code}"));
     while !stop.load(Ordering::Relaxed) {
         let _ = sock.send_to(line.as_bytes(), ("127.0.0.1", DISCOVERY_PORT));
         #[cfg(target_os = "linux")]
-        {
+        if !loopback {
             let _ = sock.send_to(line.as_bytes(), ("255.255.255.255", DISCOVERY_PORT));
         }
         for _ in 0..14 {
@@ -701,10 +705,11 @@ fn advertise_host(game: &Game, code: &str, stop: &AtomicBool) {
     }
 }
 
-fn bind_discovery() -> Result<UdpSocket, String> {
+fn bind_discovery(loopback: bool) -> Result<UdpSocket, String> {
+    let bind = if loopback { "127.0.0.1" } else { "0.0.0.0" };
     let mut last = String::new();
     for _ in 0..5 {
-        match UdpSocket::bind(("0.0.0.0", DISCOVERY_PORT)) {
+        match UdpSocket::bind((bind, DISCOVERY_PORT)) {
             Ok(sock) => return Ok(sock),
             Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
                 last = format!("DISCOVERY PORT {DISCOVERY_PORT}: {e}");
@@ -742,12 +747,12 @@ fn scan_wifi(
     _status: &SharedStatus,
     hosts: &SharedHosts,
     cancel: &AtomicBool,
-    skip_wifi: bool,
+    loopback: bool,
 ) -> Result<(), String> {
-    if !skip_wifi {
+    if !loopback {
         ensure_wifi(cancel)?;
     }
-    let sock = bind_discovery()?;
+    let sock = bind_discovery(loopback)?;
     sock.set_read_timeout(Some(Duration::from_millis(200)))
         .map_err(|e| format!("DISCOVERY: {e}"))?;
     let deadline = Instant::now() + SCAN_TIME;

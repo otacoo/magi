@@ -92,11 +92,20 @@ impl Image {
     /// Source-over draw at `(x, y)` with every alpha scaled by `mul` (255
     /// keeps the image as authored, lower dims it).
     pub fn draw(&self, cv: &mut Canvas, x: i32, y: i32, mul: u8) {
+        self.draw_clipped(cv, x, y, mul, i32::MAX);
+    }
+
+    /// `draw`, but rows at or below `clip_bottom` are skipped. The boot
+    /// splash uses this for its top-to-bottom reveal.
+    pub fn draw_clipped(&self, cv: &mut Canvas, x: i32, y: i32, mul: u8, clip_bottom: i32) {
         if mul == 0 {
             return;
         }
         for yy in 0..self.h as i32 {
             let cy = y + yy;
+            if cy >= clip_bottom {
+                break;
+            }
             if cy < 0 || cy >= cv.h {
                 continue;
             }

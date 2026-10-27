@@ -71,7 +71,7 @@ Everything lives under **SETTINGS → SHELF**:
 
 ## Card tool
 
-Open [`card_tool.html`](../../card_tool.html) in Chrome or Edge and
+Download or open [`card_tool.html`](https://otacoo.github.io/magi/card_tool.html) in Chrome or Edge (*) and
 select the card root. The card tool reads `Games/` and `Covers/` locally and reports:
 
 - games with no boxart, or with no art at all;
@@ -105,6 +105,6 @@ the right art can be chosen without guessing.
 The selected game’s **DELETE ROM** removes the ROM file only; covers, saves and
 states are left on the card.
 
-If the picker is blocked when the page is opened as a file, serve the repo
+* If the picker is blocked when the page is opened as a file, serve the repo
 locally (`python -m http.server 8000`) and open
 `http://localhost:8000/card_tool.html`. Nothing is uploaded.
