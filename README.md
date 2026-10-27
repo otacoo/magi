@@ -18,21 +18,11 @@
 
 **MAGI** is a fast, lightweight frontend for [BaseOS](https://github.com/pvaibhav/BaseOS) on the Anbernic H700 family.
 
-
 <p align="center">
-  <img src="assets/readme/library.png" width="250" alt="MAGI game shelf">
-  <img src="assets/readme/library-art.png" width="250" alt="MAGI art shelf">
-</p>
-<p align="center">
-  <img src="assets/readme/theme.png" width="250" alt="MAGI theme settings">
-  <img src="assets/readme/theme-unit01.png" width="250" alt="MAGI UNIT-01 colour theme">
-</p>
-<p align="center">
-  <img src="assets/readme/settings.png" width="250" alt="MAGI settings">
-  <img src="assets/readme/controls.png" width="250" alt="MAGI controls">
+  <img src="assets/readme/MAGI.gif" width="450" alt="MAGI">
 </p>
 
-## Status
+## Status 
 
 > [!NOTE] 
 > **v1.0.0** is stable and targets BaseOS 1.5.x. All the same devices as baseOS should be supported.\
@@ -105,10 +95,6 @@ MAGI will recreate missing folders at boot.
    └──────────────────────┘ └──────────────────────┘ └──────────────────────┘
 ```
 
-MELCHIOR-1 is the shelf: systems, games, favorites, settings, network, power.\
-BALTHASAR-2 is the libretro host: cores, save states, overlays, fast-forward and rewind.\
-CASPER-3 is the native port supervisor: N64, display shims, audio bridge, sleep.
-
 ## System Specs
 
 **GEHIRN · shared — One binary:** SDL2 and the font are linked in. The complete frontend is `System/frontend` on the card.
@@ -133,45 +119,7 @@ CASPER-3 is the native port supervisor: N64, display shims, audio bridge, sleep.
 | [Controls](assets/docs/controls.md) | Every button, on the shelf and in game. |
 | [Cores](assets/docs/cores.md) | Bundled cores and the BIOS files they need. |
 | [Miyoo64 ports](assets/docs/n64-ports.md) | Installing native N64 ports. |
-
-## Building
-
-Desktop development uses the SDL2 harness.
-
-```sh
-cargo run                 # 1x window, payload-latest/ as the card
-cargo run -- --selftest   # headless frames in target/selftest/
-cargo fmt
-cargo test
-```
-
-The device build is CI-only: `.github/workflows/build.yml` cross-compiles in a Debian bullseye container, keeps the glibc symbol floor at 2.31, builds the pinned cores and uploads the 640x480 and 720x480 payloads.
-
-```sh
-tools/gehirn/package.sh target/aarch64-unknown-linux-gnu/release/magi dist
-tools/gehirn/deploy.sh adb
-tools/gehirn/deploy.sh root@rg35xxsp.local
-```
-
-On Windows it requires Docker to build the payload; `release.cmd` wraps the host build, tests, CI payload download, adb deploy, ROM transfer, log and screenshot pulls, and a shell on the device. If a `payload-latest/` folder is present `release.cmd` can `cargo run` to use it as the card: its `systems.json`, `Games/`, `Covers/`, `Saves/` and `Config/` are what the shelf reads and writes. Set `MAGI_CARD=/path/to/card` to use another folder, or `MAGI_SCALE=2` to double the window.
-
-## Instrumentality Layout
-
-| Path | Role |
-|---|---|
-| `src/main.rs` | Multicall entry point: `magi` is the shelf, `magi run` is the game host. |
-| `src/app.rs` | Shelf state and event loop. |
-| `src/screens/` | Library, settings, network, power, controls and boot screens. |
-| `src/run.rs` | libretro host, overlays, save states and in-game OSD. |
-| `src/n64.rs` | Native port discovery and supervision. |
-| `src/present/` | EGL/GLES, direct framebuffer, DE layer and SDL presenters. |
-| `src/theme.rs` | Every colour and type scale in the UI. |
-| `tools/gehirn/` | Core pins, card packaging and deploy scripts. |
-| `tools/n64/` | SDL framebuffer/audio and save-path shims. |
-| `assets/` | Systems, boot art, font, overlays, controller DB, docs and readme images. |
-
-Each process writes its own capped log in `Logs/` (`magi.log`, `magi-run.log`, the N64 logs). `magi --probe` prints an environment report for device debugging.
-
+| [Building MAGI](assets/docs/building.md) | Instructions on how to birth the frontend. |
 
 ## License
 
@@ -181,7 +129,7 @@ Bundled assets and libraries keep their own licenses: JetBrains Mono (OFL), GEHI
 
 ## Credits
 
-- The geniuses at Gainax / Khara
+- The geniuses at Gainax / Khara, by which MAGI is inspired.
 - [BaseOS](https://github.com/pvaibhav/BaseOS) for the H700 platform.
 - [libretro](https://www.libretro.com/) and every core maintainer.
 - [SDL](https://www.libsdl.org/) and the SDL Game Controller DB community.
