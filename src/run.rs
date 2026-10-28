@@ -489,7 +489,8 @@ extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
                         .iter()
                         .map(|v| CString::new(v.as_str()).unwrap_or_default())
                         .collect();
-                    let visible = option_kept(&desc);
+                    let visible = option_kept(&desc)
+                        && !(ctx.system == "genesis" && genesis_option_hidden(&desc));
                     if key.to_ascii_lowercase().contains("bios") {
                         util::log(&format!("core option {key}={}", values[chosen]));
                     }
@@ -2505,6 +2506,15 @@ fn option_kept(desc: &str) -> bool {
     KEEP_OPTIONS.iter().any(|k| d.contains(k))
 }
 
+/// Genesis Plus GX options that are too detailed for the handheld menu.
+fn genesis_option_hidden(desc: &str) -> bool {
+    let d = desc.to_ascii_lowercase();
+    d.contains("mega drive/genesis fm channel")
+        || d.contains("preamp level")
+        || d.contains("cd-da volume")
+        || d.contains("pcm volume")
+}
+
 /// True when this press completes a double tap (and then starts fresh).
 fn double_tap(last: &mut Option<Instant>, now: Instant, window: Duration) -> bool {
     match *last {
@@ -3478,6 +3488,23 @@ mod overlay_tests {
         assert!(!option_kept("Game Boy Player Rumble (Restart)"));
         assert!(!option_kept("Color"));
         assert!(option_kept("Solar Sensor Level"));
+        assert!(option_kept("Mega Drive/Genesis FM"));
+    }
+
+    #[test]
+    fn genesis_hides_the_audio_mixer_details() {
+        assert!(super::genesis_option_hidden(
+            "Mega Drive/Genesis FM Channel 0 Volume %"
+        ));
+        assert!(super::genesis_option_hidden(
+            "Mega Drive/Genesis FM Channel 5 Volume %"
+        ));
+        assert!(super::genesis_option_hidden("FM Preamp Level"));
+        assert!(super::genesis_option_hidden("PSG Preamp Level"));
+        assert!(super::genesis_option_hidden("CD-DA Volume %"));
+        assert!(super::genesis_option_hidden("PCM Volume %"));
+        assert!(!super::genesis_option_hidden("Mega Drive/Genesis FM"));
+        assert!(!super::genesis_option_hidden("Sound Output"));
     }
 
     #[test]
