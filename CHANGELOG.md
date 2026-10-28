@@ -8,6 +8,10 @@ All notable changes to MAGI are documented here.
 
 - Game Boy and Game Boy Color netplay over a local hotspot or Wi-Fi, with a
   four-character host code and each player keeping their own save.
+- A redesigned in-game dashboard with a section rail and save-state cards
+  that show a thumbnail, age, load, save and two-step delete.
+- SCREENSHOTS below the screenshot toggle, shown while it is on, to browse
+  captures on the card and zoom them full-screen.
 
 ## [1.0.0] - 2026-10-27
 

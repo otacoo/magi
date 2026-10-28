@@ -213,7 +213,7 @@ impl Canvas {
         self.fill_rect(x, y, 1, h, c);
     }
 
-    /// 24-bit BMP, bottom-up with 4-byte rows — opens anywhere, no encoder dep.
+    /// 24-bit BMP, bottom-up with 4-byte rows: opens anywhere, no encoder dep.
     pub fn save_bmp(&self, path: &std::path::Path) -> std::io::Result<()> {
         let row = (self.w as usize * 3 + 3) & !3;
         let img = row * self.h as usize;
@@ -242,7 +242,7 @@ impl Canvas {
             }
             out.resize(out.len() + (row - self.w as usize * 3), 0);
         }
-        std::fs::write(path, out)
+        crate::util::write_file_atomic(path, &out)
     }
 }
 

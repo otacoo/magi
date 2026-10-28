@@ -1549,7 +1549,7 @@ fn draw_controls(cv: &mut Canvas, fonts: &mut Fonts, t: f32) {
         cv,
         w / 2,
         h - 26,
-        "PAUSE MENU: SAVE / LOAD / CORE OPTIONS",
+        "PAUSE MENU: STATES / CORE / VIDEO / EXIT",
         9.0,
         pal().text_faint,
     );

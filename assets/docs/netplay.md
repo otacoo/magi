@@ -47,8 +47,8 @@ step.
 
 ## While linked
 
-- **SAVE STATE**, **LOAD STATE**, **CORE OPTIONS**, rewind and fast-forward are
-  off. A state load would put one game out of step with the other.
+- State saves and loads, **CORE OPTIONS**, rewind and fast-forward are off. A
+  state load would put one game out of step with the other.
 - Opening the pause menu pauses the game. The other device waits at its next
   link transfer, so keep menu visits short.
 - **MENU**, then **NETPLAY**, then **END NETPLAY** ends the link. Closing the

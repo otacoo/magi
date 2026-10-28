@@ -17,7 +17,12 @@ reference.
 | Shelf | **MENU** | Settings |
 | Shelf | **SELECT** | Controls panel |
 | Shelf | **POWER** tap / hold | Sleep / shutdown |
+| Shelf | SETTINGS → SYSTEM → **SCREENSHOTS** | Browse captures; **A** zooms (shown while the shot chord is on) |
 | In game | **MENU** | Pause menu |
+| In game | Pause menu ↑/↓ | Pick a section |
+| In game | Pause menu → | Open the section pane |
+| In game | Pause menu **A** | Resume, open or load |
+| In game | Pause menu **X / Y** | Save state / delete state (press Y twice) |
 | In game | Hold **MENU** | Save state and exit |
 | In game | **L2** hold | Rewind (except N64; PS1 requires holding SELECT) |
 | In game | **R2** hold / double-tap | Fast-forward / latch (except N64; PS1 requires holding SELECT) |
@@ -30,11 +35,12 @@ reference.
 | Anywhere | Volume keys | Software volume |
 | Anywhere | Close the lid | Sleep; opening wakes |
 
-The pause menu has three **save-state slots** per game plus a one-shot resume
-state. Manual slots load from the pause menu; the resume state loads at launch
-and is then consumed. Hold **A** when a game starts to skip that restore
-without deleting it. **SELECT+R1** quick saves and hold **MENU** both write the
-selected slot and a resume point.
+The pause menu's **STATES** pane has three **save-state slots** per game plus a
+one-shot resume state, each shown as a card with a thumbnail and age. **A**
+loads the selected card, **X** saves it and **Y** twice deletes it. The resume
+state loads at launch and is then consumed; hold **A** when a game starts to
+skip that restore without deleting it. **SELECT+R1** quick saves and hold
+**MENU** both write the selected slot and a resume point.
 
 On a multi-disc PlayStation game the pause menu also gains **SWAP DISC**; see
 [Multi-disc PlayStation](multi-disc.md).
