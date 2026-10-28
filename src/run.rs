@@ -3232,8 +3232,10 @@ fn needs_l2_r2(system_id: &str) -> bool {
 
 /// Cores that still need the performance governor after GPU presentation.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+/// PS1 and Neo CD keep the performance governor; Genesis and PCE run on
+/// schedutil and ramp only when they need to.
 fn needs_performance(system_id: &str) -> bool {
-    matches!(system_id, "psx" | "pce" | "neocd" | "genesis")
+    matches!(system_id, "psx" | "neocd")
 }
 
 /// D-pad and left-stick state for a Bluetooth/USB pad, combined into the
@@ -5583,10 +5585,10 @@ mod key_mode_tests {
 
     #[test]
     fn light_systems_stay_on_schedutil() {
-        for system in ["gb", "gbc", "gba", "ngp", "snes"] {
+        for system in ["gb", "gbc", "gba", "ngp", "snes", "pce", "genesis"] {
             assert!(!needs_performance(system), "{system}");
         }
-        for system in ["psx", "pce", "neocd", "genesis"] {
+        for system in ["psx", "neocd"] {
             assert!(needs_performance(system), "{system}");
         }
     }

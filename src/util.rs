@@ -1412,8 +1412,9 @@ pub fn set_led(_on: bool) -> bool {
     false
 }
 
-/// Set the CPU governor on every core; `schedutil` for battery, `performance`
-/// only while a native N64 port is running. Returns true if any write landed.
+/// Set the CPU governor on every core; `schedutil` by default, `performance`
+/// for the heaviest systems (PS1, Neo CD and native N64). Returns true if any
+/// write landed.
 #[cfg(target_os = "linux")]
 pub fn set_cpu_governor(governor: &str) -> bool {
     let mut written = 0;
