@@ -1,6 +1,7 @@
 //! The screenshot gallery (SETTINGS -> SYSTEM -> SCREENSHOTS).
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::canvas::Canvas;
 use crate::font::Fonts;
@@ -11,31 +12,37 @@ const LIST_ROWS: usize = 10;
 const LIST_W: i32 = 250;
 const TOP: i32 = 96;
 
+fn scan() -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(crate::systems::DIR_SHOTS)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && is_image(p))
+        .collect();
+    // Names start with a sortable timestamp; newest first.
+    paths.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+    paths
+}
+
 pub struct ShotsState {
     paths: Vec<PathBuf>,
     sel: usize,
     top: usize,
     zoom: bool,
     cache: Option<(usize, Image)>,
+    delete_armed: Option<(usize, Instant)>,
 }
 
 impl ShotsState {
     pub fn load() -> Self {
-        let mut paths: Vec<PathBuf> = std::fs::read_dir(crate::systems::DIR_SHOTS)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_file() && is_image(p))
-            .collect();
-        // Names start with a sortable timestamp; newest first.
-        paths.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
         let mut st = Self {
-            paths,
+            paths: scan(),
             sel: 0,
             top: 0,
             zoom: false,
             cache: None,
+            delete_armed: None,
         };
         st.clamp();
         st
@@ -47,12 +54,14 @@ impl ShotsState {
         }
         let n = self.paths.len() as isize;
         self.sel = (((self.sel as isize + delta) % n + n) % n) as usize;
+        self.delete_armed = None;
         self.clamp();
     }
 
     pub fn toggle_zoom(&mut self) {
         if !self.paths.is_empty() {
             self.zoom = !self.zoom;
+            self.delete_armed = None;
         }
     }
 
@@ -60,11 +69,48 @@ impl ShotsState {
         self.zoom
     }
 
+    /// First press arms, second press within three seconds deletes.
+    pub fn delete_selected(&mut self) -> Option<&'static str> {
+        let path = self.paths.get(self.sel)?.clone();
+        let now = Instant::now();
+        if let Some((idx, at)) = self.delete_armed {
+            if idx == self.sel && now.duration_since(at) <= Duration::from_secs(3) {
+                self.delete_armed = None;
+                return match std::fs::remove_file(&path) {
+                    Ok(()) => {
+                        self.reload();
+                        Some("SCREENSHOT DELETED")
+                    }
+                    Err(e) => {
+                        crate::util::log(&format!(
+                            "screenshot delete failed: {}: {e}",
+                            path.display()
+                        ));
+                        Some("DELETE FAILED")
+                    }
+                };
+            }
+        }
+        self.delete_armed = Some((self.sel, now));
+        Some("PRESS Y AGAIN TO DELETE")
+    }
+
+    fn reload(&mut self) {
+        let keep = self.sel;
+        self.paths = scan();
+        self.sel = keep.min(self.paths.len().saturating_sub(1));
+        self.top = 0;
+        self.cache = None;
+        self.delete_armed = None;
+        self.clamp();
+    }
+
     fn clamp(&mut self) {
         if self.paths.is_empty() {
             self.sel = 0;
             self.top = 0;
             self.cache = None;
+            self.zoom = false;
             return;
         }
         self.sel = self.sel.min(self.paths.len() - 1);
@@ -176,14 +222,7 @@ fn draw_zoom(cv: &mut Canvas, fonts: &mut Fonts, st: &ShotsState) {
     let pos = format!("{}/{}", st.sel + 1, st.paths.len());
     let pw = fonts.text_width(&pos, 10.0);
     fonts.draw(cv, w - 12 - pw, 18, &pos, 10.0, pal().text_dim);
-    fonts.draw_center(
-        cv,
-        w / 2,
-        h - 8,
-        "L/R PREV/NEXT   A OR B CLOSE",
-        9.0,
-        pal().text_dim,
-    );
+    crate::status::hint_or_notice(cv, fonts, h - 8, "L/R PREV/NEXT   A OR B CLOSE   Y DELETE");
 }
 
 fn draw_list(cv: &mut Canvas, fonts: &mut Fonts, st: &ShotsState, t: f32) {
@@ -214,7 +253,7 @@ fn draw_list(cv: &mut Canvas, fonts: &mut Fonts, st: &ShotsState, t: f32) {
             9.0,
             pal().text_faint,
         );
-        fonts.draw_center(cv, w / 2, h - 26, "B BACK", 9.0, pal().text_faint);
+        crate::status::hint_or_notice(cv, fonts, h - 26, "B BACK");
         return;
     }
 
@@ -326,13 +365,11 @@ fn draw_list(cv: &mut Canvas, fonts: &mut Fonts, st: &ShotsState, t: f32) {
         9.0,
         pal().text_faint,
     );
-    fonts.draw_center(
+    crate::status::hint_or_notice(
         cv,
-        w / 2,
+        fonts,
         h - 26,
-        "U/D PICK   L/R PREV/NEXT   A ZOOM   B BACK",
-        9.0,
-        pal().text_faint,
+        "U/D PICK   L/R PREV/NEXT   A ZOOM   Y DELETE   B BACK",
     );
 }
 
@@ -368,6 +405,7 @@ pub(crate) fn draw_preview(cv: &mut Canvas, fonts: &mut Fonts, zoom: bool, t: f3
         top: 0,
         zoom,
         cache: Some((0, Image { w, h, px })),
+        delete_armed: None,
     };
     draw(cv, fonts, &mut st, t);
 }
@@ -396,6 +434,26 @@ mod tests {
     }
 
     #[test]
+    fn deleting_needs_two_presses() {
+        let dir = std::env::temp_dir().join("magi-shot-tests");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("magi_delete_test.bmp");
+        std::fs::write(&path, b"BM").unwrap();
+        let mut st = super::ShotsState {
+            paths: vec![path.clone()],
+            sel: 0,
+            top: 0,
+            zoom: false,
+            cache: None,
+            delete_armed: None,
+        };
+        assert_eq!(st.delete_selected(), Some("PRESS Y AGAIN TO DELETE"));
+        assert!(path.exists());
+        assert_eq!(st.delete_selected(), Some("SCREENSHOT DELETED"));
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn selection_wraps_and_scrolls() {
         let mut st = super::ShotsState {
             paths: (0..12)
@@ -405,6 +463,7 @@ mod tests {
             top: 0,
             zoom: false,
             cache: None,
+            delete_armed: None,
         };
         st.move_by(-1);
         assert_eq!(st.sel, 11);

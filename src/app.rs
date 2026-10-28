@@ -714,6 +714,11 @@ impl Ui {
                         self.screen = Screen::Settings;
                     }
                 }
+                Action::Y => {
+                    if let Some(msg) = self.shots.delete_selected() {
+                        crate::status::show(msg);
+                    }
+                }
                 Action::Screenshot => self.pending_screenshot = true,
                 _ => {}
             },

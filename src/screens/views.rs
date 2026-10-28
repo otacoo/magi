@@ -310,7 +310,7 @@ fn draw_strip(
 /// Horizontal offset for a selected title that does not fit: none until the
 /// two-second hold, then one slow scroll with a pause at the end. It stops
 /// after that pass, so a still shelf can go back to its idle tick.
-fn marquee_offset(full_w: i32, avail: i32, hold: f32) -> Option<i32> {
+pub(crate) fn marquee_offset(full_w: i32, avail: i32, hold: f32) -> Option<i32> {
     let overflow = full_w - avail;
     if overflow <= 0 || hold < 2.0 {
         return None;

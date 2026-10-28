@@ -6,8 +6,8 @@ use super::*;
 
 mod draw;
 
-pub(crate) use draw::draw_menu_preview;
-pub(super) use draw::{draw_menu, draw_netplay};
+pub(super) use draw::{draw_hold_panel, draw_menu, draw_netplay, draw_overlay_menu};
+pub(crate) use draw::{draw_menu_preview, draw_overlay_menu_preview};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MenuSection {
@@ -16,7 +16,7 @@ enum MenuSection {
     Load,
     Core,
     Video,
-    Link,
+    Netplay,
     Disc,
     Exit,
 }
@@ -29,22 +29,9 @@ impl MenuSection {
             Self::Load => "LOAD STATE",
             Self::Core => "CORE",
             Self::Video => "VIDEO",
-            Self::Link => "LINK",
+            Self::Netplay => "NETPLAY",
             Self::Disc => "DISC",
             Self::Exit => "EXIT",
-        }
-    }
-
-    fn title(self) -> &'static str {
-        match self {
-            Self::Resume => "RESUME GAME",
-            Self::Save => "SAVE STATE",
-            Self::Load => "LOAD STATE",
-            Self::Core => "CORE OPTIONS",
-            Self::Video => "VIDEO",
-            Self::Link => "GAME BOY LINK",
-            Self::Disc => "DISC",
-            Self::Exit => "EXIT GAME",
         }
     }
 }
@@ -52,9 +39,9 @@ impl MenuSection {
 /// Rows that fit in the option pane at the current text scale.
 fn option_rows() -> usize {
     match crate::theme::ui_scale() {
-        s if s >= 1.4 => 4,
-        s if s >= 1.2 => 6,
-        _ => 8,
+        s if s >= 1.4 => 6,
+        s if s >= 1.2 => 8,
+        _ => 10,
     }
 }
 
@@ -70,7 +57,7 @@ fn menu_sections() -> Vec<MenuSection> {
     }
     v.push(MenuSection::Video);
     if netplay_supported() {
-        v.push(MenuSection::Link);
+        v.push(MenuSection::Netplay);
     }
     if disc_count() > 1 {
         v.push(MenuSection::Disc);
@@ -100,19 +87,6 @@ fn netplay_status_line() -> String {
     }
 }
 
-fn section_summary(section: MenuSection) -> String {
-    match section {
-        MenuSection::Resume => "RETURN TO THE GAME".into(),
-        MenuSection::Save => "WRITE THE CURRENT POSITION".into(),
-        MenuSection::Load => "RETURN TO A SAVED POSITION".into(),
-        MenuSection::Core => "PER-GAME SETTINGS".into(),
-        MenuSection::Video => "DISPLAY AND LAYER OPTIONS".into(),
-        MenuSection::Link => netplay_status_line(),
-        MenuSection::Disc => "SWAP WITHOUT RESET".into(),
-        MenuSection::Exit => "FLUSH SRAM AND QUIT".into(),
-    }
-}
-
 fn format_state_age(age: Duration) -> String {
     let secs = age.as_secs();
     if secs < 60 {
@@ -137,7 +111,13 @@ fn read_state_card(path: &Path, label: String, now: SystemTime) -> StateCard {
         .map(format_state_age)
         .unwrap_or_default();
     let thumb = if exists {
-        let thumb = crate::image::load_image(&state_thumb_path(path));
+        let thumb = crate::image::load_image(&state_thumb_path(path)).map(|mut img| {
+            // Older thumbnails came from RGB565 frames and carried alpha 0.
+            for p in &mut img.px {
+                *p |= 0xFF00_0000;
+            }
+            img
+        });
         if thumb.is_none() {
             util::log(&format!(
                 "state thumb: missing {}",
@@ -178,9 +158,12 @@ impl GameMenu {
         self.open = true;
         self.page = MenuPage::Main;
         self.focus_pane = false;
-        self.sel = 0;
+        // Keep the tab used earlier in this game session.
+        let sections = menu_sections();
+        self.sel = self.sel.min(sections.len().saturating_sub(1));
         self.slot = self.slot.min(STATE_SLOTS - 1);
         self.disc_sel = disc_index().min(disc_count().saturating_sub(1));
+        self.opt_since = Instant::now();
         self.msg = None;
         self.delete_armed = None;
         self.refresh_states();
@@ -206,6 +189,11 @@ impl GameMenu {
         let b = e.type_ == ev::EV_KEY && e.code == ev::BTN_EAST;
         let y = e.type_ == ev::EV_KEY && e.code == ev::BTN_C;
 
+        if self.page == MenuPage::Overlays {
+            self.handle_overlays(up, down, left, right, a, b);
+            return;
+        }
+
         if self.page == MenuPage::Netplay {
             self.handle_netplay(up, down, a, b);
             return;
@@ -230,17 +218,11 @@ impl GameMenu {
         let section = sections[self.sel];
 
         if self.focus_pane {
-            match section {
-                MenuSection::Core => {
-                    self.handle_core(up, down, left, right, a, b);
-                    return;
-                }
-                MenuSection::Video => {
-                    self.handle_video(up, down, left, right, a, b);
-                    return;
-                }
-                _ => self.focus_pane = false,
+            if section == MenuSection::Core {
+                self.handle_core(up, down, left, right, a, b);
+                return;
             }
+            self.focus_pane = false;
         }
 
         if up {
@@ -260,8 +242,9 @@ impl GameMenu {
                     let count = disc_count();
                     self.disc_sel = cycled(self.disc_sel, count, delta);
                 }
-                MenuSection::Core | MenuSection::Video if right => {
+                MenuSection::Core if right => {
                     self.focus_pane = true;
+                    self.opt_since = Instant::now();
                 }
                 _ => {}
             }
@@ -270,8 +253,15 @@ impl GameMenu {
                 MenuSection::Resume => self.open = false,
                 MenuSection::Save => self.save_selected_state(),
                 MenuSection::Load => self.load_selected_state(),
-                MenuSection::Core | MenuSection::Video => self.focus_pane = true,
-                MenuSection::Link => self.open_netplay(),
+                MenuSection::Core => {
+                    self.focus_pane = true;
+                    self.opt_since = Instant::now();
+                }
+                MenuSection::Video => {
+                    self.overlay_sel = 0;
+                    self.page = MenuPage::Overlays;
+                }
+                MenuSection::Netplay => self.open_netplay(),
                 MenuSection::Disc => {
                     if disc_count() > 1 {
                         self.msg = Some(match disc_swap(self.disc_sel) {
@@ -305,9 +295,11 @@ impl GameMenu {
         }
         if up {
             self.opt_sel = cycled(self.opt_sel, count, -1);
+            self.opt_since = Instant::now();
             self.scroll_options(count);
         } else if down {
             self.opt_sel = cycled(self.opt_sel, count, 1);
+            self.opt_since = Instant::now();
             self.scroll_options(count);
         } else if left {
             self.change_option(-1);
@@ -318,7 +310,7 @@ impl GameMenu {
         }
     }
 
-    fn handle_video(&mut self, up: bool, down: bool, left: bool, right: bool, a: bool, b: bool) {
+    fn handle_overlays(&mut self, up: bool, down: bool, left: bool, right: bool, a: bool, b: bool) {
         const ROWS: usize = 4;
         if up {
             self.overlay_sel = (self.overlay_sel + ROWS - 1) % ROWS;
@@ -338,7 +330,7 @@ impl GameMenu {
             }
             ctx().overlay_dirty = true;
         } else if b {
-            self.focus_pane = false;
+            self.page = MenuPage::Main;
         }
     }
 
@@ -725,5 +717,23 @@ mod state_tests {
         assert!(!card.exists);
         assert!(card.thumb.is_none());
         assert!(card.age.is_empty());
+    }
+
+    #[test]
+    fn old_transparent_thumbs_become_opaque() {
+        let dir = std::env::temp_dir().join("magi-state-tests");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("old.state");
+        std::fs::write(&path, b"state").unwrap();
+        let px = vec![0x00FF_0000u32; 4];
+        let bytes = crate::image::encode_png(2, 2, &px).unwrap();
+        let thumb = super::super::state_thumb_path(&path);
+        std::fs::write(&thumb, bytes).unwrap();
+        let card = read_state_card(&path, "SLOT 1".into(), SystemTime::now());
+        let img = card.thumb.expect("thumb");
+        assert!(img.px.iter().all(|p| p >> 24 == 0xFF));
+        assert_eq!(img.px[0] & 0x00FF_FFFF, 0x00FF_0000);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&thumb);
     }
 }

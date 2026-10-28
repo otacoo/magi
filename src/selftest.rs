@@ -240,13 +240,15 @@ pub fn run() -> Result<()> {
     for (name, sel, focus) in [
         ("pause-resume", 0, false),
         ("pause-save", 1, false),
-        ("pause-core", 3, true),
-        ("pause-video", 4, true),
+        ("pause-core", 3, false),
+        ("pause-core-focus", 3, true),
+        ("pause-video", 4, false),
+        ("pause-netplay", 5, false),
         ("pause-disc", 6, false),
         ("pause-exit", 7, false),
     ] {
         library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
-        crate::run::draw_menu_preview(&mut cv, &mut fonts, sel, focus, 0.4);
+        crate::run::draw_menu_preview(&mut cv, &mut fonts, sel, focus, None, 0.4);
         let s = stats(&cv);
         write_ppm(&out.join(format!("{name}.ppm")), &cv)?;
         println!(
@@ -259,6 +261,56 @@ pub fn run() -> Result<()> {
         if s.warm < 100 || s.nonbg < 5000 {
             bail!("{name} looks wrong (warm {}, nonbg {})", s.warm, s.nonbg);
         }
+    }
+
+    // The VIDEO tab opens the old overlay page so the art is visible behind it.
+    let files = [
+        vec![
+            "CRT/Perfect_CRT.png".to_string(),
+            "CRT/Perfect_CRT-240p.png".to_string(),
+        ],
+        vec![
+            "GBA/mugwomp93/Perfect_GBA.png".to_string(),
+            "GB/mugwomp93/Perfect_GBP-EX.png".to_string(),
+        ],
+    ];
+    library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
+    crate::run::draw_overlay_menu_preview(&mut cv, &mut fonts, 3, [1, 1], &files, 0.4);
+    let s = stats(&cv);
+    write_ppm(&out.join("overlays.ppm"), &cv)?;
+    println!(
+        "overlays: warm={} signal={} nonbg={} ({:.1}%)",
+        s.warm,
+        s.signal,
+        s.nonbg,
+        pct(&cv, &s)
+    );
+    if s.warm < 100 || s.nonbg < 2000 {
+        bail!(
+            "overlay page looks wrong (warm {}, nonbg {})",
+            s.warm,
+            s.nonbg
+        );
+    }
+
+    library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
+    crate::run::draw_menu_preview(&mut cv, &mut fonts, 1, false, Some(0.65), 0.4);
+    let s = stats(&cv);
+    write_ppm(&out.join("pause-hold.ppm"), &cv)?;
+    println!(
+        "pause-hold: warm={} signal={} nonbg={} ({:.1}%)",
+        s.warm,
+        s.signal,
+        s.nonbg,
+        pct(&cv, &s)
+    );
+    if s.warm < 100 || s.signal < 100 || s.nonbg < 5000 {
+        bail!(
+            "hold panel looks wrong (warm {}, signal {}, nonbg {})",
+            s.warm,
+            s.signal,
+            s.nonbg
+        );
     }
 
     // Screenshot gallery: the list, then the full-screen zoom.

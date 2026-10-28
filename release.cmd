@@ -174,6 +174,23 @@ if not defined PAYROOT (
 )
 exit /b 0
 
+:push_bootlogo
+if exist "assets\boot\bootlogo-640x480.bmp" (
+    "%ADB%" push "assets\boot\bootlogo-640x480.bmp" "%SD%/System/bootlogo-640x480.bmp.new"
+    if errorlevel 1 exit /b 1
+)
+if exist "assets\boot\bootlogo-720x480.bmp" (
+    "%ADB%" push "assets\boot\bootlogo-720x480.bmp" "%SD%/System/bootlogo-720x480.bmp.new"
+    if errorlevel 1 exit /b 1
+)
+if exist "assets\boot\gehirn.png" (
+    "%ADB%" push "assets\boot\gehirn.png" "%SD%/System/magi/assets/boot/gehirn.png.new"
+    if errorlevel 1 exit /b 1
+)
+"%ADB%" shell "mv -f %SD%/System/bootlogo-640x480.bmp.new %SD%/System/bootlogo-640x480.bmp; mv -f %SD%/System/bootlogo-720x480.bmp.new %SD%/System/bootlogo-720x480.bmp; mv -f %SD%/System/magi/assets/boot/gehirn.png.new %SD%/System/magi/assets/boot/gehirn.png; sync"
+if errorlevel 1 exit /b 1
+exit /b 0
+
 :deploy_bin
 call :need_adb
 if errorlevel 1 goto menu
@@ -192,6 +209,8 @@ if not defined BIN (
 echo   deploying %BIN%
 "%ADB%" wait-for-device
 if defined PAYROOT "%ADB%" push "%PAYROOT%\System\magi" %SD%/System/
+if errorlevel 1 goto failed
+call :push_bootlogo
 if errorlevel 1 goto failed
 "%ADB%" push "%BIN%" %SD%/System/frontend.new
 if errorlevel 1 goto failed
@@ -218,6 +237,8 @@ if not defined PAYROOT (
 echo   refreshing card files from %PAYROOT%\ (games, saves and settings are kept)
 "%ADB%" wait-for-device
 "%ADB%" push "%PAYROOT%\System\magi" %SD%/System/
+if errorlevel 1 goto failed
+call :push_bootlogo
 if errorlevel 1 goto failed
 for %%d in (Config BIOS Overlays Saves Screenshots) do (
     if exist "%PAYROOT%\%%d" "%ADB%" push "%PAYROOT%\%%d" %SD%/

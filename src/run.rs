@@ -33,8 +33,8 @@ mod overlay;
 mod pad;
 mod prefs;
 
-pub(crate) use menu::draw_menu_preview;
-use menu::{draw_menu, draw_netplay};
+use menu::{draw_hold_panel, draw_menu, draw_netplay, draw_overlay_menu};
+pub(crate) use menu::{draw_menu_preview, draw_overlay_menu_preview};
 #[cfg(target_os = "linux")]
 use overlay::upload_overlay;
 use overlay::{
@@ -1232,6 +1232,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         slot: 0,
         opt_sel: 0,
         opt_top: 0,
+        opt_since: Instant::now(),
         overlay_sel: 0,
         overlay_idx,
         fps: disp.fps_counter,
@@ -1844,7 +1845,13 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                 let menu_cv = if gpu_menu { &mut layer } else { &mut cv };
                 match menu.page {
                     MenuPage::Main => draw_menu(menu_cv, &mut fonts, &menu, rom, t),
+                    MenuPage::Overlays => {
+                        draw_overlay_menu(menu_cv, &mut fonts, &menu, &ctx().overlay_layers, t)
+                    }
                     MenuPage::Netplay => draw_netplay(menu_cv, &mut fonts, &menu, t),
+                }
+                if menu.hold.is_some() {
+                    draw_hold_panel(menu_cv, &mut fonts, &menu, t, menu_cv.w, menu_cv.h);
                 }
                 // Overlays and screenshots work while paused too.
                 draw_overlays(
@@ -2444,7 +2451,7 @@ const REWIND_MAX_BYTES: usize = 48 << 20;
 /// Only these core options are surfaced in the UI — matched loosely against
 /// the label (cores append things like "(Restart Required)"); everything else
 /// stays at the core's default (the owner's list for the handheld cores).
-const KEEP_OPTIONS: [&str; 39] = [
+const KEEP_OPTIONS: [&str; 38] = [
     "color correction",
     "color correction mode",
     "dark filter level (%)",
@@ -2472,7 +2479,6 @@ const KEEP_OPTIONS: [&str; 39] = [
     "system hardware",
     "borders",
     "lcd ghosting filter",
-    "genesis fm",
     "sound output",
     "low-pass filter",
     "preamp level",
@@ -2509,7 +2515,7 @@ fn option_kept(desc: &str) -> bool {
 /// Genesis Plus GX options that are too detailed for the handheld menu.
 fn genesis_option_hidden(desc: &str) -> bool {
     let d = desc.to_ascii_lowercase();
-    d.contains("mega drive/genesis fm channel")
+    d.contains("mega drive/genesis fm")
         || d.contains("preamp level")
         || d.contains("cd-da volume")
         || d.contains("pcm volume")
@@ -2730,6 +2736,9 @@ fn save_state_thumb(path: &Path) {
     }
     let mut cv = Canvas::new(240, 180);
     blit(ctx, &mut cv, ScaleMode::Fit, (0, 0, 240, 180));
+    for p in &mut cv.px {
+        *p |= 0xFF00_0000;
+    }
     let bytes = match crate::image::encode_png(cv.w as u32, cv.h as u32, &cv.px) {
         Ok(bytes) => bytes,
         Err(e) => {
@@ -2830,6 +2839,7 @@ fn cstr(p: *const c_char) -> String {
 #[derive(PartialEq)]
 enum MenuPage {
     Main,
+    Overlays,
     Netplay,
 }
 
@@ -2863,6 +2873,8 @@ struct GameMenu {
     slot: usize,
     opt_sel: usize,
     opt_top: usize,
+    /// When the highlighted core option last changed, for its marquee.
+    opt_since: Instant,
     overlay_sel: usize,
     overlay_idx: [usize; 2],
     /// On-screen counters (persisted as display prefs).
@@ -3320,14 +3332,20 @@ fn rgb565(v: u32) -> u32 {
     let r = (v >> 11) & 0x1f;
     let g = (v >> 5) & 0x3f;
     let b = v & 0x1f;
-    (((r << 3) | (r >> 2)) << 16) | (((g << 2) | (g >> 4)) << 8) | ((b << 3) | (b >> 2))
+    0xFF00_0000
+        | (((r << 3) | (r >> 2)) << 16)
+        | (((g << 2) | (g >> 4)) << 8)
+        | ((b << 3) | (b >> 2))
 }
 
 fn rgb1555(v: u32) -> u32 {
     let r = (v >> 10) & 0x1f;
     let g = (v >> 5) & 0x1f;
     let b = v & 0x1f;
-    (((r << 3) | (r >> 2)) << 16) | (((g << 3) | (g >> 2)) << 8) | ((b << 3) | (b >> 2))
+    0xFF00_0000
+        | (((r << 3) | (r >> 2)) << 16)
+        | (((g << 3) | (g >> 2)) << 8)
+        | ((b << 3) | (b >> 2))
 }
 
 #[cfg(test)]
@@ -3488,7 +3506,6 @@ mod overlay_tests {
         assert!(!option_kept("Game Boy Player Rumble (Restart)"));
         assert!(!option_kept("Color"));
         assert!(option_kept("Solar Sensor Level"));
-        assert!(option_kept("Mega Drive/Genesis FM"));
     }
 
     #[test]
@@ -3503,7 +3520,7 @@ mod overlay_tests {
         assert!(super::genesis_option_hidden("PSG Preamp Level"));
         assert!(super::genesis_option_hidden("CD-DA Volume %"));
         assert!(super::genesis_option_hidden("PCM Volume %"));
-        assert!(!super::genesis_option_hidden("Mega Drive/Genesis FM"));
+        assert!(super::genesis_option_hidden("Mega Drive/Genesis FM"));
         assert!(!super::genesis_option_hidden("Sound Output"));
     }
 
@@ -3550,6 +3567,14 @@ mod display_tests {
         let (sx, sy) = scale_factors(ScaleMode::Stretch, 640, 480, 240, 160);
         assert!((sx - 2.6667).abs() < 0.01 && (sy - 3.0).abs() < 0.001);
         assert_eq!(ScaleMode::Fit.next().next().next(), ScaleMode::Fit);
+    }
+
+    #[test]
+    fn converted_core_pixels_are_opaque() {
+        for v in [0u32, 0x7fff, 0xffff] {
+            assert_eq!(super::rgb565(v) >> 24, 0xFF, "565 {v:#x}");
+            assert_eq!(super::rgb1555(v) >> 24, 0xFF, "1555 {v:#x}");
+        }
     }
 
     #[test]

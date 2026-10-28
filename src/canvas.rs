@@ -193,6 +193,31 @@ impl Canvas {
         self.mark(x0, y0, x1, y1);
     }
 
+    /// Darken RGB by amount (0-255) while keeping each pixel's coverage.
+    /// Unlike a translucent fill this works on both opaque canvases and layers.
+    pub fn shade_rect(&mut self, x: i32, y: i32, w: u32, h: u32, amount: u8) {
+        let f = 255 - amount as u32;
+        let x0 = x.max(0);
+        let y0 = y.max(0);
+        let x1 = (x + w as i32).min(self.w);
+        let y1 = (y + h as i32).min(self.h);
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        for yy in y0..y1 {
+            let base = yy as usize * self.w as usize;
+            for xx in x0..x1 {
+                let i = base + xx as usize;
+                let p = self.px[i];
+                let r = ((p >> 16) & 0xff) * f / 255;
+                let g = ((p >> 8) & 0xff) * f / 255;
+                let b = (p & 0xff) * f / 255;
+                self.px[i] = (p & 0xFF00_0000) | (r << 16) | (g << 8) | b;
+            }
+        }
+        self.mark(x0, y0, x1, y1);
+    }
+
     pub fn rect_outline(&mut self, x: i32, y: i32, w: u32, h: u32, c: Color) {
         if w == 0 || h == 0 {
             return;
@@ -260,6 +285,19 @@ mod tests {
         assert_eq!(cv.px[0], 0, "untouched pixels stay clear");
         // The dirty area covers the drawn rectangle only.
         assert_eq!(cv.dirty_rect(), Some((1, 1, 2, 2)));
+    }
+
+    #[test]
+    fn shade_keeps_coverage() {
+        let mut cv = Canvas::transparent(2, 1);
+        cv.put(0, 0, Color::rgb(200, 100, 50));
+        cv.shade_rect(0, 0, 2, 1, 51);
+        let p = cv.px[0];
+        assert_eq!(p >> 24, 255, "coverage kept");
+        assert_eq!((p >> 16) & 0xff, 160);
+        assert_eq!((p >> 8) & 0xff, 80);
+        assert_eq!(p & 0xff, 40);
+        assert_eq!(cv.dirty_rect(), Some((0, 0, 2, 1)));
     }
 
     #[test]

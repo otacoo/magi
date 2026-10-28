@@ -9,9 +9,22 @@ All notable changes to MAGI are documented here.
 - Game Boy and Game Boy Color netplay over a local hotspot or Wi-Fi, with a
   four-character host code and each player keeping their own save.
 - A redesigned in-game pause menu with folder tabs, direct save/load slots,
-  full-size state previews and inline core/video options.
+  full-size state previews and inline core options.
 - SCREENSHOTS below the screenshot toggle, shown while it is on, to browse
-  captures on the card and zoom them full-screen.
+  captures on the card, zoom them full-screen and delete them with Y twice.
+
+### Changed
+
+- Genesis FM, per-channel FM volume, preamp, CD-DA and PCM options are
+  hidden from the core menu.
+- Long core option labels and values scroll instead of truncating.
+- The pause menu remembers the last tab used during the game.
+- The hold-MENU save-and-exit prompt is a larger, clearer progress panel.
+
+### Fixed
+
+- Save-state previews from RGB565/1555 cores now render; existing previews are
+  repaired when the menu opens.
 
 ## [1.0.0] - 2026-10-27
 
