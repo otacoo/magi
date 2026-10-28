@@ -26,7 +26,11 @@ On Windows it requires Docker to build the payload; `release.cmd` wraps the host
 | `src/main.rs` | Multicall entry point: `magi` is the shelf, `magi run` is the game host. |
 | `src/app.rs` | Shelf state and event loop. |
 | `src/screens/` | Library, settings, network, power, controls and boot screens. |
-| `src/run.rs` | libretro host, overlays, save states and in-game OSD. |
+| `src/run.rs` | libretro host loop, core plumbing, save states and the OSD. |
+| `src/run/menu*` | Pause-menu state, navigation and pages. |
+| `src/run/overlay.rs` | Overlay scan, composite, blend and per-system choices. |
+| `src/run/pad.rs` | SDL pad events translated to the vendor event pipeline. |
+| `src/run/prefs.rs` | Runtime JSON store, display prefs and scale modes. |
 | `src/n64.rs` | Native port discovery and supervision. |
 | `src/present/` | EGL/GLES, direct framebuffer, DE layer and SDL presenters. |
 | `src/theme.rs` | Every colour and type scale in the UI. |

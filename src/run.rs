@@ -2,6 +2,9 @@
 //! the panel and the input devices, loads a core, runs a game, and exits
 //! back to MELCHIOR. Video goes to the same presenters as the UI; audio goes
 //! directly to ALSA (libasound via dlopen).
+//!
+//! This file owns the host loop and core plumbing; the pause menu, overlays,
+//! pad mapping and runtime preferences live in the `run/` submodules.
 
 use std::collections::VecDeque;
 use std::ffi::{c_void, CStr, CString};
@@ -13,18 +16,37 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use libloading::Library;
-use sdl2::controller::{Axis as PadAxis, Button as PadButton};
-use sdl2::event::Event;
+use sdl2::controller::Button as PadButton;
 
 use crate::canvas::Canvas;
-use crate::defaults::Defaults;
 use crate::font::{self, Fonts};
-use crate::input::{ev, joypad_bit, retro, RawEvent, Shortcut, Shortcuts};
+use crate::image::Image;
+use crate::input::{ev, retro, RawEvent, Shortcut, Shortcuts};
 use crate::netplay;
 use crate::present::Presenter;
 use crate::systems::Catalogue;
 use crate::theme::pal;
 use crate::util;
+
+mod menu;
+mod overlay;
+mod pad;
+mod prefs;
+
+pub(crate) use menu::{draw_disc, draw_menu_preview, draw_overlay_menu_preview};
+use menu::{draw_menu, draw_netplay, draw_options, draw_overlay_menu};
+#[cfg(target_os = "linux")]
+use overlay::upload_overlay;
+use overlay::{
+    apply_overlays, blend_straight, load_bezel_area, load_composite, load_overlay_prefs,
+    overlay_scan_layers, premultiplied, save_overlay_prefs, Overlay, OverlayLayers,
+};
+use pad::{pump_pads, PadHat, PadState};
+use prefs::{
+    load_display_prefs, load_runtime_prefs, load_runtime_volume, load_shot_chord_pref,
+    save_display_prefs, save_runtime_volume, scale_factors, AdjKind, AdjState, DisplayPrefs,
+    ScaleMode, COMBO_FIRST_REPEAT, COMBO_REPEAT, COMBO_STEP, DOUBLE_TAP, TRIGGER_ON,
+};
 
 #[cfg(target_os = "linux")]
 use crate::audio::AlsaOut;
@@ -603,255 +625,6 @@ extern "C" fn input_state_cb(port: c_uint, device: c_uint, index: c_uint, id: c_
     }
 }
 
-/// One decoded overlay PNG (0xAARRGGBB), pre-scaled to the panel.
-struct OverlayLayer {
-    px: Vec<u32>,
-}
-
-/// Overlay paths by layer, in blend order: CRT, bezel.
-type OverlayLayers = [Vec<String>; 2];
-
-/// Which layer an overlay belongs to, from its path; colour-correction
-/// files are ignored (that belongs in the core options).
-fn overlay_kind(rel: &str) -> Option<usize> {
-    let lower = rel.to_ascii_lowercase();
-    let top = lower.split('/').next().unwrap_or("");
-    if top.contains("crt") || lower.contains("_crt") {
-        Some(0)
-    } else if top.contains("color") || top.contains("colour") || top.contains("correction") {
-        None
-    } else {
-        Some(1)
-    }
-}
-
-/// Every PNG under Overlays/ (recursively), as relative paths, sorted.
-fn overlay_scan() -> Vec<String> {
-    fn walk(dir: &std::path::Path, base: &std::path::Path, out: &mut Vec<String>) {
-        let Ok(rd) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                walk(&p, base, out);
-            } else if p
-                .extension()
-                .and_then(|x| x.to_str())
-                .is_some_and(|x| x.eq_ignore_ascii_case("png"))
-            {
-                if let Ok(rel) = p.strip_prefix(base) {
-                    out.push(rel.to_string_lossy().replace('\\', "/"));
-                }
-            }
-        }
-    }
-    let base = std::path::Path::new("Overlays");
-    let mut out = Vec::new();
-    walk(base, base, &mut out);
-    out.sort();
-    out
-}
-
-/// The scanned overlays split into their two layer lists.
-fn overlay_scan_layers() -> OverlayLayers {
-    let mut out: OverlayLayers = std::array::from_fn(|_| Vec::new());
-    for name in overlay_scan() {
-        if let Some(kind) = overlay_kind(&name) {
-            out[kind].push(name);
-        }
-    }
-    out
-}
-
-/// Decode a PNG into the canvas' 0xAARRGGBB layout, nearest-scaled to the
-/// panel (the overlay packs are authored at 640x480 already).
-fn load_overlay_png(name: &str, w: u32, h: u32) -> Option<OverlayLayer> {
-    let path = std::path::Path::new("Overlays").join(name);
-    let img = crate::image::load_png(&path)?;
-    let img = if img.w == w && img.h == h {
-        img
-    } else {
-        img.scaled(w, h)
-    };
-    Some(OverlayLayer { px: img.px })
-}
-
-/// The layer choices, flattened into one image at load time so the
-/// per-frame cost is a single blend pass no matter how many layers are on
-/// (three passes were dropping frames on GBA/GBC cores).
-struct Overlay {
-    px: Vec<u32>,
-    /// Contiguous runs of non-transparent pixels, when they save real work
-    /// (bezel-style overlays are mostly clear in the middle). None means a
-    /// plain full scan is cheaper.
-    spans: Option<Vec<(u32, u32)>>,
-    any: bool,
-}
-
-/// Runs of pixels that need blending; None when spans would not pay off
-/// (near-full coverage or a very fragmented pattern, e.g. CRT scanlines).
-fn transparent_spans(px: &[u32]) -> Option<Vec<(u32, u32)>> {
-    let mut spans: Vec<(u32, u32)> = Vec::new();
-    let mut start: Option<u32> = None;
-    let mut covered = 0usize;
-    for (i, &p) in px.iter().enumerate() {
-        if p != 0xFF00_0000 {
-            covered += 1;
-            if start.is_none() {
-                start = Some(i as u32);
-            }
-        } else if let Some(s) = start.take() {
-            spans.push((s, i as u32));
-            if spans.len() > 8192 {
-                return None;
-            }
-        }
-    }
-    if let Some(s) = start {
-        spans.push((s, px.len() as u32));
-    }
-    (spans.len() <= 8192 && covered <= px.len() * 9 / 10).then_some(spans)
-}
-
-/// One source-over blend step on premultiplied pixels.
-#[inline]
-fn blend_px(dst: &mut u32, src: u32) {
-    if src == 0xFF00_0000 {
-        return;
-    }
-    let inv = src >> 24;
-    let d = *dst;
-    let r = ((src >> 16) & 0xff) + (((d >> 16) & 0xff) * inv + 127) / 255;
-    let g = ((src >> 8) & 0xff) + (((d >> 8) & 0xff) * inv + 127) / 255;
-    let b = (src & 0xff) + ((d & 0xff) * inv + 127) / 255;
-    *dst = 0xFF00_0000 | (r << 16) | (g << 8) | b;
-}
-
-/// Four pixels at a time on NEON. The overlay is premultiplied, so each
-/// channel is `src + dst * inv / 255`; a fully transparent pixel (the
-/// 0xFF000000 marker) makes this an identity.
-#[cfg(target_arch = "aarch64")]
-#[inline]
-unsafe fn blend4_neon(dst: *mut u32, src: *const u32) {
-    use std::arch::aarch64::*;
-    let s = vld1q_u32(src);
-    let d = vld1q_u32(dst as *const u32);
-    let mask = vdupq_n_u32(0xff);
-    let sh24 = vdupq_n_s32(-24);
-    let sh16 = vdupq_n_s32(-16);
-    let sh8 = vdupq_n_s32(-8);
-    let sh23 = vdupq_n_s32(-23);
-    let left16 = vdupq_n_s32(16);
-    let left8 = vdupq_n_s32(8);
-    let inv = vshlq_u32(s, sh24);
-    // Alpha 255 (inv 0) is a copy; alpha 0 (the transparent marker) is a
-    // no-op. CRT/bezel art is mostly one or the other outside the screen.
-    if vmaxvq_u32(inv) == 0 {
-        vst1q_u32(dst, vorrq_u32(s, vdupq_n_u32(0xFF00_0000)));
-        return;
-    }
-    if vminvq_u32(inv) == 255 {
-        return;
-    }
-    let sr = vandq_u32(vshlq_u32(s, sh16), mask);
-    let sg = vandq_u32(vshlq_u32(s, sh8), mask);
-    let sb = vandq_u32(s, mask);
-    let dr = vandq_u32(vshlq_u32(d, sh16), mask);
-    let dg = vandq_u32(vshlq_u32(d, sh8), mask);
-    let db = vandq_u32(d, mask);
-    let round = vdupq_n_u32(127);
-    let magic = vdupq_n_u32(32897);
-    let div255 = |x: uint32x4_t| vshlq_u32(vmulq_u32(x, magic), sh23);
-    let r = vaddq_u32(sr, div255(vaddq_u32(vmulq_u32(dr, inv), round)));
-    let g = vaddq_u32(sg, div255(vaddq_u32(vmulq_u32(dg, inv), round)));
-    let b = vaddq_u32(sb, div255(vaddq_u32(vmulq_u32(db, inv), round)));
-    let out = vorrq_u32(
-        vorrq_u32(vshlq_u32(r, left16), vshlq_u32(g, left8)),
-        vorrq_u32(b, vdupq_n_u32(0xFF00_0000)),
-    );
-    vst1q_u32(dst, out);
-}
-
-fn blend_slice(dst: &mut [u32], src: &[u32]) {
-    let n = dst.len().min(src.len());
-    let mut i = 0;
-    #[cfg(target_arch = "aarch64")]
-    unsafe {
-        while i + 4 <= n {
-            blend4_neon(dst.as_mut_ptr().add(i), src.as_ptr().add(i));
-            i += 4;
-        }
-    }
-    while i < n {
-        blend_px(&mut dst[i], src[i]);
-        i += 1;
-    }
-}
-
-/// Source-over `src` onto `dst`, in place.
-fn over(dst: &mut u32, src: u32) {
-    let sa = src >> 24;
-    if sa == 0 {
-        return;
-    }
-    if sa == 255 {
-        *dst = src;
-        return;
-    }
-    let da = 255 - sa;
-    let r = (((src >> 16) & 0xff) * sa + ((*dst >> 16) & 0xff) * da) / 255;
-    let g = (((src >> 8) & 0xff) * sa + ((*dst >> 8) & 0xff) * da) / 255;
-    let b = ((src & 0xff) * sa + (*dst & 0xff) * da) / 255;
-    *dst = 0xFF00_0000 | (r << 16) | (g << 8) | b;
-}
-
-/// Source-over that also composites the alpha channel. `over` is for the
-/// final opaque canvas; composites that stay transparent (the DE overlay)
-/// need this one, or the second layer turns the whole image opaque.
-fn over_alpha(dst: &mut u32, src: u32) {
-    let sa = src >> 24;
-    if sa == 0 {
-        return;
-    }
-    if sa == 255 {
-        *dst = src;
-        return;
-    }
-    let da = *dst >> 24;
-    let inv = 255 - sa;
-    let ao = sa + da * inv / 255;
-    if ao == 0 {
-        *dst = 0;
-        return;
-    }
-    let mix = |s: u32, d: u32| ((s * sa + d * da * inv / 255) / ao).min(255);
-    let r = mix((src >> 16) & 0xff, (*dst >> 16) & 0xff);
-    let g = mix((src >> 8) & 0xff, (*dst >> 8) & 0xff);
-    let b = mix(src & 0xff, *dst & 0xff);
-    *dst = (ao << 24) | (r << 16) | (g << 8) | b;
-}
-
-/// Straight-alpha composite of the layer choices (0xAARRGGBB); the hardware
-/// layer uploads this as-is.
-fn load_composite(names: &[String; 2], w: u32, h: u32) -> Option<Vec<u32>> {
-    let mut iter = names.iter().filter(|n| !n.is_empty());
-    let first = iter.next()?;
-    let mut img = load_overlay_png(first, w, h)?;
-    for name in iter {
-        let Some(l) = load_overlay_png(name, w, h) else {
-            continue;
-        };
-        if l.px.len() != img.px.len() {
-            continue;
-        }
-        for (dst, &src) in img.px.iter_mut().zip(l.px.iter()) {
-            over_alpha(dst, src);
-        }
-    }
-    Some(img.px)
-}
-
 /// DE pixel format and bytes-per-pixel for a libretro pixel format, when
 /// the engine can scan it out directly.
 #[cfg(target_os = "linux")]
@@ -882,235 +655,6 @@ fn game_rect(
         dw as u32,
         dh as u32,
     )
-}
-
-/// The bezel's screen region: the bounding box of its non-opaque pixels.
-fn screen_area(px: &[u32], w: u32, h: u32) -> Option<(i32, i32, u32, u32)> {
-    let (mut x0, mut y0, mut x1, mut y1) = (w, h, -1i32, -1i32);
-    for y in 0..h as usize {
-        for x in 0..w as usize {
-            if px[y * w as usize + x] >> 24 < 240 {
-                x0 = x0.min(x as u32);
-                y0 = y0.min(y as u32);
-                x1 = x1.max(x as i32);
-                y1 = y1.max(y as i32);
-            }
-        }
-    }
-    let (aw, ah) = ((x1 - x0 as i32 + 1).max(0), (y1 - y0 as i32 + 1).max(0));
-    if aw < (w / 4) as i32 || ah < (h / 4) as i32 {
-        return None;
-    }
-    Some((x0 as i32, y0 as i32, aw as u32, ah as u32))
-}
-
-/// Source-over a straight-alpha composite onto the canvas (screenshots when
-/// the overlay lives in a DE layer instead).
-fn blend_straight(cv: &mut Canvas, px: Option<&[u32]>) {
-    let Some(px) = px else { return };
-    if px.len() != cv.px.len() {
-        return;
-    }
-    for (dst, &src) in cv.px.iter_mut().zip(px.iter()) {
-        over(dst, src);
-    }
-}
-
-/// The overlay DE layer's image: opaque backplate with a transparent hole at
-/// the game rect, art on top. The backplate hides the fb layer underneath
-/// and fills any gap between the game image and the bezel's screen.
-#[cfg(target_os = "linux")]
-fn upload_overlay(
-    layer: &mut Option<crate::disp2::ImageLayer>,
-    art: Option<&[u32]>,
-    cw: usize,
-    ch: usize,
-    rect: (i32, i32, u32, u32),
-) {
-    let Some(layer) = layer.as_mut() else { return };
-    let mut px = vec![0xFF03_0303u32; cw * ch];
-    for y in rect.1.max(0)..(rect.1 + rect.3 as i32).min(ch as i32) {
-        for x in rect.0.max(0)..(rect.0 + rect.2 as i32).min(cw as i32) {
-            px[y as usize * cw + x as usize] = 0;
-        }
-    }
-    if let Some(art) = art {
-        for (d, &s) in px.iter_mut().zip(art.iter()) {
-            over(d, s);
-        }
-    }
-    layer.upload(&px);
-}
-
-/// The bezel's screen region, from its PNG alpha (None = full canvas).
-fn load_bezel_area(names: &[String; 2], w: u32, h: u32) -> Option<(i32, i32, u32, u32)> {
-    if names[1].is_empty() {
-        return None;
-    }
-    let img = load_overlay_png(&names[1], w, h)?;
-    screen_area(&img.px, w, h)
-}
-
-/// Software fallback: premultiply for the frame blend (RGB carries src*a,
-/// the top byte is 255-a, so per frame it is one multiply per channel
-/// instead of two; 0xFF00_0000 marks a fully transparent pixel).
-fn premultiplied(px: &[u32]) -> Overlay {
-    let mut px = px.to_vec();
-    let mut any = false;
-    for p in &mut px {
-        let a = *p >> 24;
-        if a == 0 {
-            *p = 0xFF00_0000;
-            continue;
-        }
-        any = true;
-        let inv = 255 - a;
-        let r = ((*p >> 16) & 0xff) * a / 255;
-        let g = ((*p >> 8) & 0xff) * a / 255;
-        let b = (*p & 0xff) * a / 255;
-        *p = (inv << 24) | (r << 16) | (g << 8) | b;
-    }
-    let spans = transparent_spans(&px);
-    Overlay { px, spans, any }
-}
-
-/// Blend the pre-composited overlay over the finished canvas.
-fn apply_overlays(cv: &mut Canvas, overlay: &Option<Overlay>) {
-    let Some(o) = overlay else { return };
-    if !o.any || o.px.len() != cv.px.len() {
-        return;
-    }
-    match &o.spans {
-        Some(spans) => {
-            for &(s, e) in spans {
-                let (s, e) = (s as usize, e as usize);
-                blend_slice(&mut cv.px[s..e], &o.px[s..e]);
-            }
-        }
-        None => {
-            let mid = (cv.px.len() / 2) & !3;
-            if mid >= 4096 {
-                let (dst_a, dst_b) = cv.px.split_at_mut(mid);
-                let (src_a, src_b) = o.px.split_at(mid);
-                std::thread::scope(|scope| {
-                    scope.spawn(|| blend_slice(dst_b, src_b));
-                    blend_slice(dst_a, src_a);
-                });
-            } else {
-                blend_slice(&mut cv.px, &o.px);
-            }
-        }
-    }
-}
-
-/// Per-system overlay choices from Config/magi.json ("" = off). A missing
-/// layer uses the shipped default; the legacy global keys seed the first
-/// launch, and an explicit empty string turns it off. NGP/NGPC share one
-/// system, so the ROM extension picks the bezel.
-fn default_overlays(system: &str, rom: &str, wide: bool) -> [&'static str; 2] {
-    let crt = if wide {
-        "CRT/Perfect_CRT-720x480.png"
-    } else {
-        "CRT/Perfect_CRT.png"
-    };
-    let crt240 = if wide {
-        "CRT/Perfect_CRT-240p-720x480.png"
-    } else {
-        "CRT/Perfect_CRT-240p.png"
-    };
-    let crt240_noframe = if wide {
-        "CRT/Perfect_CRT-240p(noframe)-720x480.png"
-    } else {
-        "CRT/Perfect_CRT-240p(noframe).png"
-    };
-    match system {
-        "psx" => [crt, ""],
-        "snes" | "pce" | "nes" | "neocd" => [crt240, ""],
-        "genesis" => [crt240_noframe, ""],
-        "gba" => {
-            if wide {
-                // 720x480 is exactly 3x GBA; a bezel would only shrink it.
-                ["", ""]
-            } else {
-                ["", "GBA/mugwomp93/Perfect_GBA.png"]
-            }
-        }
-        "gbc" => [
-            "",
-            if wide {
-                "GBC/mugwomp93/Perfect_GBC-720x480.png"
-            } else {
-                "GBC/mugwomp93/Perfect_GBC.png"
-            },
-        ],
-        "gb" => [
-            "",
-            if wide {
-                "GB/mugwomp93/Perfect_GBP-EX-720x480.png"
-            } else {
-                "GB/mugwomp93/Perfect_GBP-EX.png"
-            },
-        ],
-        "ngp" => {
-            // NGP and NGPC share one catalogue entry and folder.
-            let ngp = rom.to_ascii_lowercase().ends_with(".ngp");
-            match (wide, ngp) {
-                (true, true) => ["", "NGP/mugwomp93/ngp-720x480.png"],
-                (true, false) => ["", "NGPC/mugwomp93/ngpc-720x480.png"],
-                (false, true) => ["", "NGP/mugwomp93/ngp-640x480.png"],
-                (false, false) => ["", "NGPC/mugwomp93/ngpc-640x480.png"],
-            }
-        }
-        _ => ["", ""],
-    }
-}
-
-fn overlay_prefs_from(v: &serde_json::Value, system: &str, rom: &str, wide: bool) -> [String; 2] {
-    let has_map = v.get("overlays").is_some_and(|o| o.is_object());
-    let per = v.get("overlays").and_then(|o| o.get(system));
-    let get = |layer: usize, key: &str| -> String {
-        let explicit = if has_map {
-            per.and_then(|p| p.get(key)).and_then(|x| x.as_str())
-        } else {
-            v.get(format!("overlay_{key}")).and_then(|x| x.as_str())
-        };
-        match explicit {
-            Some(value) => value.to_string(),
-            None => default_overlays(system, rom, wide)[layer].to_string(),
-        }
-    };
-    [get(0, "crt"), get(1, "bezel")]
-}
-
-fn load_overlay_prefs(system: &str, rom: &str, wide: bool) -> [String; 2] {
-    let v: serde_json::Value = std::fs::read_to_string(runtime_config_path())
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    overlay_prefs_from(&v, system, rom, wide)
-}
-
-fn save_overlay_prefs(system: &str, names: &[String; 2]) {
-    let path = Path::new(runtime_config_path());
-    let mut v: serde_json::Value = std::fs::read_to_string(path)
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .filter(|v: &serde_json::Value| v.is_object())
-        .unwrap_or_else(|| serde_json::json!({}));
-    if !v.get("overlays").is_some_and(|o| o.is_object()) {
-        v["overlays"] = serde_json::json!({});
-    }
-    v["overlays"][system] = serde_json::json!({
-        "crt": names[0],
-        "bezel": names[1],
-    });
-    // Keep the old top-level keys current for older builds and downgrades.
-    v["overlay_crt"] = serde_json::json!(names[0]);
-    v["overlay_bezel"] = serde_json::json!(names[1]);
-    if let Ok(text) = serde_json::to_string_pretty(&v) {
-        let _ = std::fs::create_dir_all("Config");
-        let _ = util::write_file_atomic(path, text.as_bytes());
-    }
 }
 
 pub fn main(args: &[String]) -> Result<()> {
@@ -1697,6 +1241,12 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         netplay_transport: netplay::Transport::Wifi,
         netplay_role: netplay::Role::Host,
         netplay_msg: None,
+        focus_pane: false,
+        states: Vec::new(),
+        state_sel: 0,
+        state_paths: state_paths.clone(),
+        auto_path: auto_state_path(&save_dir, &stem),
+        delete_armed: None,
     };
     let mut shortcuts = Shortcuts::default();
     let mut take_shot = false;
@@ -1878,7 +1428,9 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                             util::sleep_now(disp.shutdown_min * 60);
                             // We woke mid-session (RAM intact), so the
                             // restore point is stale now.
-                            let _ = std::fs::remove_file(auto_state_path(&save_dir, &stem));
+                            let auto = auto_state_path(&save_dir, &stem);
+                            let _ = std::fs::remove_file(&auto);
+                            let _ = std::fs::remove_file(state_thumb_path(&auto));
                             power_guard = Some(Instant::now() + Duration::from_millis(1200));
                             pad.reset();
                         }
@@ -1897,8 +1449,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                             // hold-to-save gesture: close on release only.
                             menu_close_pending = true;
                         } else {
-                            menu.open = true;
-                            menu.page = MenuPage::Main;
+                            menu.open_menu();
                             pad.reset(); // don't leak held buttons into the menu
                         }
                     }
@@ -1960,6 +1511,9 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                         Err(_) => format!("NO STATE {}/{}", slot + 1, STATE_SLOTS),
                     }
                 };
+                if menu.open && e.code == ev::BTN_Z {
+                    menu.refresh_states();
+                }
                 hud = Some((msg, Instant::now()));
                 continue;
             }
@@ -2000,7 +1554,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                 }
             }
             if menu.open {
-                menu.handle_raw(e, &state_paths);
+                menu.handle_raw(e);
             } else {
                 pad.apply(e);
             }
@@ -2025,8 +1579,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                     if menu.open {
                         menu_close_pending = true;
                     } else {
-                        menu.open = true;
-                        menu.page = MenuPage::Main;
+                        menu.open_menu();
                         pad.reset();
                     }
                 }
@@ -2881,253 +2434,9 @@ pub fn apply_gain(samples: &mut [i16], pct: u8) {
     }
 }
 
-fn runtime_config_path() -> &'static str {
-    "Config/magi.json"
-}
-
-fn load_runtime_volume() -> u8 {
-    std::fs::read_to_string(runtime_config_path())
-        .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .and_then(|v| v.get("volume").and_then(|x| x.as_u64()))
-        .map(|v| v.min(100) as u8)
-        .unwrap_or(100)
-}
-
-/// Fast-forward preferences: steps per presented frame and whether audio
-/// keeps playing while fast-forwarding.
-fn load_runtime_prefs() -> (u32, bool) {
-    let v: serde_json::Value = std::fs::read_to_string(runtime_config_path())
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    let steps = v
-        .get("ff_steps")
-        .and_then(|x| x.as_u64())
-        .map(|x| x.clamp(2, 6) as u32)
-        .unwrap_or(Defaults::FF_STEPS);
-    let sound = v
-        .get("ff_sound")
-        .and_then(|x| x.as_bool())
-        .unwrap_or(Defaults::FF_SOUND);
-    (steps, sound)
-}
-
-/// The screenshot-chord preference (MISC page), read once per launch.
-fn load_shot_chord_pref() -> bool {
-    std::fs::read_to_string(runtime_config_path())
-        .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .and_then(|v| v.get("shot_chord").and_then(|x| x.as_bool()))
-        .unwrap_or(Defaults::SHOT_CHORD)
-}
-
-fn save_runtime_volume(pct: u8) {
-    let path = Path::new(runtime_config_path());
-    let mut v: serde_json::Value = std::fs::read_to_string(path)
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .filter(|v: &serde_json::Value| v.is_object())
-        .unwrap_or_else(|| serde_json::json!({}));
-    v["volume"] = serde_json::json!(pct);
-    match serde_json::to_string_pretty(&v) {
-        Ok(text) => {
-            let _ = std::fs::create_dir_all("Config");
-            if let Err(e) = util::write_file_fast(path, text.as_bytes()) {
-                util::log(&format!("volume: cannot save: {e}"));
-            }
-        }
-        Err(e) => util::log(&format!("volume: cannot encode: {e}")),
-    }
-}
-
-/// Two R2 presses this close together latch fast-forward on or off.
-const DOUBLE_TAP: Duration = Duration::from_millis(400);
-/// SELECT + d-pad: first repeat after this, then this often.
-const COMBO_FIRST_REPEAT: Duration = Duration::from_millis(350);
-const COMBO_REPEAT: Duration = Duration::from_millis(110);
-/// Brightness and warmth steps, in percent.
-const COMBO_STEP: i32 = 5;
-/// Analog triggers read as pressed past this (Xbox axes span 0..1023).
-const TRIGGER_ON: i32 = 300;
-
-/// How the game image fills the panel.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum ScaleMode {
-    /// Fractional, aspect preserved (the historic default).
-    Fit,
-    /// Whole-number pixels, aspect preserved.
-    Integer,
-    /// Fill the panel, aspect ignored.
-    Stretch,
-}
-
-impl ScaleMode {
-    fn next(self) -> Self {
-        match self {
-            ScaleMode::Fit => ScaleMode::Integer,
-            ScaleMode::Integer => ScaleMode::Stretch,
-            ScaleMode::Stretch => ScaleMode::Fit,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            ScaleMode::Fit => "SCALE FIT",
-            ScaleMode::Integer => "SCALE INTEGER",
-            ScaleMode::Stretch => "SCALE STRETCH",
-        }
-    }
-
-    fn as_u8(self) -> u8 {
-        match self {
-            ScaleMode::Fit => 0,
-            ScaleMode::Integer => 1,
-            ScaleMode::Stretch => 2,
-        }
-    }
-
-    fn from_u8(v: u8) -> Self {
-        match v {
-            1 => ScaleMode::Integer,
-            2 => ScaleMode::Stretch,
-            _ => ScaleMode::Fit,
-        }
-    }
-}
-
-/// Per-axis scale factors for a mode; `blit` clamps the result to the panel.
-fn scale_factors(mode: ScaleMode, cw: usize, ch: usize, fw: usize, fh: usize) -> (f32, f32) {
-    let fit = f32::min(cw as f32 / fw as f32, ch as f32 / fh as f32);
-    match mode {
-        ScaleMode::Fit => (fit.max(0.01), fit.max(0.01)),
-        ScaleMode::Integer => {
-            let s = fit.floor().max(1.0);
-            (s, s)
-        }
-        ScaleMode::Stretch => (cw as f32 / fw as f32, ch as f32 / fh as f32),
-    }
-}
-
-/// Display preferences, persisted next to the volume: scale mode, panel
-/// brightness and the warm (blue-reducing) tint.
-#[derive(Clone, Copy)]
-struct DisplayPrefs {
-    theme: u8,
-    background: u8,
-    anim_bg: bool,
-    glow: bool,
-    scale: ScaleMode,
-    brightness: u32,
-    warmth: u32,
-    lid_sleep: bool,
-    shutdown_min: u32,
-    rumble: bool,
-    bat_shutdown: u32,
-    charge_limit: u32,
-    fps_counter: bool,
-    sysinfo: bool,
-}
-
-fn load_display_prefs() -> DisplayPrefs {
-    let v: serde_json::Value = std::fs::read_to_string(runtime_config_path())
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    let brightness = v
-        .get("brightness")
-        .and_then(|x| x.as_u64())
-        .map(|x| x.min(100) as u32)
-        // Never surprise the user: unsaved brightness is what the panel shows.
-        .or_else(crate::util::brightness_now)
-        .unwrap_or(crate::util::STOCK_BRIGHTNESS);
-    DisplayPrefs {
-        theme: v
-            .get("theme")
-            .and_then(|x| x.as_u64())
-            .unwrap_or(Defaults::THEME as u64) as u8,
-        background: v
-            .get("background")
-            .and_then(|x| x.as_u64())
-            .unwrap_or(Defaults::BACKGROUND as u64) as u8,
-        anim_bg: v
-            .get("anim_bg")
-            .and_then(|x| x.as_bool())
-            .unwrap_or(Defaults::ANIM_BG),
-        glow: v
-            .get("glow")
-            .and_then(|x| x.as_bool())
-            .unwrap_or(Defaults::GLOW),
-        scale: ScaleMode::from_u8(v.get("scale_mode").and_then(|x| x.as_u64()).unwrap_or(0) as u8),
-        brightness,
-        warmth: v
-            .get("warmth")
-            .and_then(|x| x.as_u64())
-            .map(|x| x.min(100) as u32)
-            .unwrap_or(0),
-        lid_sleep: v
-            .get("lid_sleep")
-            .and_then(|x| x.as_bool())
-            .unwrap_or(Defaults::LID_SLEEP),
-        rumble: v
-            .get("rumble")
-            .and_then(|x| x.as_bool())
-            .unwrap_or(Defaults::RUMBLE),
-        bat_shutdown: v
-            .get("bat_shutdown")
-            .and_then(|x| x.as_u64())
-            .unwrap_or(Defaults::BAT_SHUTDOWN as u64) as u32,
-        charge_limit: v
-            .get("charge_limit")
-            .and_then(|x| x.as_u64())
-            .unwrap_or(Defaults::CHARGE_LIMIT as u64) as u32,
-        shutdown_min: v
-            .get("shutdown_min")
-            .and_then(|x| x.as_u64())
-            .map(|x| x as u32)
-            .unwrap_or(Defaults::SHUTDOWN_MIN),
-        fps_counter: v
-            .get("fps_counter")
-            .and_then(|x| x.as_bool())
-            .unwrap_or(false),
-        sysinfo: v.get("sysinfo").and_then(|x| x.as_bool()).unwrap_or(false),
-    }
-}
-
-fn save_display_prefs(p: &DisplayPrefs) {
-    let path = Path::new(runtime_config_path());
-    let mut v: serde_json::Value = std::fs::read_to_string(path)
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .filter(|v: &serde_json::Value| v.is_object())
-        .unwrap_or_else(|| serde_json::json!({}));
-    v["scale_mode"] = serde_json::json!(p.scale.as_u8());
-    v["rumble"] = serde_json::json!(p.rumble);
-    v["brightness"] = serde_json::json!(p.brightness);
-    v["warmth"] = serde_json::json!(p.warmth);
-    v["fps_counter"] = serde_json::json!(p.fps_counter);
-    v["sysinfo"] = serde_json::json!(p.sysinfo);
-    if let Ok(text) = serde_json::to_string_pretty(&v) {
-        let _ = std::fs::create_dir_all("Config");
-        if let Err(e) = util::write_file_fast(path, text.as_bytes()) {
-            util::log(&format!("display: cannot save: {e}"));
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum AdjKind {
-    Brightness,
-    Warmth,
-}
-
-struct AdjState {
-    kind: AdjKind,
-    dir: i32,
-    next: Instant,
-}
 /// Save-state slots per game.
 const STATE_SLOTS: usize = 3;
+const STATE_CARDS: usize = STATE_SLOTS + 1;
 
 /// Holding MENU this long saves the state and leaves the game; the
 /// progress bar only appears past the hint delay, so a plain tap never
@@ -3236,100 +2545,6 @@ fn needs_l2_r2(system_id: &str) -> bool {
 /// schedutil and ramp only when they need to.
 fn needs_performance(system_id: &str) -> bool {
     matches!(system_id, "psx" | "neocd")
-}
-
-/// D-pad and left-stick state for a Bluetooth/USB pad, combined into the
-/// hat events the input pipeline already understands.
-#[derive(Default)]
-struct PadHat {
-    dpad: (i32, i32),
-    stick: (i32, i32),
-    last: (i32, i32),
-}
-
-/// SDL controller events as vendor-space raw events, so the shelf's action
-/// table, chords, hold-exit and libretro bits need no second copy.
-fn pump_pads(
-    pads: &mut crate::pads::Pads,
-    events: &mut sdl2::EventPump,
-    hat: &mut PadHat,
-    stick_as_dpad: bool,
-) -> (Vec<RawEvent>, bool) {
-    let mut out = Vec::new();
-    let mut changed = false;
-    let mut removed = false;
-    for ev in events.poll_iter() {
-        match ev {
-            Event::ControllerButtonDown { button, .. } => match button {
-                PadButton::DPadUp => hat.dpad.1 = -1,
-                PadButton::DPadDown => hat.dpad.1 = 1,
-                PadButton::DPadLeft => hat.dpad.0 = -1,
-                PadButton::DPadRight => hat.dpad.0 = 1,
-                _ => {
-                    if let Some(code) = pad_button_code(button) {
-                        out.push(pad_key(code, 1));
-                    }
-                }
-            },
-            Event::ControllerButtonUp { button, .. } => match button {
-                PadButton::DPadUp | PadButton::DPadDown => hat.dpad.1 = 0,
-                PadButton::DPadLeft | PadButton::DPadRight => hat.dpad.0 = 0,
-                _ => {
-                    if let Some(code) = pad_button_code(button) {
-                        out.push(pad_key(code, 0));
-                    }
-                }
-            },
-            Event::ControllerAxisMotion { axis, value, .. } => match axis {
-                PadAxis::TriggerLeft => out.push(pad_axis(ev::ABS_Z, pad_trigger(value))),
-                PadAxis::TriggerRight => out.push(pad_axis(ev::ABS_RZ, pad_trigger(value))),
-                PadAxis::LeftX => {
-                    hat.stick.0 = pad_stick(value);
-                    out.push(pad_axis(ev::ABS_X, i32::from(value)));
-                }
-                PadAxis::LeftY => {
-                    hat.stick.1 = pad_stick(value);
-                    out.push(pad_axis(ev::ABS_Y, i32::from(value)));
-                }
-                PadAxis::RightX => out.push(pad_axis(ev::ABS_RX, i32::from(value))),
-                PadAxis::RightY => out.push(pad_axis(ev::ABS_RY, i32::from(value))),
-            },
-            Event::ControllerDeviceAdded { which, .. } => {
-                pads.added(which);
-                changed = true;
-            }
-            Event::ControllerDeviceRemoved { which, .. } => {
-                pads.removed(which);
-                changed = true;
-                removed = true;
-            }
-            _ => {}
-        }
-    }
-    if removed {
-        hat.dpad = (0, 0);
-        hat.stick = (0, 0);
-    }
-    let x = if hat.dpad.0 != 0 {
-        hat.dpad.0
-    } else if stick_as_dpad {
-        hat.stick.0
-    } else {
-        0
-    };
-    let y = if hat.dpad.1 != 0 {
-        hat.dpad.1
-    } else if stick_as_dpad {
-        hat.stick.1
-    } else {
-        0
-    };
-    if (x, y) != hat.last {
-        out.push(pad_axis(ev::ABS_HAT0X, x));
-        out.push(pad_axis(ev::ABS_HAT0Y, y));
-        hat.last = (x, y);
-    }
-    (out, changed)
 }
 
 /// Live on-screen counters: frames per second and a once-a-second system
@@ -3484,54 +2699,6 @@ fn draw_osd(
     }
 }
 
-fn pad_key(code: u16, value: i32) -> RawEvent {
-    RawEvent {
-        dev: 0,
-        type_: ev::EV_KEY,
-        code,
-        value,
-    }
-}
-
-fn pad_axis(code: u16, value: i32) -> RawEvent {
-    RawEvent {
-        dev: 0,
-        type_: ev::EV_ABS,
-        code,
-        value,
-    }
-}
-
-fn pad_button_code(b: PadButton) -> Option<u16> {
-    use ev::*;
-    match b {
-        PadButton::A => Some(BTN_SOUTH),
-        PadButton::B => Some(BTN_EAST),
-        PadButton::X => Some(BTN_NORTH),
-        PadButton::Y => Some(BTN_C),
-        PadButton::LeftShoulder => Some(BTN_WEST),
-        PadButton::RightShoulder => Some(BTN_Z),
-        PadButton::Back => Some(BTN_TL),
-        PadButton::Start => Some(BTN_TR),
-        PadButton::Guide => Some(BTN_TL2),
-        _ => None,
-    }
-}
-
-fn pad_stick(value: i16) -> i32 {
-    const DEADZONE: i16 = 16_000;
-    match value {
-        v if v <= -DEADZONE => -1,
-        v if v >= DEADZONE => 1,
-        _ => 0,
-    }
-}
-
-/// SDL trigger axes span 0..32767; the pipeline reads 0..1023.
-fn pad_trigger(value: i16) -> i32 {
-    (value.max(0) as i32 * 1023) / 32767
-}
-
 /// Save-state files for the slots; slot 1 keeps the historic name.
 fn state_slot_path(save_dir: &str, stem: &str, slot: usize) -> std::path::PathBuf {
     let name = match slot {
@@ -3547,6 +2714,37 @@ fn auto_state_path(save_dir: &str, stem: &str) -> std::path::PathBuf {
     Path::new(save_dir).join(format!("{stem}.stateauto"))
 }
 
+/// A state's preview, stored next to it as `<state>.png`.
+fn state_thumb_path(path: &Path) -> std::path::PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".png");
+    std::path::PathBuf::from(name)
+}
+
+/// Capture the current game frame as a small PNG beside a state.
+fn save_state_thumb(path: &Path) {
+    let ctx = ctx();
+    if ctx.frame.is_null() || ctx.geometry.base_width == 0 || ctx.geometry.base_height == 0 {
+        return;
+    }
+    let mut cv = Canvas::new(240, 180);
+    blit(ctx, &mut cv, ScaleMode::Fit, (0, 0, 240, 180));
+    let bytes = match crate::image::encode_png(cv.w as u32, cv.h as u32, &cv.px) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            util::log(&format!("state thumb: cannot encode: {e}"));
+            return;
+        }
+    };
+    let thumb = state_thumb_path(path);
+    if let Err(e) = util::write_file_atomic(&thumb, &bytes) {
+        util::log(&format!(
+            "state thumb: cannot write {}: {e}",
+            thumb.display()
+        ));
+    }
+}
+
 /// Keep holding A this long after the first frame to skip the resume point;
 /// a normal launch tap has been released by then.
 const AUTO_HOLD: Duration = Duration::from_millis(600);
@@ -3556,6 +2754,7 @@ fn restore_auto_state(path: &Path, hud: &mut Option<(String, Instant)>) {
         Ok(true) => {
             util::log(&format!("auto state restored: {}", path.display()));
             let _ = std::fs::remove_file(path);
+            let _ = std::fs::remove_file(state_thumb_path(path));
             *hud = Some(("STATE RESTORED".into(), Instant::now()));
         }
         Ok(false) => util::log("auto state rejected by core"),
@@ -3572,6 +2771,7 @@ fn save_state_to(path: &Path) -> Option<bool> {
     let mut buf = vec![0u8; size];
     let ok = unsafe { (ctx().ser)(buf.as_mut_ptr() as *mut c_void, size) };
     if ok && util::write_file_atomic(path, &buf).is_ok() {
+        save_state_thumb(path);
         util::log(&format!("state saved: {}", path.display()));
         Some(true)
     } else {
@@ -3620,103 +2820,6 @@ fn cstr(p: *const c_char) -> String {
     }
 }
 
-#[derive(Default)]
-struct PadState {
-    bits: u16,
-    hat_x: i8,
-    hat_y: i8,
-    left: (i16, i16),
-    right: (i16, i16),
-    analog: bool,
-}
-
-impl PadState {
-    fn apply(&mut self, e: &RawEvent) {
-        if e.type_ == ev::EV_ABS {
-            match e.code {
-                ev::ABS_X => {
-                    self.left.0 = e.value as i16;
-                    self.stick_bits();
-                    return;
-                }
-                ev::ABS_Y => {
-                    self.left.1 = e.value as i16;
-                    self.stick_bits();
-                    return;
-                }
-                ev::ABS_RX => {
-                    self.right.0 = e.value as i16;
-                    return;
-                }
-                ev::ABS_RY => {
-                    self.right.1 = e.value as i16;
-                    return;
-                }
-                ev::ABS_HAT0X => self.hat_x = e.value.clamp(-1, 1) as i8,
-                ev::ABS_HAT0Y => self.hat_y = e.value.clamp(-1, 1) as i8,
-                ev::ABS_Z => {
-                    self.set_bit(retro::L2, e.value > TRIGGER_ON);
-                    return;
-                }
-                ev::ABS_RZ => {
-                    self.set_bit(retro::R2, e.value > TRIGGER_ON);
-                    return;
-                }
-                _ => return,
-            }
-            self.set_bit(retro::LEFT, self.hat_x < 0);
-            self.set_bit(retro::RIGHT, self.hat_x > 0);
-            self.set_bit(retro::UP, self.hat_y < 0);
-            self.set_bit(retro::DOWN, self.hat_y > 0);
-            return;
-        }
-        if e.type_ != ev::EV_KEY {
-            return;
-        }
-        if let Some(bit) = joypad_bit(e.code) {
-            self.set_bit(bit, e.value != 0);
-            return;
-        }
-        let dir = match e.code {
-            ev::KEY_UP | ev::BTN_DPAD_UP => Some(retro::UP),
-            ev::KEY_DOWN | ev::BTN_DPAD_DOWN => Some(retro::DOWN),
-            ev::KEY_LEFT | ev::BTN_DPAD_LEFT => Some(retro::LEFT),
-            ev::KEY_RIGHT | ev::BTN_DPAD_RIGHT => Some(retro::RIGHT),
-            _ => None,
-        };
-        if let Some(bit) = dir {
-            self.set_bit(bit, e.value != 0);
-        }
-    }
-
-    /// JOYPAD-only cores get the left stick as a d-pad.
-    fn stick_bits(&mut self) {
-        if self.analog {
-            return;
-        }
-        self.set_bit(retro::LEFT, self.left.0 < -STICK_DEADZONE);
-        self.set_bit(retro::RIGHT, self.left.0 > STICK_DEADZONE);
-        self.set_bit(retro::UP, self.left.1 < -STICK_DEADZONE);
-        self.set_bit(retro::DOWN, self.left.1 > STICK_DEADZONE);
-    }
-
-    fn set_bit(&mut self, bit: u16, on: bool) {
-        if on {
-            self.bits |= 1 << bit;
-        } else {
-            self.bits &= !(1 << bit);
-        }
-    }
-
-    fn reset(&mut self) {
-        self.bits = 0;
-        self.hat_x = 0;
-        self.hat_y = 0;
-        self.left = (0, 0);
-        self.right = (0, 0);
-    }
-}
-
 #[derive(PartialEq)]
 enum MenuPage {
     Main,
@@ -3735,6 +2838,15 @@ enum NetplayPage {
     JoinScan,
     Linked,
     Error,
+}
+
+struct StateCard {
+    path: std::path::PathBuf,
+    label: String,
+    age: String,
+    thumb: Option<Image>,
+    exists: bool,
+    auto: bool,
 }
 
 struct GameMenu {
@@ -3760,38 +2872,12 @@ struct GameMenu {
     netplay_transport: netplay::Transport,
     netplay_role: netplay::Role,
     netplay_msg: Option<String>,
-}
-
-const OPT_ROWS: usize = 7;
-
-fn menu_items() -> Vec<&'static str> {
-    let linked = ctx().netplay_linked;
-    let mut v = vec!["RESUME"];
-    if !linked {
-        v.push("SAVE STATE");
-        v.push("LOAD STATE");
-    }
-    if netplay_supported() {
-        v.push("NETPLAY");
-    }
-    if !linked && ctx().options.iter().any(|o| o.visible) {
-        v.push("CORE OPTIONS");
-    }
-    v.push("OVERLAYS");
-    if disc_count() > 1 {
-        v.push("SWAP DISC");
-    }
-    v.push("EXIT GAME");
-    v
-}
-
-fn netplay_supported() -> bool {
-    matches!(ctx().system.as_str(), "gb" | "gbc")
-        && ctx().opt_key == "gambatte"
-        && ctx()
-            .options
-            .iter()
-            .any(|o| o.key == "gambatte_gb_link_mode")
+    focus_pane: bool,
+    states: Vec<StateCard>,
+    state_sel: usize,
+    state_paths: Vec<std::path::PathBuf>,
+    auto_path: std::path::PathBuf,
+    delete_armed: Option<(usize, Instant)>,
 }
 
 fn netplay_stop() {
@@ -3908,428 +2994,6 @@ fn netplay_tick(menu: &mut GameMenu, hud: &mut Option<(String, Instant)>) {
     }
 }
 
-fn cycled(cur: usize, len: usize, delta: isize) -> usize {
-    if len == 0 {
-        return 0;
-    }
-    (((cur as isize + delta) % len as isize + len as isize) % len as isize) as usize
-}
-
-impl GameMenu {
-    fn handle_raw(&mut self, e: &RawEvent, state_paths: &[std::path::PathBuf]) {
-        if e.value == 0 {
-            return; // act on presses only; hat directions arrive as ┬▒1
-        }
-        let up = e.code == ev::KEY_UP
-            || e.code == ev::BTN_DPAD_UP
-            || (e.type_ == ev::EV_ABS && e.code == ev::ABS_HAT0Y && e.value < 0);
-        let down = e.code == ev::KEY_DOWN
-            || e.code == ev::BTN_DPAD_DOWN
-            || (e.type_ == ev::EV_ABS && e.code == ev::ABS_HAT0Y && e.value > 0);
-        let left = e.code == ev::KEY_LEFT
-            || e.code == ev::BTN_DPAD_LEFT
-            || (e.type_ == ev::EV_ABS && e.code == ev::ABS_HAT0X && e.value < 0);
-        let right = e.code == ev::KEY_RIGHT
-            || e.code == ev::BTN_DPAD_RIGHT
-            || (e.type_ == ev::EV_ABS && e.code == ev::ABS_HAT0X && e.value > 0);
-        let a = e.type_ == ev::EV_KEY && e.code == ev::BTN_SOUTH;
-        let b = e.type_ == ev::EV_KEY && e.code == ev::BTN_EAST;
-
-        if self.page == MenuPage::Disc {
-            let count = disc_count();
-            if count < 2 {
-                self.page = MenuPage::Main;
-                return;
-            }
-            if up {
-                self.disc_sel = cycled(self.disc_sel, count, -1);
-            } else if down {
-                self.disc_sel = cycled(self.disc_sel, count, 1);
-            } else if a {
-                self.msg = Some(match disc_swap(self.disc_sel) {
-                    true => (
-                        format!("DISC {} INSERTED", self.disc_sel + 1),
-                        Instant::now(),
-                    ),
-                    false => ("DISC SWAP FAILED".into(), Instant::now()),
-                });
-            } else if b {
-                self.page = MenuPage::Main;
-            }
-            return;
-        }
-
-        if self.page == MenuPage::Options {
-            let count = visible_options(ctx()).len();
-            if up {
-                self.opt_sel = cycled(self.opt_sel, count, -1);
-                self.scroll_options(count);
-            } else if down {
-                self.opt_sel = cycled(self.opt_sel, count, 1);
-                self.scroll_options(count);
-            } else if left {
-                self.change_option(-1);
-            } else if right || a {
-                self.change_option(1);
-            } else if b {
-                self.page = MenuPage::Main;
-            }
-            return;
-        }
-
-        if self.page == MenuPage::Overlays {
-            const ROWS: usize = 4;
-            if up {
-                self.overlay_sel = (self.overlay_sel + ROWS - 1) % ROWS;
-            } else if down {
-                self.overlay_sel = (self.overlay_sel + 1) % ROWS;
-            } else if left || right || a {
-                if self.overlay_sel == 0 {
-                    self.fps = !self.fps;
-                } else if self.overlay_sel == 1 {
-                    self.sysinfo = !self.sysinfo;
-                } else {
-                    let layer = self.overlay_sel - 2;
-                    let n = ctx().overlay_layers[layer].len() as i32 + 1;
-                    let delta = if left { -1 } else { 1 };
-                    let cur = &mut self.overlay_idx[layer];
-                    *cur = (((*cur as i32 + delta) % n) + n) as usize % n as usize;
-                }
-                ctx().overlay_dirty = true;
-            } else if b {
-                self.page = MenuPage::Main;
-            }
-            return;
-        }
-
-        if self.page == MenuPage::Netplay {
-            self.handle_netplay(up, down, a, b);
-            return;
-        }
-
-        let items = menu_items();
-        if self.sel >= items.len() {
-            self.sel = 0;
-        }
-        if up {
-            self.sel = (self.sel + items.len() - 1) % items.len();
-        } else if down {
-            self.sel = (self.sel + 1) % items.len();
-        } else if left {
-            self.slot = cycled(self.slot, STATE_SLOTS, -1);
-        } else if right {
-            self.slot = cycled(self.slot, STATE_SLOTS, 1);
-        } else if a {
-            self.invoke(state_paths);
-        } else if b {
-            self.page = MenuPage::Main;
-            self.open = false;
-        }
-    }
-
-    fn handle_netplay(&mut self, up: bool, down: bool, a: bool, b: bool) {
-        if ctx().netplay.is_none()
-            && !matches!(
-                self.netplay_page,
-                NetplayPage::Menu | NetplayPage::HostTransport | NetplayPage::JoinTransport
-            )
-        {
-            self.netplay_page = NetplayPage::Menu;
-            self.netplay_sel = 0;
-        }
-
-        match self.netplay_page {
-            NetplayPage::Menu => {
-                if up {
-                    self.netplay_sel = cycled(self.netplay_sel, 3, -1);
-                } else if down {
-                    self.netplay_sel = cycled(self.netplay_sel, 3, 1);
-                } else if a {
-                    self.netplay_msg = None;
-                    match self.netplay_sel {
-                        0 => {
-                            self.netplay_page = NetplayPage::HostTransport;
-                            self.netplay_sel = 0;
-                        }
-                        1 => {
-                            self.netplay_page = NetplayPage::JoinTransport;
-                            self.netplay_sel = 0;
-                        }
-                        _ => self.page = MenuPage::Main,
-                    }
-                } else if b {
-                    self.page = MenuPage::Main;
-                }
-            }
-            NetplayPage::HostTransport => {
-                if up {
-                    self.netplay_sel = cycled(self.netplay_sel, 3, -1);
-                } else if down {
-                    self.netplay_sel = cycled(self.netplay_sel, 3, 1);
-                } else if a {
-                    match self.netplay_sel {
-                        0 => self.start_host(netplay::Transport::Hotspot),
-                        1 => self.start_host(netplay::Transport::Wifi),
-                        _ => self.netplay_page = NetplayPage::Menu,
-                    }
-                } else if b {
-                    self.netplay_page = NetplayPage::Menu;
-                }
-            }
-            NetplayPage::JoinTransport => {
-                if up {
-                    self.netplay_sel = cycled(self.netplay_sel, 3, -1);
-                } else if down {
-                    self.netplay_sel = cycled(self.netplay_sel, 3, 1);
-                } else if a {
-                    match self.netplay_sel {
-                        0 => self.start_join(netplay::Transport::Hotspot),
-                        1 => self.start_join(netplay::Transport::Wifi),
-                        _ => self.netplay_page = NetplayPage::Menu,
-                    }
-                } else if b {
-                    self.netplay_page = NetplayPage::Menu;
-                }
-            }
-            NetplayPage::HostWait => {
-                if b {
-                    netplay_stop();
-                    self.netplay_page = NetplayPage::Menu;
-                    self.netplay_sel = 0;
-                }
-            }
-            NetplayPage::JoinScan => {
-                let status = ctx().netplay.as_ref().map(|s| s.status());
-                match status {
-                    Some(netplay::Status::Found) => {
-                        let hosts = ctx()
-                            .netplay
-                            .as_ref()
-                            .map(|s| s.hosts())
-                            .unwrap_or_default();
-                        if hosts.is_empty() {
-                            if a {
-                                self.start_join(self.netplay_transport);
-                            } else if b {
-                                netplay_stop();
-                                self.netplay_page = NetplayPage::Menu;
-                                self.netplay_sel = 0;
-                            }
-                        } else {
-                            let n = hosts.len().min(5);
-                            if up {
-                                self.netplay_sel = cycled(self.netplay_sel, n, -1);
-                            } else if down {
-                                self.netplay_sel = cycled(self.netplay_sel, n, 1);
-                            } else if a {
-                                self.connect_selected();
-                            } else if b {
-                                netplay_stop();
-                                self.netplay_page = NetplayPage::Menu;
-                                self.netplay_sel = 0;
-                            }
-                        }
-                    }
-                    Some(netplay::Status::Error(_)) | Some(netplay::Status::Lost) => {
-                        if a {
-                            self.retry_transport();
-                        } else if b {
-                            netplay_stop();
-                            self.netplay_page = NetplayPage::Menu;
-                            self.netplay_sel = 0;
-                        }
-                    }
-                    Some(netplay::Status::Connecting) => {
-                        if b {
-                            netplay_stop();
-                            self.netplay_page = NetplayPage::Menu;
-                            self.netplay_sel = 0;
-                        }
-                    }
-                    _ => {
-                        if b {
-                            netplay_stop();
-                            self.netplay_page = NetplayPage::Menu;
-                            self.netplay_sel = 0;
-                        }
-                    }
-                }
-            }
-            NetplayPage::Linked => {
-                if up {
-                    self.netplay_sel = cycled(self.netplay_sel, 2, -1);
-                } else if down {
-                    self.netplay_sel = cycled(self.netplay_sel, 2, 1);
-                } else if a {
-                    if self.netplay_sel == 0 {
-                        netplay_stop();
-                        self.netplay_page = NetplayPage::Menu;
-                        self.netplay_sel = 0;
-                    } else {
-                        self.page = MenuPage::Main;
-                    }
-                } else if b {
-                    self.page = MenuPage::Main;
-                }
-            }
-            NetplayPage::Error => {
-                if a {
-                    self.retry_transport();
-                } else if b {
-                    netplay_stop();
-                    self.netplay_page = NetplayPage::Menu;
-                    self.netplay_sel = 0;
-                }
-            }
-        }
-    }
-
-    fn start_host(&mut self, transport: netplay::Transport) {
-        netplay_stop();
-        let game = netplay::Game::from_rom(&ctx().system, &ctx().rom);
-        ctx().netplay = Some(netplay::Session::host(transport, game));
-        self.netplay_transport = transport;
-        self.netplay_role = netplay::Role::Host;
-        self.netplay_page = NetplayPage::HostWait;
-        self.netplay_sel = 0;
-        self.netplay_msg = None;
-    }
-
-    fn start_join(&mut self, transport: netplay::Transport) {
-        netplay_stop();
-        let game = netplay::Game::from_rom(&ctx().system, &ctx().rom);
-        ctx().netplay = Some(netplay::Session::join(transport, game));
-        self.netplay_transport = transport;
-        self.netplay_role = netplay::Role::Join;
-        self.netplay_page = NetplayPage::JoinScan;
-        self.netplay_sel = 0;
-        self.netplay_msg = None;
-    }
-
-    fn connect_selected(&mut self) {
-        let Some(session) = ctx().netplay.as_mut() else {
-            return;
-        };
-        let hosts = session.hosts();
-        if hosts.is_empty() {
-            return;
-        }
-        let n = hosts.len().min(5);
-        if self.netplay_sel >= n {
-            self.netplay_sel = 0;
-        }
-        session.connect(hosts[self.netplay_sel].clone());
-        self.netplay_msg = None;
-    }
-
-    fn retry_transport(&mut self) {
-        netplay_stop();
-        self.netplay_page = match self.netplay_role {
-            netplay::Role::Host => NetplayPage::HostTransport,
-            netplay::Role::Join => NetplayPage::JoinTransport,
-        };
-        self.netplay_sel = 0;
-        self.netplay_msg = None;
-    }
-
-    fn scroll_options(&mut self, count: usize) {
-        if self.opt_sel < self.opt_top {
-            self.opt_top = self.opt_sel;
-        }
-        if self.opt_sel >= self.opt_top + OPT_ROWS {
-            self.opt_top = self.opt_sel + 1 - OPT_ROWS;
-        }
-        let _ = count;
-    }
-
-    fn change_option(&mut self, delta: isize) {
-        let ctx = ctx();
-        let ids = visible_options(ctx);
-        if self.opt_sel >= ids.len() {
-            return;
-        }
-        let o = &mut ctx.options[ids[self.opt_sel]];
-        o.chosen = cycled(o.chosen, o.values.len(), delta);
-        ctx.opt_dirty = true; // cores that support live updates re-read it
-        save_core_options(ctx);
-    }
-
-    fn invoke(&mut self, state_paths: &[std::path::PathBuf]) {
-        let state_path = &state_paths[self.slot];
-        match menu_items()[self.sel] {
-            "RESUME" => self.open = false,
-            "SAVE STATE" => {
-                let saved = save_state_to(state_path);
-                if saved == Some(true) {
-                    // An explicit save is also the resume point for the next
-                    // launch; holding A at launch still skips it.
-                    let auto = state_path.with_extension("stateauto");
-                    match save_state_to(&auto) {
-                        Some(true) => util::log("auto state saved (menu)"),
-                        Some(false) => util::log("auto state save failed (menu)"),
-                        None => {}
-                    }
-                }
-                self.msg = Some(match saved {
-                    Some(true) => ("STATE SAVED".into(), Instant::now()),
-                    Some(false) => ("SAVE FAILED".into(), Instant::now()),
-                    None => ("SAVES NOT SUPPORTED".into(), Instant::now()),
-                });
-            }
-            "LOAD STATE" => match load_state_from(state_path) {
-                Ok(true) => self.msg = Some(("STATE LOADED".into(), Instant::now())),
-                Ok(false) => self.msg = Some(("LOAD FAILED".into(), Instant::now())),
-                Err(_) => self.msg = Some(("NO STATE FILE".into(), Instant::now())),
-            },
-            "CORE OPTIONS" => {
-                self.page = MenuPage::Options;
-                self.opt_sel = 0;
-                self.opt_top = 0;
-            }
-            "OVERLAYS" => {
-                self.page = MenuPage::Overlays;
-                self.overlay_sel = 0;
-            }
-            "SWAP DISC" => {
-                let count = disc_count();
-                self.page = MenuPage::Disc;
-                self.disc_sel = disc_index().min(count.saturating_sub(1));
-            }
-            "NETPLAY" => {
-                self.page = MenuPage::Netplay;
-                self.netplay_sel = 0;
-                self.netplay_msg = None;
-                self.netplay_page = match ctx().netplay.as_ref().map(|s| s.status()) {
-                    Some(netplay::Status::Linked) => NetplayPage::Linked,
-                    Some(netplay::Status::Waiting) | Some(netplay::Status::Starting) => {
-                        NetplayPage::HostWait
-                    }
-                    Some(netplay::Status::Scanning)
-                    | Some(netplay::Status::Found)
-                    | Some(netplay::Status::Connecting) => NetplayPage::JoinScan,
-                    Some(netplay::Status::Lost) => {
-                        self.netplay_msg = Some("THE OTHER PLAYER LEFT".into());
-                        NetplayPage::Error
-                    }
-                    Some(netplay::Status::Error(e)) => {
-                        self.netplay_msg = Some(e);
-                        NetplayPage::Error
-                    }
-                    _ => NetplayPage::Menu,
-                };
-                if let Some(session) = ctx().netplay.as_ref() {
-                    self.netplay_role = session.role();
-                    self.netplay_transport = session.transport();
-                }
-            }
-            _ => {
-                netplay_stop();
-                self.exit_requested = true;
-            }
-        }
-    }
-}
-
 /// The countdown overlay: drawn whenever the POWER hold is running (and once
 /// more at zero while the kernel shuts down).
 fn draw_shutdown_overlay(
@@ -4346,879 +3010,6 @@ fn draw_shutdown_overlay(
         crate::theme::draw_shutdown(cv, fonts, Duration::ZERO, SHUTDOWN_TOTAL, t);
     }
 }
-fn draw_menu(cv: &mut Canvas, fonts: &mut Fonts, menu: &GameMenu, rom: &str, t: f32) {
-    let (w, h) = (cv.w, cv.h);
-    let s = crate::theme::ui_scale();
-    let p = |v: f32| (v * s).round() as i32;
-    let items = menu_items();
-    let ww = p(400.0).min(w - p(24.0));
-    let header = p(104.0);
-    let footer = if menu.msg.is_some() { p(84.0) } else { p(44.0) };
-    let pitch = ((h - p(12.0) - header - footer) / items.len() as i32)
-        .min(p(40.0))
-        .max(p(26.0));
-    let hh = header + items.len() as i32 * pitch + footer;
-    let x0 = w / 2 - ww / 2;
-    let y0 = h / 2 - hh / 2;
-    cv.fill_rect_a(x0, y0, ww as u32, hh as u32, pal().bg0, 216);
-    crate::theme::glow_border(
-        cv,
-        x0,
-        y0,
-        ww as u32,
-        hh as u32,
-        pal().border,
-        pal().glow,
-        t,
-        0.0,
-    );
-    let title = "MAGI // PAUSED";
-    fonts.draw_center(cv, w / 2, y0 + p(26.0), title, 16.0, pal().title);
-    let rom_title = Path::new(rom)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + p(56.0),
-        clip(rom_title, 40).as_str(),
-        10.0,
-        pal().text_faint,
-    );
-    let discs = disc_count();
-    let header_line = if discs > 1 {
-        format!(
-            "SLOT {}/{}   DISC {}/{}",
-            menu.slot + 1,
-            STATE_SLOTS,
-            disc_index().min(discs - 1) + 1,
-            discs
-        )
-    } else {
-        format!("SLOT {}/{}", menu.slot + 1, STATE_SLOTS)
-    };
-    fonts.draw_center(cv, w / 2, y0 + p(80.0), &header_line, 11.0, pal().text_dim);
-
-    for (i, item) in items.iter().enumerate() {
-        let c = y0 + header + i as i32 * pitch + pitch / 2;
-        let y = c + p(5.5);
-        let bh = (pitch - p(10.0)).min(p(36.0));
-        if i == menu.sel {
-            cv.fill_rect(
-                x0 + p(28.0),
-                c - bh / 2,
-                (ww - p(56.0)) as u32,
-                bh as u32,
-                pal().bg3,
-            );
-            crate::theme::glow_border(
-                cv,
-                x0 + p(28.0),
-                c - bh / 2,
-                (ww - p(56.0)) as u32,
-                bh as u32,
-                pal().glow,
-                crate::theme::mix(pal().glow, pal().accent, 0.35),
-                t,
-                0.4,
-            );
-            fonts.draw_center(cv, w / 2, y, item, 15.0, pal().accent);
-        } else {
-            fonts.draw_center(cv, w / 2, y, item, 15.0, pal().text_dim);
-        }
-    }
-
-    if let Some((msg, _)) = &menu.msg {
-        fonts.draw_center(cv, w / 2, y0 + hh - p(66.0), msg, 10.0, pal().signal);
-    }
-    match menu.hold {
-        Some(f) => {
-            let bw = p(260.0);
-            let x = (w - bw) / 2;
-            let y = y0 + hh - p(24.0);
-            cv.rect_outline(x, y, bw as u32, p(10.0) as u32, pal().border);
-            let fw = ((bw - 2) as f32 * f.clamp(0.0, 1.0)) as u32;
-            cv.fill_rect(
-                x + 1,
-                y + 1,
-                fw,
-                (p(10.0) as u32).saturating_sub(2),
-                pal().signal,
-            );
-            fonts.draw_center(
-                cv,
-                w / 2,
-                y0 + hh - p(34.0),
-                "HOLD MENU: SAVE + EXIT",
-                10.0,
-                pal().signal,
-            );
-        }
-        None => {
-            fonts.draw_center(
-                cv,
-                w / 2,
-                y0 + hh - p(26.0),
-                "MENU CLOSE   A SELECT   B RESUME   L/R SLOT",
-                9.0,
-                pal().text_faint,
-            );
-        }
-    }
-}
-
-/// The netplay page family. The session lives in `Ctx`; this only draws the
-/// current step.
-fn draw_netplay(cv: &mut Canvas, fonts: &mut Fonts, menu: &GameMenu, t: f32) {
-    let session = ctx().netplay.as_ref();
-    let status = session.map(|s| s.status());
-    match menu.netplay_page {
-        NetplayPage::Menu => netplay_panel(
-            cv,
-            fonts,
-            "MAGI // NETPLAY",
-            &clip(&game_title(), 38),
-            &["HOST GAME", "JOIN GAME", "BACK"],
-            menu.netplay_sel,
-            "A SELECT   B BACK",
-            t,
-        ),
-        NetplayPage::HostTransport => netplay_panel(
-            cv,
-            fonts,
-            "HOST GAME",
-            "PICK A CONNECTION",
-            &["HOTSPOT", "WIFI", "BACK"],
-            menu.netplay_sel,
-            "A SELECT   B BACK",
-            t,
-        ),
-        NetplayPage::JoinTransport => netplay_panel(
-            cv,
-            fonts,
-            "JOIN GAME",
-            "PICK A CONNECTION",
-            &["HOTSPOT", "WIFI", "BACK"],
-            menu.netplay_sel,
-            "A SELECT   B BACK",
-            t,
-        ),
-        NetplayPage::HostWait => draw_netplay_wait(cv, fonts, menu, t),
-        NetplayPage::JoinScan => draw_netplay_scan(cv, fonts, menu, status, t),
-        NetplayPage::Linked => netplay_panel(
-            cv,
-            fonts,
-            "MAGI // NETPLAY",
-            &format!("LINKED {}", session.map(|s| s.code()).unwrap_or("----")),
-            &["END NETPLAY", "BACK"],
-            menu.netplay_sel,
-            "A SELECT   B BACK",
-            t,
-        ),
-        NetplayPage::Error => draw_netplay_error(cv, fonts, menu, t),
-    }
-}
-
-fn game_title() -> String {
-    Path::new(&ctx().rom)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("GAME")
-        .to_string()
-}
-
-fn netplay_panel(
-    cv: &mut Canvas,
-    fonts: &mut Fonts,
-    title: &str,
-    subtitle: &str,
-    items: &[&str],
-    sel: usize,
-    footer: &str,
-    t: f32,
-) {
-    let (w, h) = (cv.w, cv.h);
-    let s = crate::theme::ui_scale();
-    let p = |v: f32| (v * s).round() as i32;
-    let ww = p(400.0).min(w - p(24.0));
-    let header = p(104.0);
-    let pitch = ((h - p(12.0) - header - p(44.0)) / items.len().max(1) as i32)
-        .min(p(40.0))
-        .max(p(26.0));
-    let hh = header + items.len().max(1) as i32 * pitch + p(44.0);
-    let x0 = w / 2 - ww / 2;
-    let y0 = h / 2 - hh / 2;
-    cv.fill_rect_a(x0, y0, ww as u32, hh as u32, pal().bg0, 216);
-    crate::theme::glow_border(
-        cv,
-        x0,
-        y0,
-        ww as u32,
-        hh as u32,
-        pal().border,
-        pal().glow,
-        t,
-        0.0,
-    );
-    fonts.draw_center(cv, w / 2, y0 + p(26.0), title, 16.0, pal().title);
-    fonts.draw_center(cv, w / 2, y0 + p(56.0), subtitle, 10.0, pal().text_faint);
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + p(80.0),
-        "GAME BOY NETPLAY",
-        9.0,
-        pal().text_dim,
-    );
-
-    for (i, item) in items.iter().enumerate() {
-        let c = y0 + header + i as i32 * pitch + pitch / 2;
-        let y = c + p(5.5);
-        let bh = (pitch - p(10.0)).min(p(36.0));
-        let picked = i == sel.min(items.len().saturating_sub(1));
-        if picked {
-            cv.fill_rect(
-                x0 + p(28.0),
-                c - bh / 2,
-                (ww - p(56.0)) as u32,
-                bh as u32,
-                pal().bg3,
-            );
-            crate::theme::glow_border(
-                cv,
-                x0 + p(28.0),
-                c - bh / 2,
-                (ww - p(56.0)) as u32,
-                bh as u32,
-                pal().glow,
-                crate::theme::mix(pal().glow, pal().accent, 0.35),
-                t,
-                0.4,
-            );
-        }
-        fonts.draw_center(
-            cv,
-            w / 2,
-            y,
-            item,
-            15.0,
-            if picked { pal().accent } else { pal().text_dim },
-        );
-    }
-    fonts.draw_center(cv, w / 2, y0 + hh - p(26.0), footer, 9.0, pal().text_faint);
-}
-
-fn draw_netplay_wait(cv: &mut Canvas, fonts: &mut Fonts, menu: &GameMenu, t: f32) {
-    let session = ctx().netplay.as_ref();
-    let code = session.map(|s| s.code()).unwrap_or("----");
-    let transport = session
-        .map(|s| s.transport())
-        .unwrap_or(menu.netplay_transport);
-    let status = session
-        .map(|s| s.status())
-        .unwrap_or(netplay::Status::Stopped);
-    let (w, h) = (cv.w, cv.h);
-    let s = crate::theme::ui_scale();
-    let p = |v: f32| (v * s).round() as i32;
-    let ww = p(400.0);
-    let hh = p(300.0);
-    let x0 = w / 2 - ww / 2;
-    let y0 = h / 2 - hh / 2;
-    cv.fill_rect_a(x0, y0, ww as u32, hh as u32, pal().bg0, 216);
-    crate::theme::glow_border(
-        cv,
-        x0,
-        y0,
-        ww as u32,
-        hh as u32,
-        pal().border,
-        pal().glow,
-        t,
-        0.0,
-    );
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + p(26.0),
-        "MAGI // NETPLAY",
-        16.0,
-        pal().title,
-    );
-    fonts.draw_center(cv, w / 2, y0 + p(56.0), "HOST GAME", 10.0, pal().text_faint);
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + p(80.0),
-        &format!("{} CONNECTION", transport.label()),
-        9.0,
-        pal().text_dim,
-    );
-
-    let pill_w = p(190.0);
-    let pill_h = p(62.0);
-    let px = w / 2 - pill_w / 2;
-    let py = y0 + p(104.0);
-    cv.fill_rect(px, py, pill_w as u32, pill_h as u32, pal().bg3);
-    crate::theme::glow_border(
-        cv,
-        px,
-        py,
-        pill_w as u32,
-        pill_h as u32,
-        pal().glow,
-        crate::theme::mix(pal().glow, pal().accent, 0.35),
-        t,
-        0.4,
-    );
-    fonts.draw_center(cv, w / 2, py + p(42.0), code, 34.0, pal().accent);
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + p(192.0),
-        "SELECT THIS CODE ON THE OTHER DEVICE",
-        10.0,
-        pal().text_dim,
-    );
-
-    let line = match &status {
-        netplay::Status::Starting => format!("STARTING{}", netplay_dots(t)),
-        netplay::Status::Waiting => format!("WAITING FOR CONNECTION{}", netplay_dots(t)),
-        netplay::Status::Linked => "LINKED".into(),
-        netplay::Status::Lost => "THE OTHER PLAYER LEFT".into(),
-        netplay::Status::Error(e) => clip(e, 44),
-        _ => "STOPPED".into(),
-    };
-    fonts.draw_center(cv, w / 2, y0 + p(226.0), &line, 11.0, pal().signal);
-    let hint = match transport {
-        netplay::Transport::Hotspot => format!("HOTSPOT MAGI-{code}"),
-        netplay::Transport::Wifi => "SAME WI-FI NETWORK".into(),
-    };
-    fonts.draw_center(cv, w / 2, y0 + p(256.0), &hint, 9.0, pal().text_faint);
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + hh - p(22.0),
-        "B CANCEL",
-        9.0,
-        pal().text_faint,
-    );
-}
-
-fn draw_netplay_scan(
-    cv: &mut Canvas,
-    fonts: &mut Fonts,
-    menu: &GameMenu,
-    status: Option<netplay::Status>,
-    t: f32,
-) {
-    match &status {
-        Some(netplay::Status::Error(e)) => {
-            netplay_message(
-                cv,
-                fonts,
-                "LINK FAILED",
-                &clip(e, 44),
-                "A RETRY   B BACK",
-                t,
-            );
-        }
-        Some(netplay::Status::Lost) => netplay_message(
-            cv,
-            fonts,
-            "LINK ENDED",
-            "THE OTHER PLAYER LEFT",
-            "A RETRY   B BACK",
-            t,
-        ),
-        Some(netplay::Status::Connecting) => {
-            let code = ctx().netplay.as_ref().map(|s| s.code()).unwrap_or("----");
-            netplay_message(
-                cv,
-                fonts,
-                "JOIN GAME",
-                &format!("CONNECTING TO {code}{}", netplay_dots(t)),
-                "B CANCEL",
-                t,
-            );
-        }
-        Some(netplay::Status::Found) => {
-            let hosts = ctx()
-                .netplay
-                .as_ref()
-                .map(|s| s.hosts())
-                .unwrap_or_default();
-            if hosts.is_empty() {
-                netplay_message(
-                    cv,
-                    fonts,
-                    "JOIN GAME",
-                    "NO HOSTS FOUND",
-                    "A RESCAN   B BACK",
-                    t,
-                );
-            } else {
-                let n = hosts.len().min(5);
-                let mut rows: Vec<String> = hosts
-                    .iter()
-                    .take(n)
-                    .map(|h| {
-                        if h.hotspot {
-                            h.code.clone()
-                        } else {
-                            format!("{}  {}", h.code, clip(&h.title, 24))
-                        }
-                    })
-                    .collect();
-                while rows.len() < n {
-                    rows.push(String::new());
-                }
-                let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
-                netplay_panel(
-                    cv,
-                    fonts,
-                    "JOIN GAME",
-                    "PICK A HOST",
-                    &refs,
-                    menu.netplay_sel.min(n.saturating_sub(1)),
-                    "A JOIN   B BACK",
-                    t,
-                );
-            }
-        }
-        _ => {
-            let transport = ctx()
-                .netplay
-                .as_ref()
-                .map(|s| s.transport())
-                .unwrap_or(menu.netplay_transport);
-            let label = match transport {
-                netplay::Transport::Hotspot => "SCANNING FOR HOTSPOTS",
-                netplay::Transport::Wifi => "SCANNING FOR NETPLAY HOSTS",
-            };
-            netplay_message(
-                cv,
-                fonts,
-                "JOIN GAME",
-                &format!("{label}{}", netplay_dots(t)),
-                "B CANCEL",
-                t,
-            );
-        }
-    }
-}
-
-fn draw_netplay_error(cv: &mut Canvas, fonts: &mut Fonts, menu: &GameMenu, t: f32) {
-    let msg = menu.netplay_msg.clone().unwrap_or_else(|| {
-        ctx()
-            .netplay
-            .as_ref()
-            .map(|s| match s.status() {
-                netplay::Status::Error(e) => e,
-                netplay::Status::Lost => "THE OTHER PLAYER LEFT".into(),
-                _ => "LINK FAILED".into(),
-            })
-            .unwrap_or_else(|| "LINK FAILED".into())
-    });
-    netplay_message(
-        cv,
-        fonts,
-        "MAGI // NETPLAY",
-        &clip(&msg, 44),
-        "A RETRY   B BACK",
-        t,
-    );
-}
-
-fn netplay_message(
-    cv: &mut Canvas,
-    fonts: &mut Fonts,
-    title: &str,
-    message: &str,
-    footer: &str,
-    t: f32,
-) {
-    let (w, h) = (cv.w, cv.h);
-    let s = crate::theme::ui_scale();
-    let p = |v: f32| (v * s).round() as i32;
-    let ww = p(400.0);
-    let hh = p(190.0);
-    let x0 = w / 2 - ww / 2;
-    let y0 = h / 2 - hh / 2;
-    cv.fill_rect_a(x0, y0, ww as u32, hh as u32, pal().bg0, 216);
-    crate::theme::glow_border(
-        cv,
-        x0,
-        y0,
-        ww as u32,
-        hh as u32,
-        pal().border,
-        pal().glow,
-        t,
-        0.0,
-    );
-    fonts.draw_center(cv, w / 2, y0 + p(30.0), title, 16.0, pal().title);
-    fonts.draw_center(cv, w / 2, y0 + p(86.0), message, 13.0, pal().signal);
-    fonts.draw_center(cv, w / 2, y0 + hh - p(26.0), footer, 9.0, pal().text_faint);
-}
-
-fn netplay_dots(t: f32) -> &'static str {
-    ["", ".", "..", "..."][(t * 2.0) as usize % 4]
-}
-
-/// The DISC page: the images the core reported, current one marked.
-pub(crate) fn draw_disc(
-    cv: &mut Canvas,
-    fonts: &mut Fonts,
-    sel: usize,
-    msg: Option<&str>,
-    count: usize,
-    current: usize,
-    t: f32,
-) {
-    let (w, h) = (cv.w, cv.h);
-    let s = crate::theme::ui_scale();
-    let p = |v: f32| (v * s).round() as i32;
-    let count = count.max(1);
-    let current = current.min(count - 1);
-    let ww = p(400.0).min(w - p(24.0));
-    let header = p(104.0);
-    let footer = if msg.is_some() { p(80.0) } else { p(44.0) };
-    let pitch = ((h - p(12.0) - header - footer) / count as i32)
-        .min(p(36.0))
-        .max(p(24.0));
-    let hh = header + count as i32 * pitch + footer;
-    let x0 = w / 2 - ww / 2;
-    let y0 = h / 2 - hh / 2;
-    cv.fill_rect_a(x0, y0, ww as u32, hh as u32, pal().bg0, 216);
-    crate::theme::glow_border(
-        cv,
-        x0,
-        y0,
-        ww as u32,
-        hh as u32,
-        pal().border,
-        pal().glow,
-        t,
-        0.3,
-    );
-    fonts.draw_center(cv, w / 2, y0 + p(28.0), "MAGI // DISC", 16.0, pal().title);
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + p(56.0),
-        &format!("DISC {} OF {}", current + 1, count),
-        11.0,
-        pal().text_dim,
-    );
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + p(80.0),
-        "PICK A DISC, THEN INSERT",
-        9.0,
-        pal().text_faint,
-    );
-
-    for i in 0..count {
-        let c = y0 + header + i as i32 * pitch + pitch / 2;
-        let y = c + p(5.5);
-        let bh = (pitch - p(10.0)).min(p(34.0));
-        let picked = i == sel.min(count - 1);
-        if picked {
-            cv.fill_rect(
-                x0 + p(28.0),
-                c - bh / 2,
-                (ww - p(56.0)) as u32,
-                bh as u32,
-                pal().bg3,
-            );
-            crate::theme::glow_border(
-                cv,
-                x0 + p(28.0),
-                c - bh / 2,
-                (ww - p(56.0)) as u32,
-                bh as u32,
-                pal().glow,
-                crate::theme::mix(pal().glow, pal().accent, 0.35),
-                t,
-                0.4,
-            );
-        }
-        let label = if i == current {
-            format!("DISC {}   (IN)", i + 1)
-        } else {
-            format!("DISC {}", i + 1)
-        };
-        fonts.draw_center(
-            cv,
-            w / 2,
-            y,
-            &label,
-            15.0,
-            if picked { pal().accent } else { pal().text_dim },
-        );
-    }
-
-    if let Some(msg) = msg {
-        fonts.draw_center(cv, w / 2, y0 + hh - p(58.0), msg, 10.0, pal().signal);
-    }
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + hh - p(24.0),
-        "U/D PICK   A INSERT   B BACK",
-        9.0,
-        pal().text_faint,
-    );
-}
-
-fn draw_options(cv: &mut Canvas, fonts: &mut Fonts, menu: &GameMenu, t: f32) {
-    let (w, h) = (cv.w, cv.h);
-    let s = crate::theme::ui_scale();
-    let p = |v: f32| (v * s).round() as i32;
-    let options = &ctx().options;
-    let ids = visible_options(ctx());
-    let count = ids.len();
-    let ww = p(500.0).min(w - p(24.0));
-    let header = p(88.0);
-    let pitch = ((h - p(12.0) - header - p(28.0)) / OPT_ROWS as i32)
-        .min(p(36.0))
-        .max(p(26.0));
-    let hh = header + OPT_ROWS as i32 * pitch + p(28.0);
-    let x0 = w / 2 - ww / 2;
-    let y0 = h / 2 - hh / 2;
-    cv.fill_rect_a(x0, y0, ww as u32, hh as u32, pal().bg0, 216);
-    crate::theme::glow_border(
-        cv,
-        x0,
-        y0,
-        ww as u32,
-        hh as u32,
-        pal().border,
-        pal().glow,
-        t,
-        0.2,
-    );
-
-    let title = "MAGI // CORE OPTIONS";
-    fonts.draw_center(cv, w / 2, y0 + p(28.0), title, 16.0, pal().title);
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + p(52.0),
-        &format!("{}/{}", (menu.opt_sel + 1).min(count), count),
-        11.0,
-        pal().text_faint,
-    );
-
-    for (row, vi) in ids.iter().skip(menu.opt_top).take(OPT_ROWS).enumerate() {
-        let o = &options[*vi];
-        let c = y0 + header + row as i32 * pitch + pitch / 2;
-        let y = c + p(4.9);
-        let bh = (pitch - p(10.0)).min(p(30.0));
-        let sel = menu.opt_top + row == menu.opt_sel;
-        if sel {
-            cv.fill_rect(
-                x0 + p(14.0),
-                c - bh / 2,
-                (ww - p(28.0)) as u32,
-                bh as u32,
-                pal().bg3,
-            );
-            crate::theme::glow_border(
-                cv,
-                x0 + p(14.0),
-                c - bh / 2,
-                (ww - p(28.0)) as u32,
-                bh as u32,
-                pal().glow,
-                pal().accent,
-                t,
-                0.4,
-            );
-        }
-        let text = if sel { pal().accent } else { pal().text_dim };
-        fonts.draw(cv, x0 + p(24.0), y, clip(&o.desc, 30).as_str(), 13.5, text);
-        let value = format!("< {} >", clip(&o.values[o.chosen], 18));
-        let vw = fonts.text_width(&value, 13.5);
-        fonts.draw(
-            cv,
-            x0 + ww - p(24.0) - vw,
-            y,
-            &value,
-            13.5,
-            if sel { pal().signal } else { text },
-        );
-    }
-
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + hh - p(22.0),
-        "UP/DOWN PICK   LEFT/RIGHT CHANGE   B BACK   MENU CLOSE",
-        9.0,
-        pal().text_faint,
-    );
-}
-
-fn draw_overlay_menu(
-    cv: &mut Canvas,
-    fonts: &mut Fonts,
-    menu: &GameMenu,
-    files: &OverlayLayers,
-    t: f32,
-) {
-    use crate::theme::pal;
-    let (w, h) = (cv.w, cv.h);
-    let s = crate::theme::ui_scale();
-    let p = |v: f32| (v * s).round() as i32;
-    let ww = p(500.0).min(w - p(24.0));
-    let hh = p(106.0) + 4 * p(36.0) + p(28.0);
-    let x0 = w / 2 - ww / 2;
-    let y0 = h / 2 - hh / 2;
-    cv.fill_rect_a(x0, y0, ww as u32, hh as u32, pal().bg0, 216);
-    crate::theme::glow_border(
-        cv,
-        x0,
-        y0,
-        ww as u32,
-        hh as u32,
-        pal().border,
-        pal().glow,
-        t,
-        0.2,
-    );
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + p(28.0),
-        "MAGI // OVERLAYS",
-        16.0,
-        pal().title,
-    );
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + p(52.0),
-        "OSD, THEN LOWEST LAYER FIRST",
-        11.0,
-        pal().text_faint,
-    );
-
-    // Same row geometry as the pause menu: 36 px pitch, 28 px inset, the
-    // text baseline 5.5 px under the row centre.
-    let rows = ["FPS", "SYS INFO", "CRT", "BEZEL"];
-    let pitch = p(36.0);
-    for (row, label) in rows.iter().enumerate() {
-        let c = y0 + p(88.0) + row as i32 * pitch + pitch / 2;
-        let baseline = c + p(5.5);
-        let bh = (pitch - p(10.0)).min(p(36.0));
-        let sel = row == menu.overlay_sel;
-        if sel {
-            cv.fill_rect(
-                x0 + p(28.0),
-                c - bh / 2,
-                (ww - p(56.0)) as u32,
-                bh as u32,
-                pal().bg3,
-            );
-            crate::theme::glow_border(
-                cv,
-                x0 + p(28.0),
-                c - bh / 2,
-                (ww - p(56.0)) as u32,
-                bh as u32,
-                pal().glow,
-                crate::theme::mix(pal().glow, pal().accent, 0.35),
-                t,
-                0.4,
-            );
-        }
-        let text = if sel { pal().accent } else { pal().text_dim };
-        let label_w = fonts.text_width(label, 13.5);
-        fonts.draw(cv, x0 + p(38.0), baseline, label, 13.5, text);
-        let cell = |v: bool| if v { "ON" } else { "OFF" }.to_string();
-        let max_w = (ww - p(38.0) * 2 - label_w - p(12.0)).max(p(40.0));
-        let value = match row {
-            0 => cell(menu.fps),
-            1 => cell(menu.sysinfo),
-            _ => match menu.overlay_idx[row - 2] {
-                0 => "OFF".to_string(),
-                k => {
-                    let name = files
-                        .get(row - 2)
-                        .and_then(|l| l.get(k - 1))
-                        .map(|s| s.as_str())
-                        .unwrap_or("");
-                    fonts.elide(name, 13.5, max_w)
-                }
-            },
-        };
-        let vw = fonts.text_width(&value, 13.5);
-        fonts.draw(
-            cv,
-            x0 + ww - p(38.0) - vw,
-            baseline,
-            &value,
-            13.5,
-            if sel { pal().signal } else { text },
-        );
-    }
-
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + hh - p(22.0),
-        "UP/DOWN PICK   LEFT/RIGHT CHANGE   B BACK   MENU CLOSE",
-        9.0,
-        pal().text_faint,
-    );
-}
-
-fn clip(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut t: String = s.chars().take(max.saturating_sub(2)).collect();
-        t.push_str("..");
-        t
-    }
-}
-
-/// Render the overlays page with a given selection, for the headless check.
-pub(crate) fn draw_overlay_menu_preview(
-    cv: &mut Canvas,
-    fonts: &mut Fonts,
-    sel: usize,
-    idx: [usize; 2],
-    files: &OverlayLayers,
-    t: f32,
-) {
-    let menu = GameMenu {
-        open: true,
-        sel: 0,
-        msg: None,
-        exit_requested: false,
-        page: MenuPage::Overlays,
-        slot: 0,
-        opt_sel: 0,
-        opt_top: 0,
-        overlay_sel: sel,
-        overlay_idx: idx,
-        fps: false,
-        sysinfo: false,
-        hold: None,
-        disc_sel: 0,
-        netplay_page: NetplayPage::Menu,
-        netplay_sel: 0,
-        netplay_transport: netplay::Transport::Wifi,
-        netplay_role: netplay::Role::Host,
-        netplay_msg: None,
-    };
-    draw_overlay_menu(cv, fonts, &menu, files, t);
-}
-
 fn apply_adjust(disp: &mut DisplayPrefs, kind: AdjKind, dir: i32) {
     match kind {
         AdjKind::Brightness => {
@@ -5596,7 +3387,8 @@ mod key_mode_tests {
 
 #[cfg(test)]
 mod pad_tests {
-    use super::{ev, retro, PadState, RawEvent};
+    use super::pad::PadState;
+    use super::{ev, retro, RawEvent};
 
     fn axis(code: u16, value: i32) -> RawEvent {
         RawEvent {
@@ -5717,7 +3509,8 @@ mod overlay_tests {
 
 #[cfg(test)]
 mod display_tests {
-    use super::{game_rect, scale_factors, screen_area, ScaleMode};
+    use super::overlay::screen_area;
+    use super::{game_rect, scale_factors, ScaleMode};
 
     #[test]
     fn scale_modes_fit_integer_stretch() {
@@ -5765,133 +3558,5 @@ mod display_tests {
         // A fully opaque image has no screen region.
         let solid = vec![0xFFFF_FFFFu32; (w * h) as usize];
         assert_eq!(screen_area(&solid, w, h), None);
-    }
-}
-
-#[cfg(test)]
-mod image_overlay_tests {
-    use super::*;
-
-    #[test]
-    fn overlay_kind_sorts_pack_folders() {
-        assert_eq!(overlay_kind("CRT/Perfect_CRT.png"), Some(0));
-        assert_eq!(overlay_kind("CRT/Perfect_CRT-240p(noframe).png"), Some(0));
-        assert_eq!(overlay_kind("GB/drkhrse/Perfect_DMG-EX.png"), Some(1));
-        assert_eq!(overlay_kind("misc/Perfect_GBA-SP.png"), Some(1));
-        // Colour correction belongs in the core options, not a layer.
-        assert_eq!(overlay_kind("COLOR/scanlines.png"), None);
-        assert_eq!(overlay_kind("colour/tint.png"), None);
-    }
-
-    #[test]
-    fn overlay_choices_are_per_system() {
-        let v = serde_json::json!({
-            "overlays": {"gba": {"crt": "CRT/a.png", "bezel": "GBA/b.png"}}
-        });
-        assert_eq!(
-            overlay_prefs_from(&v, "gba", "", false),
-            ["CRT/a.png".to_string(), "GBA/b.png".to_string()]
-        );
-        assert_eq!(
-            overlay_prefs_from(&v, "genesis", "", false),
-            [
-                "CRT/Perfect_CRT-240p(noframe).png".to_string(),
-                String::new()
-            ],
-            "the global keys do not leak across systems"
-        );
-        let legacy = serde_json::json!({
-            "overlay_crt": "CRT/x.png",
-            "overlay_bezel": ""
-        });
-        assert_eq!(
-            overlay_prefs_from(&legacy, "snes", "", false),
-            ["CRT/x.png".to_string(), String::new()],
-            "the legacy globals seed the first launch"
-        );
-    }
-
-    #[test]
-    fn fresh_configs_get_the_shipped_overlays() {
-        let v = serde_json::json!({});
-        assert_eq!(
-            overlay_prefs_from(&v, "psx", "", false),
-            ["CRT/Perfect_CRT.png".to_string(), String::new()]
-        );
-        for system in ["snes", "pce", "nes", "neocd"] {
-            assert_eq!(
-                overlay_prefs_from(&v, system, "", false),
-                ["CRT/Perfect_CRT-240p.png".to_string(), String::new()],
-                "{system}"
-            );
-            assert_eq!(
-                overlay_prefs_from(&v, system, "", true),
-                [
-                    "CRT/Perfect_CRT-240p-720x480.png".to_string(),
-                    String::new()
-                ],
-                "{system} wide"
-            );
-        }
-        assert_eq!(
-            overlay_prefs_from(&v, "genesis", "", false),
-            [
-                "CRT/Perfect_CRT-240p(noframe).png".to_string(),
-                String::new()
-            ]
-        );
-        assert_eq!(
-            overlay_prefs_from(&v, "genesis", "", true),
-            [
-                "CRT/Perfect_CRT-240p(noframe)-720x480.png".to_string(),
-                String::new()
-            ]
-        );
-        assert_eq!(
-            overlay_prefs_from(&v, "gba", "", false),
-            [String::new(), "GBA/mugwomp93/Perfect_GBA.png".to_string()]
-        );
-        assert_eq!(
-            overlay_prefs_from(&v, "gba", "", true),
-            [String::new(), String::new()],
-            "720x480 is exactly 3x GBA"
-        );
-        assert_eq!(
-            overlay_prefs_from(&v, "gbc", "", false),
-            [String::new(), "GBC/mugwomp93/Perfect_GBC.png".to_string()]
-        );
-        assert_eq!(
-            overlay_prefs_from(&v, "gb", "", false),
-            [String::new(), "GB/mugwomp93/Perfect_GBP-EX.png".to_string()]
-        );
-        assert_eq!(
-            overlay_prefs_from(&v, "gb", "", true),
-            [
-                String::new(),
-                "GB/mugwomp93/Perfect_GBP-EX-720x480.png".to_string()
-            ]
-        );
-        assert_eq!(
-            overlay_prefs_from(&v, "ngp", "Games/NGPC/Game.ngp", false),
-            ["".to_string(), "NGP/mugwomp93/ngp-640x480.png".to_string()]
-        );
-        assert_eq!(
-            overlay_prefs_from(&v, "ngp", "Games/NGPC/Game.ngc", false),
-            [
-                "".to_string(),
-                "NGPC/mugwomp93/ngpc-640x480.png".to_string()
-            ]
-        );
-        assert_eq!(
-            overlay_prefs_from(&v, "ngp", "Games/NGPC/Game.ngp", true),
-            ["".to_string(), "NGP/mugwomp93/ngp-720x480.png".to_string()]
-        );
-        assert_eq!(
-            overlay_prefs_from(&v, "ngp", "Games/NGPC/Game.ngc", true),
-            [
-                "".to_string(),
-                "NGPC/mugwomp93/ngpc-720x480.png".to_string()
-            ]
-        );
     }
 }
