@@ -236,108 +236,29 @@ pub fn run() -> Result<()> {
         bail!("game menu looks wrong (warm {})", s.warm);
     }
 
-    // The pause menu's DISC page: four images, the third picked.
-    library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
-    crate::run::draw_disc(&mut cv, &mut fonts, 2, None, 4, 0, 0.4);
-    let s = stats(&cv);
-    write_ppm(&out.join("disc.ppm"), &cv)?;
-    println!(
-        "disc:    warm={} signal={} nonbg={} ({:.1}%)",
-        s.warm,
-        s.signal,
-        s.nonbg,
-        pct(&cv, &s)
-    );
-    if s.warm < 100 || s.nonbg < 2000 {
-        bail!("disc page looks wrong (warm {}, nonbg {})", s.warm, s.nonbg);
-    }
-
-    // The overlays page: long layer paths should fill the row, not truncate.
-    let files = [
-        vec![
-            "CRT/Perfect_CRT.png".to_string(),
-            "CRT/Perfect_CRT-240p.png".to_string(),
-        ],
-        vec![
-            "GBA/mugwomp93/Perfect_GBA.png".to_string(),
-            "GB/mugwomp93/Perfect_GBP-EX.png".to_string(),
-        ],
-    ];
-    library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
-    crate::run::draw_overlay_menu_preview(&mut cv, &mut fonts, 3, [1, 1], &files, 0.4);
-    let s = stats(&cv);
-    write_ppm(&out.join("overlays.ppm"), &cv)?;
-    println!(
-        "overlays: warm={} signal={} nonbg={} ({:.1}%)",
-        s.warm,
-        s.signal,
-        s.nonbg,
-        pct(&cv, &s)
-    );
-    if s.warm < 100 || s.nonbg < 2000 {
-        bail!(
-            "overlays page looks wrong (warm {}, nonbg {})",
+    // The pause dashboard: state preview, core options, video and disc panes.
+    for (name, sel, focus) in [
+        ("pause-resume", 0, false),
+        ("pause-save", 1, false),
+        ("pause-core", 3, true),
+        ("pause-video", 4, true),
+        ("pause-disc", 6, false),
+        ("pause-exit", 7, false),
+    ] {
+        library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
+        crate::run::draw_menu_preview(&mut cv, &mut fonts, sel, focus, 0.4);
+        let s = stats(&cv);
+        write_ppm(&out.join(format!("{name}.ppm")), &cv)?;
+        println!(
+            "{name}: warm={} signal={} nonbg={} ({:.1}%)",
             s.warm,
-            s.nonbg
+            s.signal,
+            s.nonbg,
+            pct(&cv, &s)
         );
-    }
-
-    // The pause dashboard: the state grid, then the VIDEO pane.
-    library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
-    crate::run::draw_menu_preview(&mut cv, &mut fonts, 1, true, 0, 0.4);
-    let s = stats(&cv);
-    write_ppm(&out.join("pause-states.ppm"), &cv)?;
-    println!(
-        "pause:   warm={} signal={} nonbg={} ({:.1}%)",
-        s.warm,
-        s.signal,
-        s.nonbg,
-        pct(&cv, &s)
-    );
-    if s.warm < 100 || s.nonbg < 5000 {
-        bail!(
-            "pause state grid looks wrong (warm {}, nonbg {})",
-            s.warm,
-            s.nonbg
-        );
-    }
-
-    library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
-    crate::run::draw_menu_preview(&mut cv, &mut fonts, 0, false, 0, 0.4);
-    let s = stats(&cv);
-    write_ppm(&out.join("pause-rail.ppm"), &cv)?;
-    println!(
-        "pause0:  warm={} signal={} nonbg={} ({:.1}%)",
-        s.warm,
-        s.signal,
-        s.nonbg,
-        pct(&cv, &s)
-    );
-    if s.warm < 100 || s.nonbg < 5000 {
-        bail!(
-            "pause resume pane looks wrong (warm {}, nonbg {})",
-            s.warm,
-            s.nonbg
-        );
-    }
-
-    library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
-    crate::run::draw_menu_preview(&mut cv, &mut fonts, 3, true, 0, 0.4);
-    let s = stats(&cv);
-    write_ppm(&out.join("pause-video.ppm"), &cv)?;
-    println!(
-        "pause2:  warm={} signal={} nonbg={} ({:.1}%)",
-        s.warm,
-        s.signal,
-        s.nonbg,
-        pct(&cv, &s)
-    );
-    if s.warm < 100 || s.nonbg < 5000 {
-        bail!(
-            "pause video pane looks wrong (warm {}, nonbg {})",
-            s.warm,
-            s.nonbg
-        );
+        if s.warm < 100 || s.nonbg < 5000 {
+            bail!("{name} looks wrong (warm {}, nonbg {})", s.warm, s.nonbg);
+        }
     }
 
     // Screenshot gallery: the list, then the full-screen zoom.

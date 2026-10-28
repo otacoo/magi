@@ -19,10 +19,11 @@ reference.
 | Shelf | **POWER** tap / hold | Sleep / shutdown |
 | Shelf | SETTINGS → SYSTEM → **SCREENSHOTS** | Browse captures; **A** zooms (shown while the shot chord is on) |
 | In game | **MENU** | Pause menu |
-| In game | Pause menu ↑/↓ | Pick a section |
-| In game | Pause menu → | Open the section pane |
-| In game | Pause menu **A** | Resume, open or load |
-| In game | Pause menu **X / Y** | Save state / delete state (press Y twice) |
+| In game | Pause menu ↑/↓ | Pick a tab |
+| In game | Pause menu ←/→ | Slot, disc or option value |
+| In game | Pause menu **A** | Resume, save/load, exit or adjust |
+| In game | Pause menu **B** | Resume |
+| In game | Pause menu **Y** | Delete the shown state (press Y twice) |
 | In game | Hold **MENU** | Save state and exit |
 | In game | **L2** hold | Rewind (except N64; PS1 requires holding SELECT) |
 | In game | **R2** hold / double-tap | Fast-forward / latch (except N64; PS1 requires holding SELECT) |
@@ -35,12 +36,14 @@ reference.
 | Anywhere | Volume keys | Software volume |
 | Anywhere | Close the lid | Sleep; opening wakes |
 
-The pause menu's **STATES** pane has three **save-state slots** per game plus a
-one-shot resume state, each shown as a card with a thumbnail and age. **A**
-loads the selected card, **X** saves it and **Y** twice deletes it. The resume
-state loads at launch and is then consumed; hold **A** when a game starts to
-skip that restore without deleting it. **SELECT+R1** quick saves and hold
-**MENU** both write the selected slot and a resume point.
+**SAVE STATE** and **LOAD STATE** act on the slot shown in the pane: **A**
+saves or loads it, **←/→** switches slots and **Y** twice deletes it. **CORE**
+and **VIDEO** show their options in the pane; **A** or **→** enters the list,
+**↑/↓** picks an option and **←/→** changes its value. The one-shot resume state
+loads at launch and is then consumed; hold **A** when a game starts to skip
+that restore without deleting it. **SELECT+R1** quick saves and hold **MENU**
+both write the selected slot and a resume point.
 
-On a multi-disc PlayStation game the pause menu also gains **SWAP DISC**; see
+On a multi-disc PlayStation game the pause menu also gains a **DISC** tab;
+**←/→** picks the image and **A** swaps it. See
 [Multi-disc PlayStation](multi-disc.md).

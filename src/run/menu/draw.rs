@@ -1,7 +1,7 @@
-//! The pause-menu pages: dashboard, state grid, options, overlays, disc and
-//! netplay.
+//! The pause menu: folder tabs, the state preview and the in-pane pages.
 
 use std::ffi::{c_void, CString};
+use std::os::raw::c_uint;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 
@@ -12,16 +12,16 @@ use crate::netplay;
 use crate::theme::pal;
 
 use super::super::{
-    ctx, disc_count, disc_index, visible_options, CoreOption, Ctx, GameGeometry, GameMenu,
-    MenuPage, NetplayPage, OverlayLayers, StateCard, CTX, STATE_CARDS, STATE_SLOTS,
+    ctx, disc_count, disc_index, visible_options, CoreOption, Ctx, DiskControl, GameGeometry,
+    GameInfo, GameMenu, MenuPage, NetplayPage, OverlayLayers, StateCard, CTX, STATE_SLOTS,
 };
-use super::{menu_sections, netplay_status_line, section_summary, MenuSection, OPT_ROWS};
+use super::{menu_sections, netplay_status_line, option_rows, section_summary, MenuSection};
 
 pub(crate) fn draw_menu(cv: &mut Canvas, fonts: &mut Fonts, menu: &GameMenu, rom: &str, t: f32) {
     let (w, h) = (cv.w, cv.h);
     let s = crate::theme::ui_scale();
     let p = |v: f32| (v * s).round() as i32;
-    cv.fill_rect_a(0, 0, w as u32, h as u32, pal().bg0, 242);
+    cv.fill_rect_a(0, 0, w as u32, h as u32, pal().bg0, 250);
 
     let margin = p(8.0);
     let panel_w = (w - 2 * margin) as u32;
@@ -40,17 +40,25 @@ pub(crate) fn draw_menu(cv: &mut Canvas, fonts: &mut Fonts, menu: &GameMenu, rom
 
     let left = margin + p(16.0);
     let right = w - margin - p(16.0);
-    let title_base = margin + p(24.0);
-    fonts.draw_bold(cv, left, title_base, "MAGI // PAUSED", 17.0, pal().title);
+    let title_base = margin + p(26.0);
+    fonts.draw_bold(cv, left, title_base, "MAGI // PAUSED", 19.0, pal().title);
+    let linked = ctx().netplay_linked;
+    let note = if linked {
+        "NETPLAY LINKED"
+    } else {
+        "SYSTEM PAUSED"
+    };
+    let note_w = fonts.text_width(note, 10.0);
     let rom_title = Path::new(rom)
         .file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or("");
-    let rom_text = fonts.elide(&rom_title.to_uppercase(), 12.0, (right - left) / 2);
+        .unwrap_or("")
+        .to_uppercase();
+    let rom_text = fonts.elide(&rom_title, 12.0, right - left - note_w - p(16.0));
     fonts.draw(
         cv,
         left,
-        title_base + p(20.0),
+        title_base + p(22.0),
         &rom_text,
         12.0,
         pal().text_faint,
@@ -68,21 +76,14 @@ pub(crate) fn draw_menu(cv: &mut Canvas, fonts: &mut Fonts, menu: &GameMenu, rom
     } else {
         format!("SLOT {}/{}", menu.slot + 1, STATE_SLOTS)
     };
-    let sw = fonts.text_width(&status, 10.5);
-    fonts.draw(cv, right - sw, title_base, &status, 10.5, pal().text_dim);
-    let linked = ctx().netplay_linked;
-    let note = if linked {
-        "NETPLAY LINKED"
-    } else {
-        "SYSTEM PAUSED"
-    };
-    let nw = fonts.text_width(note, 9.5);
-    fonts.draw(
+    right_text(cv, fonts, right, title_base, &status, 11.0, pal().text_dim);
+    right_text(
         cv,
-        right - nw,
-        title_base + p(20.0),
+        fonts,
+        right,
+        title_base + p(22.0),
         note,
-        9.5,
+        10.0,
         if linked {
             pal().signal
         } else {
@@ -90,54 +91,54 @@ pub(crate) fn draw_menu(cv: &mut Canvas, fonts: &mut Fonts, menu: &GameMenu, rom
         },
     );
 
-    let div_y = margin + p(54.0);
+    let div_y = margin + p(62.0);
     cv.hline(left, div_y, (right - left) as u32, pal().border);
     cv.fill_rect(
         left,
         div_y,
-        p(34.0).max(1) as u32,
-        p(2.0).max(1) as u32,
+        p(42.0).max(1) as u32,
+        p(3.0).max(1) as u32,
         pal().accent,
     );
 
     let body_top = div_y + p(10.0);
-    let foot_y = margin + panel_h as i32 - p(12.0);
-    let body_bottom = foot_y - p(18.0);
+    let foot_y = margin + panel_h as i32 - p(14.0);
+    let body_bottom = foot_y - p(22.0);
     let body_h = (body_bottom - body_top).max(p(80.0)) as u32;
 
-    let rail_w = p(148.0);
-    let rail_x = left;
-    let pane_x = rail_x + rail_w + p(12.0);
-    let pane_w = (right - pane_x).max(p(120.0)) as u32;
+    let tab_w = p(136.0);
+    let pane_x = left + tab_w;
+    let pane_w = (right - pane_x).max(p(140.0)) as u32;
+
+    cv.fill_rect(pane_x, body_top, pane_w, body_h, pal().bg1);
+    cv.rect_outline(pane_x, body_top, pane_w, body_h, pal().border);
 
     let sections = menu_sections();
     let sel = menu.sel.min(sections.len().saturating_sub(1));
-    let pitch = ((body_h as i32 - p(8.0)) / sections.len().max(1) as i32).min(p(44.0));
-    let pitch = pitch.max(p(26.0));
+    let n = sections.len().max(1) as i32;
+    let gap = p(4.0);
+    let pitch = ((body_h as i32 - gap * (n - 1).max(0)) / n)
+        .min(p(44.0))
+        .max(p(22.0));
+    let tab_h = (pitch - gap).max(p(18.0));
     for (i, section) in sections.iter().enumerate() {
-        let y = body_top + p(4.0) + i as i32 * pitch;
-        let row_h = (pitch - p(8.0)).max(p(20.0)) as u32;
+        let y = body_top + i as i32 * pitch;
         let selected = i == sel;
         if selected {
-            cv.fill_rect(rail_x, y, rail_w as u32, row_h, pal().bg3);
-            let (base, peak) = if menu.focus_pane {
-                (pal().border, pal().border)
-            } else {
-                (
-                    pal().glow,
-                    crate::theme::mix(pal().glow, pal().accent, 0.35),
-                )
-            };
-            crate::theme::glow_border(cv, rail_x, y, rail_w as u32, row_h, base, peak, t, 0.35);
+            cv.fill_rect(left, y, (tab_w + p(2.0)) as u32, tab_h as u32, pal().bg1);
+            cv.fill_rect(left, y, p(4.0).max(1) as u32, tab_h as u32, pal().accent);
+            cv.hline(left, y, tab_w as u32, pal().accent);
+            cv.hline(left, y + tab_h - 1, tab_w as u32, pal().accent);
+            cv.vline(left, y, tab_h as u32, pal().accent);
         }
+        let base = y + tab_h / 2 + p(6.0);
         let num = format!("{:02}", i + 1);
-        let base_y = y + row_h as i32 / 2 + p(4.0);
         fonts.draw(
             cv,
-            rail_x + p(8.0),
-            base_y,
+            left + p(12.0),
+            base,
             &num,
-            8.5,
+            9.0,
             if selected {
                 pal().accent
             } else {
@@ -146,10 +147,10 @@ pub(crate) fn draw_menu(cv: &mut Canvas, fonts: &mut Fonts, menu: &GameMenu, rom
         );
         fonts.draw(
             cv,
-            rail_x + p(28.0),
-            base_y,
+            left + p(36.0),
+            base,
             section.label(),
-            14.0,
+            15.0,
             if selected {
                 pal().accent
             } else {
@@ -158,98 +159,85 @@ pub(crate) fn draw_menu(cv: &mut Canvas, fonts: &mut Fonts, menu: &GameMenu, rom
         );
     }
 
-    cv.fill_rect_a(pane_x, body_top, pane_w, body_h, pal().bg1, 232);
-    if menu.focus_pane {
-        crate::theme::glow_border(
-            cv,
-            pane_x,
-            body_top,
-            pane_w,
-            body_h,
-            pal().glow,
-            crate::theme::mix(pal().glow, pal().accent, 0.35),
-            t,
-            0.5,
-        );
-    } else {
-        cv.rect_outline(pane_x, body_top, pane_w, body_h, pal().border);
-    }
-
     let section = sections[sel];
-    draw_pane_header(cv, fonts, section, pane_x, body_top, pane_w);
+    draw_pane_header(cv, fonts, menu, section, pane_x, body_top, pane_w);
     let content_x = pane_x + p(12.0);
-    let content_y = body_top + p(52.0);
+    let content_top = body_top + p(58.0);
+    let content_bottom = body_top + body_h as i32 - p(14.0);
     let content_w = (pane_w as i32 - p(24.0)).max(p(80.0));
-    let content_bottom = body_top + body_h as i32 - p(12.0);
-    if section == MenuSection::States {
-        draw_state_grid(
-            cv,
-            fonts,
-            menu,
-            content_x,
-            content_y,
-            content_w,
-            content_bottom - content_y,
-            t,
-        );
-    } else {
-        draw_section_info(
+    let content_h = content_bottom - content_top;
+    match section {
+        MenuSection::Save | MenuSection::Load => draw_state_pane(
             cv,
             fonts,
             menu,
             section,
             content_x,
-            content_y,
+            content_top,
+            content_w,
+            content_h,
+            t,
+        ),
+        MenuSection::Core => draw_core_pane(
+            cv,
+            fonts,
+            menu,
+            content_x,
+            content_top,
+            content_w,
+            content_h,
+            t,
+        ),
+        MenuSection::Video => draw_video_pane(
+            cv,
+            fonts,
+            menu,
+            content_x,
+            content_top,
+            content_w,
+            content_h,
+            t,
+        ),
+        MenuSection::Disc => draw_disc_pane(
+            cv,
+            fonts,
+            menu,
+            content_x,
+            content_top,
+            content_w,
+            content_h,
+            t,
+        ),
+        MenuSection::Resume | MenuSection::Exit => draw_info_pane(
+            cv,
+            fonts,
+            menu,
+            section,
+            content_x,
+            content_top,
             content_w,
             content_bottom,
             t,
-        );
+        ),
+        MenuSection::Link => draw_link_pane(
+            cv,
+            fonts,
+            menu,
+            content_x,
+            content_top,
+            content_w,
+            content_bottom,
+            t,
+        ),
     }
 
-    if let Some(f) = menu.hold {
-        let bw = p(260.0);
-        let x = w / 2 - bw / 2;
-        let y = foot_y - p(4.0);
-        cv.rect_outline(x, y, bw as u32, p(8.0) as u32, pal().border);
-        let fw = ((bw - 2) as f32 * f.clamp(0.0, 1.0)) as u32;
-        cv.fill_rect(
-            x + 1,
-            y + 1,
-            fw,
-            (p(8.0) as u32).saturating_sub(2),
-            pal().signal,
-        );
-        fonts.draw_center(
-            cv,
-            w / 2,
-            y - p(5.0),
-            "HOLD MENU: SAVE + EXIT",
-            9.0,
-            pal().signal,
-        );
-    } else {
-        let hint = if !menu.focus_pane {
-            "U/D SECTION   A SELECT   RIGHT DETAILS   B RESUME"
-        } else {
-            match section {
-                MenuSection::States => "A LOAD   X SAVE   Y DELETE   B BACK",
-                MenuSection::Resume => "A RESUME   B BACK",
-                MenuSection::Exit => "A EXIT GAME   B BACK",
-                _ => "A OPEN   B BACK",
-            }
-        };
-        fonts.draw(cv, left, foot_y, hint, 9.5, pal().text_faint);
-        if let Some((msg, _)) = &menu.msg {
-            let text = fonts.elide(msg, 9.5, (right - left) / 2);
-            let mw = fonts.text_width(&text, 9.5);
-            fonts.draw(cv, right - mw, foot_y, &text, 9.5, pal().signal);
-        }
-    }
+    draw_footer(cv, fonts, menu, section, left, right, foot_y);
 }
 
 fn draw_pane_header(
     cv: &mut Canvas,
     fonts: &mut Fonts,
+    menu: &GameMenu,
     section: MenuSection,
     x: i32,
     y: i32,
@@ -257,29 +245,143 @@ fn draw_pane_header(
 ) {
     let s = crate::theme::ui_scale();
     let p = |v: f32| (v * s).round() as i32;
-    let hx = x + p(12.0);
-    let hy = y + p(22.0);
+    let hx = x + p(16.0);
+    let hy = y + p(24.0);
     cv.fill_rect(
         hx,
-        hy - p(9.0),
-        p(3.0).max(1) as u32,
-        p(10.0).max(4) as u32,
+        hy - p(10.0),
+        p(4.0).max(1) as u32,
+        p(12.0).max(4) as u32,
         pal().accent,
     );
-    fonts.draw(cv, hx + p(8.0), hy, section.title(), 15.0, pal().title);
+    fonts.draw(cv, hx + p(10.0), hy, section.title(), 16.0, pal().title);
+
+    let (context, color) = match section {
+        MenuSection::Save | MenuSection::Load => (
+            format!("SLOT {}/{}", menu.slot + 1, STATE_SLOTS),
+            pal().signal,
+        ),
+        MenuSection::Core => (
+            format!("{} OPTIONS", visible_options(ctx()).len()),
+            pal().text_dim,
+        ),
+        MenuSection::Video => (
+            if menu.focus_pane {
+                "L/R VALUE".to_string()
+            } else {
+                "A ADJUST".to_string()
+            },
+            pal().text_dim,
+        ),
+        MenuSection::Link => ("A OPEN NETPLAY".to_string(), pal().accent),
+        MenuSection::Disc => (
+            format!(
+                "{}/{}",
+                menu.disc_sel.min(disc_count().saturating_sub(1)) + 1,
+                disc_count()
+            ),
+            pal().signal,
+        ),
+        MenuSection::Resume => ("A RESUME".to_string(), pal().accent),
+        MenuSection::Exit => ("A EXIT".to_string(), pal().alert),
+    };
+    let context = fonts.elide(&context, 11.0, w as i32 / 2);
+    right_text(cv, fonts, x + w as i32 - p(16.0), hy, &context, 11.0, color);
+
     let summary = section_summary(section);
-    let summary = fonts.elide(&summary, 10.0, w as i32 - p(28.0));
+    let summary = fonts.elide(&summary, 10.5, w as i32 - p(36.0));
     fonts.draw(
         cv,
-        hx + p(8.0),
-        hy + p(15.0),
+        hx + p(10.0),
+        hy + p(18.0),
         &summary,
-        10.0,
+        10.5,
         pal().text_faint,
+    );
+    cv.hline(
+        x + p(14.0),
+        y + p(49.0),
+        (w as i32 - p(28.0)) as u32,
+        pal().border,
     );
 }
 
-fn draw_state_grid(
+fn draw_state_pane(
+    cv: &mut Canvas,
+    fonts: &mut Fonts,
+    menu: &GameMenu,
+    section: MenuSection,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    t: f32,
+) {
+    let s = crate::theme::ui_scale();
+    let p = |v: f32| (v * s).round() as i32;
+    let strip_h = p(32.0).min(h / 3).max(p(24.0));
+    let image_h = (h - strip_h).max(p(40.0));
+    cv.fill_rect(x, y, w as u32, image_h as u32, pal().bg0);
+    let card = menu.states.get(menu.slot.min(STATE_SLOTS - 1));
+    let exists = card.is_some_and(|c| c.exists);
+    if let Some(img) = card.and_then(|c| c.thumb.as_ref()) {
+        img.draw_fit(cv, x, y, w as u32, image_h as u32, 255);
+    } else {
+        let (title, sub) = match (section, exists) {
+            (_, true) => ("NO PREVIEW", "STATE EXISTS, NO SCREENSHOT"),
+            (MenuSection::Load, false) => ("EMPTY SLOT", "NO SAVED STATE"),
+            _ => ("EMPTY SLOT", "PRESS A TO SAVE"),
+        };
+        fonts.draw_center(cv, x + w / 2, y + image_h / 2, title, 16.0, pal().text_dim);
+        fonts.draw_center(
+            cv,
+            x + w / 2,
+            y + image_h / 2 + p(20.0),
+            sub,
+            11.0,
+            pal().text_faint,
+        );
+    }
+    crate::theme::glow_border(
+        cv,
+        x,
+        y,
+        w as u32,
+        image_h as u32,
+        pal().accent,
+        pal().glow,
+        t,
+        0.6,
+    );
+
+    let sy = y + image_h;
+    cv.fill_rect(x, sy, w as u32, strip_h as u32, pal().bg2);
+    cv.rect_outline(x, sy, w as u32, strip_h as u32, pal().border);
+    let label = format!("SLOT {}/{}", menu.slot + 1, STATE_SLOTS);
+    fonts.draw(
+        cv,
+        x + p(12.0),
+        sy + strip_h / 2 + p(6.0),
+        &label,
+        14.0,
+        pal().text,
+    );
+    if let Some(card) = card {
+        if !card.age.is_empty() {
+            right_text(
+                cv,
+                fonts,
+                x + w - p(12.0),
+                sy + strip_h / 2 + p(5.0),
+                &card.age,
+                11.5,
+                pal().text_faint,
+            );
+        }
+    }
+}
+
+fn draw_core_pane(
     cv: &mut Canvas,
     fonts: &mut Fonts,
     menu: &GameMenu,
@@ -291,93 +393,169 @@ fn draw_state_grid(
 ) {
     let s = crate::theme::ui_scale();
     let p = |v: f32| (v * s).round() as i32;
-    let gap = p(8.0);
-    let cw = (w - gap) / 2;
-    let ch = (h - gap) / 2;
-    if cw < p(40.0) || ch < p(40.0) {
+    let ids = visible_options(ctx());
+    if ids.is_empty() {
+        fonts.draw_center(
+            cv,
+            x + w / 2,
+            y + p(30.0),
+            "NO CORE OPTIONS",
+            14.0,
+            pal().text_dim,
+        );
         return;
     }
-    for idx in 0..STATE_CARDS {
-        let Some(card) = menu.states.get(idx) else {
-            continue;
-        };
-        let cx = x + (idx as i32 % 2) * (cw + gap);
-        let cy = y + (idx as i32 / 2) * (ch + gap);
-        let selected = menu.focus_pane && menu.state_sel == idx;
-        let armed = matches!(menu.delete_armed, Some((a, _)) if a == idx);
-        cv.fill_rect(
-            cx,
-            cy,
-            cw as u32,
-            ch as u32,
-            if card.exists { pal().bg2 } else { pal().bg1 },
-        );
-        if armed {
-            cv.rect_outline(cx, cy, cw as u32, ch as u32, pal().alert);
-        } else if selected {
-            crate::theme::glow_border(
-                cv,
-                cx,
-                cy,
-                cw as u32,
-                ch as u32,
-                pal().accent,
-                pal().glow,
-                t,
-                0.6,
-            );
-        } else {
-            cv.rect_outline(cx, cy, cw as u32, ch as u32, pal().border);
-        }
+    let rows = option_rows();
+    let list: Vec<(String, String)> = ids
+        .iter()
+        .skip(menu.opt_top)
+        .take(rows)
+        .map(|&vi| {
+            let o = &ctx().options[vi];
+            let value = o.values.get(o.chosen).cloned().unwrap_or_default();
+            (o.desc.clone(), value)
+        })
+        .collect();
+    let sel = menu
+        .opt_sel
+        .saturating_sub(menu.opt_top)
+        .min(list.len().saturating_sub(1));
+    draw_rows(cv, fonts, &list, sel, menu.focus_pane, x, y, w, p(27.0), t);
+    let _ = h;
+}
 
-        let pad = p(4.0);
-        let label_h = p(18.0);
-        let tw = (cw - 2 * pad).max(p(16.0)) as u32;
-        let th = (ch - label_h - 3 * pad).max(p(16.0)) as u32;
-        cv.fill_rect(cx + pad, cy + pad, tw, th, pal().bg0);
-        if let Some(img) = &card.thumb {
-            img.draw_fit(cv, cx + pad, cy + pad, tw, th, 255);
-        } else {
-            let text = if card.exists { "NO PREVIEW" } else { "EMPTY" };
-            fonts.draw_center(
-                cv,
-                cx + cw / 2,
-                cy + pad + th as i32 / 2 + p(4.0),
-                text,
-                9.5,
-                pal().text_faint,
-            );
+fn draw_video_pane(
+    cv: &mut Canvas,
+    fonts: &mut Fonts,
+    menu: &GameMenu,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    t: f32,
+) {
+    let s = crate::theme::ui_scale();
+    let p = |v: f32| (v * s).round() as i32;
+    let onoff = |b: bool| if b { "ON" } else { "OFF" };
+    let rows = vec![
+        ("FPS COUNTER".to_string(), onoff(menu.fps).to_string()),
+        ("SYSINFO".to_string(), onoff(menu.sysinfo).to_string()),
+        (
+            "CRT".to_string(),
+            overlay_pick(&ctx().overlay_layers, menu.overlay_idx[0], 0),
+        ),
+        (
+            "BEZEL".to_string(),
+            overlay_pick(&ctx().overlay_layers, menu.overlay_idx[1], 1),
+        ),
+    ];
+    draw_rows(
+        cv,
+        fonts,
+        &rows,
+        menu.overlay_sel.min(rows.len() - 1),
+        menu.focus_pane,
+        x,
+        y,
+        w,
+        p(30.0),
+        t,
+    );
+    let _ = h;
+}
+
+fn draw_disc_pane(
+    cv: &mut Canvas,
+    fonts: &mut Fonts,
+    menu: &GameMenu,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    t: f32,
+) {
+    let s = crate::theme::ui_scale();
+    let p = |v: f32| (v * s).round() as i32;
+    let count = disc_count();
+    if count == 0 {
+        fonts.draw_center(cv, x + w / 2, y + p(30.0), "NO DISCS", 14.0, pal().text_dim);
+        return;
+    }
+    let current = disc_index();
+    let rows: Vec<(String, String)> = (0..count)
+        .map(|i| {
+            (
+                format!("DISC {}", i + 1),
+                if i == current { "INSERTED" } else { "" }.to_string(),
+            )
+        })
+        .collect();
+    let row_h = (h / count as i32).min(p(30.0)).max(p(18.0));
+    draw_rows(
+        cv,
+        fonts,
+        &rows,
+        menu.disc_sel.min(count - 1),
+        true,
+        x,
+        y,
+        w,
+        row_h,
+        t,
+    );
+}
+
+fn draw_rows(
+    cv: &mut Canvas,
+    fonts: &mut Fonts,
+    rows: &[(String, String)],
+    selected: usize,
+    focus: bool,
+    x: i32,
+    y: i32,
+    w: i32,
+    row_h: i32,
+    t: f32,
+) {
+    let s = crate::theme::ui_scale();
+    let p = |v: f32| (v * s).round() as i32;
+    for (i, (label, value)) in rows.iter().enumerate() {
+        let ry = y + i as i32 * row_h;
+        let sel = i == selected;
+        if sel {
+            let bh = (row_h - p(4.0)).max(p(18.0));
+            cv.fill_rect(x, ry, w as u32, bh as u32, pal().bg3);
+            let (base, peak) = if focus {
+                (pal().accent, pal().glow)
+            } else {
+                (pal().border, pal().border)
+            };
+            crate::theme::glow_border(cv, x, ry, w as u32, bh as u32, base, peak, t, 0.4);
         }
-        let base = cy + ch - p(6.0);
-        let label_color = if card.auto {
-            pal().signal
-        } else if card.exists {
-            pal().text
-        } else {
-            pal().text_faint
-        };
-        fonts.draw(cv, cx + pad, base, &card.label, 11.5, label_color);
-        let age = if armed {
-            "Y AGAIN".to_string()
-        } else {
-            card.age.clone()
-        };
-        if !age.is_empty() {
-            let age = fonts.elide(&age, 10.0, cw / 2);
-            let aw = fonts.text_width(&age, 10.0);
-            fonts.draw(
-                cv,
-                cx + cw - pad - aw,
-                base,
-                &age,
-                10.0,
-                if armed { pal().alert } else { pal().text_faint },
-            );
-        }
+        let base = ry + row_h / 2 + p(5.0);
+        let value = fonts.elide(value, 13.0, w / 2);
+        let vw = fonts.text_width(&value, 13.0);
+        let label = fonts.elide(label, 13.0, w - vw - p(20.0));
+        fonts.draw(
+            cv,
+            x + p(10.0),
+            base,
+            &label,
+            13.0,
+            if sel { pal().accent } else { pal().text_dim },
+        );
+        fonts.draw(
+            cv,
+            x + w - p(10.0) - vw,
+            base,
+            &value,
+            13.0,
+            if sel { pal().signal } else { pal().text },
+        );
     }
 }
 
-fn draw_section_info(
+fn draw_info_pane(
     cv: &mut Canvas,
     fonts: &mut Fonts,
     menu: &GameMenu,
@@ -390,60 +568,15 @@ fn draw_section_info(
 ) {
     let s = crate::theme::ui_scale();
     let p = |v: f32| (v * s).round() as i32;
-    let mut rows: Vec<(&str, String)> = Vec::new();
-    match section {
-        MenuSection::Resume => {
-            rows.push(("GAME", game_title().to_uppercase()));
-            rows.push(("SYSTEM", ctx().system.to_uppercase()));
-            rows.push(("CORE", ctx().opt_key.to_uppercase()));
-            rows.push(("SLOT", format!("{}/{}", menu.slot + 1, STATE_SLOTS)));
-        }
-        MenuSection::Core => {
-            rows.push(("CORE", ctx().opt_key.to_uppercase()));
-            rows.push(("VISIBLE OPTIONS", visible_options(ctx()).len().to_string()));
-            rows.push(("STORAGE", "PER GAME, ON CARD".into()));
-            rows.push(("RESTART", "SOME NEED A RELOAD".into()));
-        }
-        MenuSection::Video => {
-            rows.push(("FPS COUNTER", if menu.fps { "ON" } else { "OFF" }.into()));
-            rows.push(("SYSINFO", if menu.sysinfo { "ON" } else { "OFF" }.into()));
-            rows.push((
-                "CRT",
-                overlay_pick(&ctx().overlay_layers, menu.overlay_idx[0], 0),
-            ));
-            rows.push((
-                "BEZEL",
-                overlay_pick(&ctx().overlay_layers, menu.overlay_idx[1], 1),
-            ));
-            rows.push(("SCALE", "SELECT + X".into()));
-        }
-        MenuSection::Link => {
-            rows.push(("STATUS", netplay_status_line()));
-            rows.push((
-                "MODE",
-                ctx()
-                    .netplay
-                    .as_ref()
-                    .map(|s| s.transport().label().to_string())
-                    .unwrap_or_else(|| "NONE".into()),
-            ));
-            rows.push(("GAME", game_title().to_uppercase()));
-        }
-        MenuSection::Disc => {
-            rows.push((
-                "DISC",
-                format!(
-                    "{}/{}",
-                    disc_index().min(disc_count().saturating_sub(1)) + 1,
-                    disc_count()
-                ),
-            ));
-            rows.push(("GAME", game_title().to_uppercase()));
-            rows.push(("SWAP", "NO RESET NEEDED".into()));
-        }
-        MenuSection::Exit => {
-            rows.push(("SRAM", "FLUSHED ON EXIT".into()));
-            rows.push((
+    let rows: Vec<(&str, String)> = match section {
+        MenuSection::Resume => vec![
+            ("GAME", game_title().to_uppercase()),
+            ("SYSTEM", ctx().system.to_uppercase()),
+            ("CORE", ctx().opt_key.to_uppercase()),
+        ],
+        _ => vec![
+            ("SRAM", "FLUSHED ON EXIT".into()),
+            (
                 "RESUME POINT",
                 if std::fs::metadata(&menu.auto_path).is_ok() {
                     "PRESENT"
@@ -451,8 +584,8 @@ fn draw_section_info(
                     "NONE"
                 }
                 .into(),
-            ));
-            rows.push((
+            ),
+            (
                 "NETPLAY",
                 if ctx().netplay.is_some() {
                     "WILL END"
@@ -460,22 +593,54 @@ fn draw_section_info(
                     "IDLE"
                 }
                 .into(),
-            ));
-        }
-        MenuSection::States => {}
-    }
-    draw_kv_rows(cv, fonts, x, y + p(2.0), w, &rows);
-
-    let (cta, alert) = match section {
-        MenuSection::Resume => ("A   RESUME", false),
-        MenuSection::Core => ("A   OPEN CORE OPTIONS", false),
-        MenuSection::Video => ("A   OPEN OVERLAYS", false),
-        MenuSection::Link => ("A   OPEN NETPLAY", false),
-        MenuSection::Disc => ("A   SWAP DISC", false),
-        MenuSection::Exit => ("A   EXIT GAME", true),
-        MenuSection::States => return,
+            ),
+        ],
     };
-    draw_pane_cta(cv, fonts, x, bottom - p(34.0), w as u32, cta, t, alert);
+    draw_kv_rows(cv, fonts, x, y + p(4.0), w, &rows);
+    let (text, alert) = if section == MenuSection::Resume {
+        ("A   RESUME", false)
+    } else {
+        ("A   EXIT GAME", true)
+    };
+    draw_pane_cta(cv, fonts, x, bottom - p(38.0), w as u32, text, t, alert);
+}
+
+fn draw_link_pane(
+    cv: &mut Canvas,
+    fonts: &mut Fonts,
+    menu: &GameMenu,
+    x: i32,
+    y: i32,
+    w: i32,
+    bottom: i32,
+    t: f32,
+) {
+    let s = crate::theme::ui_scale();
+    let p = |v: f32| (v * s).round() as i32;
+    let _ = menu;
+    let rows = [
+        ("STATUS", netplay_status_line()),
+        (
+            "MODE",
+            ctx()
+                .netplay
+                .as_ref()
+                .map(|s| s.transport().label().to_string())
+                .unwrap_or_else(|| "NONE".into()),
+        ),
+        ("GAME", game_title().to_uppercase()),
+    ];
+    draw_kv_rows(cv, fonts, x, y + p(4.0), w, &rows);
+    draw_pane_cta(
+        cv,
+        fonts,
+        x,
+        bottom - p(38.0),
+        w as u32,
+        "A   OPEN NETPLAY",
+        t,
+        false,
+    );
 }
 
 fn draw_kv_rows(
@@ -488,13 +653,13 @@ fn draw_kv_rows(
 ) {
     let s = crate::theme::ui_scale();
     let p = |v: f32| (v * s).round() as i32;
-    let row_h = p(22.0);
+    let row_h = p(26.0);
     for (i, (key, value)) in rows.iter().enumerate() {
         let by = y + i as i32 * row_h;
-        fonts.draw(cv, x, by, key, 9.0, pal().text_faint);
-        let value = fonts.elide(value, 11.0, w - p(80.0));
-        let vw = fonts.text_width(&value, 11.0);
-        fonts.draw(cv, x + w - vw, by, &value, 11.0, pal().text);
+        fonts.draw(cv, x, by, key, 11.5, pal().text_faint);
+        let value = fonts.elide(value, 13.0, w - p(90.0));
+        let vw = fonts.text_width(&value, 13.0);
+        fonts.draw(cv, x + w - vw, by, &value, 13.0, pal().text);
     }
 }
 
@@ -510,18 +675,93 @@ fn draw_pane_cta(
 ) {
     let s = crate::theme::ui_scale();
     let p = |v: f32| (v * s).round() as i32;
-    let h = p(26.0).max(20) as u32;
+    let h = p(34.0).max(24) as u32;
     cv.fill_rect(x, y, w, h, pal().bg3);
     let accent = if alert { pal().alert } else { pal().accent };
     crate::theme::glow_border(cv, x, y, w, h, accent, pal().glow, t, 0.7);
     fonts.draw_center(
         cv,
         x + w as i32 / 2,
-        y + h as i32 / 2 + p(4.0),
+        y + h as i32 / 2 + p(5.0),
         text,
-        11.0,
+        13.0,
         accent,
     );
+}
+
+fn draw_footer(
+    cv: &mut Canvas,
+    fonts: &mut Fonts,
+    menu: &GameMenu,
+    section: MenuSection,
+    left: i32,
+    right: i32,
+    foot_y: i32,
+) {
+    let s = crate::theme::ui_scale();
+    let p = |v: f32| (v * s).round() as i32;
+    if let Some(f) = menu.hold {
+        let bw = p(300.0).min(right - left);
+        let x = left + (right - left - bw) / 2;
+        let y = foot_y - p(4.0);
+        cv.rect_outline(x, y, bw as u32, p(9.0) as u32, pal().border);
+        let fw = ((bw - 2) as f32 * f.clamp(0.0, 1.0)) as u32;
+        cv.fill_rect(
+            x + 1,
+            y + 1,
+            fw,
+            (p(9.0) as u32).saturating_sub(2),
+            pal().signal,
+        );
+        fonts.draw_center(
+            cv,
+            left + (right - left) / 2,
+            y - p(6.0),
+            "HOLD MENU: SAVE + EXIT",
+            10.0,
+            pal().signal,
+        );
+        return;
+    }
+    let hint = if menu.focus_pane {
+        "U/D OPTION   L/R VALUE   A CHANGE   B BACK"
+    } else {
+        match section {
+            MenuSection::Save => "L/R SLOT   A SAVE   Y DELETE   B RESUME",
+            MenuSection::Load => "L/R SLOT   A LOAD   Y DELETE   B RESUME",
+            MenuSection::Core | MenuSection::Video => "U/D TAB   A ADJUST   B RESUME",
+            MenuSection::Link => "A OPEN NETPLAY   B RESUME",
+            MenuSection::Disc => "L/R DISC   A SWAP   B RESUME",
+            MenuSection::Resume => "A RESUME   B CLOSE",
+            MenuSection::Exit => "A EXIT GAME   B RESUME",
+        }
+    };
+    let msg_text = menu
+        .msg
+        .as_ref()
+        .map(|(msg, _)| fonts.elide(msg, 10.0, (right - left) / 2));
+    let mut avail = right - left;
+    if let Some(text) = &msg_text {
+        avail -= fonts.text_width(text, 10.0) + p(12.0);
+    }
+    let hint = fonts.elide(hint, 10.0, avail.max(p(80.0)));
+    fonts.draw(cv, left, foot_y, &hint, 10.0, pal().text_faint);
+    if let Some(text) = &msg_text {
+        right_text(cv, fonts, right, foot_y, text, 10.0, pal().signal);
+    }
+}
+
+fn right_text(
+    cv: &mut Canvas,
+    fonts: &mut Fonts,
+    right: i32,
+    baseline: i32,
+    text: &str,
+    px: f32,
+    color: crate::theme::Color,
+) {
+    let tw = fonts.text_width(text, px);
+    fonts.draw(cv, right - tw, baseline, text, px, color);
 }
 
 fn overlay_pick(files: &OverlayLayers, idx: usize, layer: usize) -> String {
@@ -535,8 +775,24 @@ fn overlay_pick(files: &OverlayLayers, idx: usize, layer: usize) -> String {
         .to_string()
 }
 
-/// The netplay page family. The session lives in `Ctx`; this only draws the
-/// current step.
+fn game_title() -> String {
+    Path::new(&ctx().rom)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("GAME")
+        .to_string()
+}
+
+fn clip(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut t: String = s.chars().take(max.saturating_sub(2)).collect();
+        t.push_str("..");
+        t
+    }
+}
+
 pub(crate) fn draw_netplay(cv: &mut Canvas, fonts: &mut Fonts, menu: &GameMenu, t: f32) {
     let session = ctx().netplay.as_ref();
     let status = session.map(|s| s.status());
@@ -587,14 +843,6 @@ pub(crate) fn draw_netplay(cv: &mut Canvas, fonts: &mut Fonts, menu: &GameMenu, 
     }
 }
 
-fn game_title() -> String {
-    Path::new(&ctx().rom)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("GAME")
-        .to_string()
-}
-
 fn netplay_panel(
     cv: &mut Canvas,
     fonts: &mut Fonts,
@@ -616,7 +864,7 @@ fn netplay_panel(
     let hh = header + items.len().max(1) as i32 * pitch + p(44.0);
     let x0 = w / 2 - ww / 2;
     let y0 = h / 2 - hh / 2;
-    cv.fill_rect_a(x0, y0, ww as u32, hh as u32, pal().bg0, 216);
+    cv.fill_rect_a(x0, y0, ww as u32, hh as u32, pal().bg0, 245);
     crate::theme::glow_border(
         cv,
         x0,
@@ -692,7 +940,7 @@ fn draw_netplay_wait(cv: &mut Canvas, fonts: &mut Fonts, menu: &GameMenu, t: f32
     let hh = p(300.0);
     let x0 = w / 2 - ww / 2;
     let y0 = h / 2 - hh / 2;
-    cv.fill_rect_a(x0, y0, ww as u32, hh as u32, pal().bg0, 216);
+    cv.fill_rect_a(x0, y0, ww as u32, hh as u32, pal().bg0, 245);
     crate::theme::glow_border(
         cv,
         x0,
@@ -912,7 +1160,7 @@ fn netplay_message(
     let hh = p(190.0);
     let x0 = w / 2 - ww / 2;
     let y0 = h / 2 - hh / 2;
-    cv.fill_rect_a(x0, y0, ww as u32, hh as u32, pal().bg0, 216);
+    cv.fill_rect_a(x0, y0, ww as u32, hh as u32, pal().bg0, 245);
     crate::theme::glow_border(
         cv,
         x0,
@@ -933,366 +1181,7 @@ fn netplay_dots(t: f32) -> &'static str {
     ["", ".", "..", "..."][(t * 2.0) as usize % 4]
 }
 
-/// The DISC page: the images the core reported, current one marked.
-pub(crate) fn draw_disc(
-    cv: &mut Canvas,
-    fonts: &mut Fonts,
-    sel: usize,
-    msg: Option<&str>,
-    count: usize,
-    current: usize,
-    t: f32,
-) {
-    let (w, h) = (cv.w, cv.h);
-    let s = crate::theme::ui_scale();
-    let p = |v: f32| (v * s).round() as i32;
-    let count = count.max(1);
-    let current = current.min(count - 1);
-    let ww = p(400.0).min(w - p(24.0));
-    let header = p(104.0);
-    let footer = if msg.is_some() { p(80.0) } else { p(44.0) };
-    let pitch = ((h - p(12.0) - header - footer) / count as i32)
-        .min(p(36.0))
-        .max(p(24.0));
-    let hh = header + count as i32 * pitch + footer;
-    let x0 = w / 2 - ww / 2;
-    let y0 = h / 2 - hh / 2;
-    cv.fill_rect_a(x0, y0, ww as u32, hh as u32, pal().bg0, 216);
-    crate::theme::glow_border(
-        cv,
-        x0,
-        y0,
-        ww as u32,
-        hh as u32,
-        pal().border,
-        pal().glow,
-        t,
-        0.3,
-    );
-    fonts.draw_center(cv, w / 2, y0 + p(28.0), "MAGI // DISC", 16.0, pal().title);
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + p(56.0),
-        &format!("DISC {} OF {}", current + 1, count),
-        11.0,
-        pal().text_dim,
-    );
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + p(80.0),
-        "PICK A DISC, THEN INSERT",
-        9.0,
-        pal().text_faint,
-    );
-
-    for i in 0..count {
-        let c = y0 + header + i as i32 * pitch + pitch / 2;
-        let y = c + p(5.5);
-        let bh = (pitch - p(10.0)).min(p(34.0));
-        let picked = i == sel.min(count - 1);
-        if picked {
-            cv.fill_rect(
-                x0 + p(28.0),
-                c - bh / 2,
-                (ww - p(56.0)) as u32,
-                bh as u32,
-                pal().bg3,
-            );
-            crate::theme::glow_border(
-                cv,
-                x0 + p(28.0),
-                c - bh / 2,
-                (ww - p(56.0)) as u32,
-                bh as u32,
-                pal().glow,
-                crate::theme::mix(pal().glow, pal().accent, 0.35),
-                t,
-                0.4,
-            );
-        }
-        let label = if i == current {
-            format!("DISC {}   (IN)", i + 1)
-        } else {
-            format!("DISC {}", i + 1)
-        };
-        fonts.draw_center(
-            cv,
-            w / 2,
-            y,
-            &label,
-            15.0,
-            if picked { pal().accent } else { pal().text_dim },
-        );
-    }
-
-    if let Some(msg) = msg {
-        fonts.draw_center(cv, w / 2, y0 + hh - p(58.0), msg, 10.0, pal().signal);
-    }
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + hh - p(24.0),
-        "U/D PICK   A INSERT   B BACK",
-        9.0,
-        pal().text_faint,
-    );
-}
-
-pub(crate) fn draw_options(cv: &mut Canvas, fonts: &mut Fonts, menu: &GameMenu, t: f32) {
-    let (w, h) = (cv.w, cv.h);
-    let s = crate::theme::ui_scale();
-    let p = |v: f32| (v * s).round() as i32;
-    let options = &ctx().options;
-    let ids = visible_options(ctx());
-    let count = ids.len();
-    let ww = p(500.0).min(w - p(24.0));
-    let header = p(88.0);
-    let pitch = ((h - p(12.0) - header - p(28.0)) / OPT_ROWS as i32)
-        .min(p(36.0))
-        .max(p(26.0));
-    let hh = header + OPT_ROWS as i32 * pitch + p(28.0);
-    let x0 = w / 2 - ww / 2;
-    let y0 = h / 2 - hh / 2;
-    cv.fill_rect_a(x0, y0, ww as u32, hh as u32, pal().bg0, 216);
-    crate::theme::glow_border(
-        cv,
-        x0,
-        y0,
-        ww as u32,
-        hh as u32,
-        pal().border,
-        pal().glow,
-        t,
-        0.2,
-    );
-
-    let title = "MAGI // CORE OPTIONS";
-    fonts.draw_center(cv, w / 2, y0 + p(28.0), title, 16.0, pal().title);
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + p(52.0),
-        &format!("{}/{}", (menu.opt_sel + 1).min(count), count),
-        11.0,
-        pal().text_faint,
-    );
-
-    for (row, vi) in ids.iter().skip(menu.opt_top).take(OPT_ROWS).enumerate() {
-        let o = &options[*vi];
-        let c = y0 + header + row as i32 * pitch + pitch / 2;
-        let y = c + p(4.9);
-        let bh = (pitch - p(10.0)).min(p(30.0));
-        let sel = menu.opt_top + row == menu.opt_sel;
-        if sel {
-            cv.fill_rect(
-                x0 + p(14.0),
-                c - bh / 2,
-                (ww - p(28.0)) as u32,
-                bh as u32,
-                pal().bg3,
-            );
-            crate::theme::glow_border(
-                cv,
-                x0 + p(14.0),
-                c - bh / 2,
-                (ww - p(28.0)) as u32,
-                bh as u32,
-                pal().glow,
-                pal().accent,
-                t,
-                0.4,
-            );
-        }
-        let text = if sel { pal().accent } else { pal().text_dim };
-        fonts.draw(cv, x0 + p(24.0), y, clip(&o.desc, 30).as_str(), 13.5, text);
-        let value = format!("< {} >", clip(&o.values[o.chosen], 18));
-        let vw = fonts.text_width(&value, 13.5);
-        fonts.draw(
-            cv,
-            x0 + ww - p(24.0) - vw,
-            y,
-            &value,
-            13.5,
-            if sel { pal().signal } else { text },
-        );
-    }
-
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + hh - p(22.0),
-        "UP/DOWN PICK   LEFT/RIGHT CHANGE   B BACK   MENU CLOSE",
-        9.0,
-        pal().text_faint,
-    );
-}
-
-pub(crate) fn draw_overlay_menu(
-    cv: &mut Canvas,
-    fonts: &mut Fonts,
-    menu: &GameMenu,
-    files: &OverlayLayers,
-    t: f32,
-) {
-    use crate::theme::pal;
-    let (w, h) = (cv.w, cv.h);
-    let s = crate::theme::ui_scale();
-    let p = |v: f32| (v * s).round() as i32;
-    let ww = p(500.0).min(w - p(24.0));
-    let hh = p(106.0) + 4 * p(36.0) + p(28.0);
-    let x0 = w / 2 - ww / 2;
-    let y0 = h / 2 - hh / 2;
-    cv.fill_rect_a(x0, y0, ww as u32, hh as u32, pal().bg0, 216);
-    crate::theme::glow_border(
-        cv,
-        x0,
-        y0,
-        ww as u32,
-        hh as u32,
-        pal().border,
-        pal().glow,
-        t,
-        0.2,
-    );
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + p(28.0),
-        "MAGI // OVERLAYS",
-        16.0,
-        pal().title,
-    );
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + p(52.0),
-        "OSD, THEN LOWEST LAYER FIRST",
-        11.0,
-        pal().text_faint,
-    );
-
-    // Same row geometry as the pause menu: 36 px pitch, 28 px inset, the
-    // text baseline 5.5 px under the row centre.
-    let rows = ["FPS", "SYS INFO", "CRT", "BEZEL"];
-    let pitch = p(36.0);
-    for (row, label) in rows.iter().enumerate() {
-        let c = y0 + p(88.0) + row as i32 * pitch + pitch / 2;
-        let baseline = c + p(5.5);
-        let bh = (pitch - p(10.0)).min(p(36.0));
-        let sel = row == menu.overlay_sel;
-        if sel {
-            cv.fill_rect(
-                x0 + p(28.0),
-                c - bh / 2,
-                (ww - p(56.0)) as u32,
-                bh as u32,
-                pal().bg3,
-            );
-            crate::theme::glow_border(
-                cv,
-                x0 + p(28.0),
-                c - bh / 2,
-                (ww - p(56.0)) as u32,
-                bh as u32,
-                pal().glow,
-                crate::theme::mix(pal().glow, pal().accent, 0.35),
-                t,
-                0.4,
-            );
-        }
-        let text = if sel { pal().accent } else { pal().text_dim };
-        let label_w = fonts.text_width(label, 13.5);
-        fonts.draw(cv, x0 + p(38.0), baseline, label, 13.5, text);
-        let cell = |v: bool| if v { "ON" } else { "OFF" }.to_string();
-        let max_w = (ww - p(38.0) * 2 - label_w - p(12.0)).max(p(40.0));
-        let value = match row {
-            0 => cell(menu.fps),
-            1 => cell(menu.sysinfo),
-            _ => match menu.overlay_idx[row - 2] {
-                0 => "OFF".to_string(),
-                k => {
-                    let name = files
-                        .get(row - 2)
-                        .and_then(|l| l.get(k - 1))
-                        .map(|s| s.as_str())
-                        .unwrap_or("");
-                    fonts.elide(name, 13.5, max_w)
-                }
-            },
-        };
-        let vw = fonts.text_width(&value, 13.5);
-        fonts.draw(
-            cv,
-            x0 + ww - p(38.0) - vw,
-            baseline,
-            &value,
-            13.5,
-            if sel { pal().signal } else { text },
-        );
-    }
-
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + hh - p(22.0),
-        "UP/DOWN PICK   LEFT/RIGHT CHANGE   B BACK   MENU CLOSE",
-        9.0,
-        pal().text_faint,
-    );
-}
-
-fn clip(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut t: String = s.chars().take(max.saturating_sub(2)).collect();
-        t.push_str("..");
-        t
-    }
-}
-
-/// Render the overlays page with a given selection, for the headless check.
-pub(crate) fn draw_overlay_menu_preview(
-    cv: &mut Canvas,
-    fonts: &mut Fonts,
-    sel: usize,
-    idx: [usize; 2],
-    files: &OverlayLayers,
-    t: f32,
-) {
-    let menu = GameMenu {
-        open: true,
-        sel: 0,
-        msg: None,
-        exit_requested: false,
-        page: MenuPage::Overlays,
-        slot: 0,
-        opt_sel: 0,
-        opt_top: 0,
-        overlay_sel: sel,
-        overlay_idx: idx,
-        fps: false,
-        sysinfo: false,
-        hold: None,
-        disc_sel: 0,
-        netplay_page: NetplayPage::Menu,
-        netplay_sel: 0,
-        netplay_transport: netplay::Transport::Wifi,
-        netplay_role: netplay::Role::Host,
-        netplay_msg: None,
-        focus_pane: false,
-        states: Vec::new(),
-        state_sel: 0,
-        state_paths: Vec::new(),
-        auto_path: std::path::PathBuf::new(),
-        delete_armed: None,
-    };
-    draw_overlay_menu(cv, fonts, &menu, files, t);
-}
-
-/// A small synthetic frame for the state-card previews.
+/// A small synthetic frame for the state previews.
 fn fixture_thumb(seed: u32) -> Image {
     let (w, h) = (240u32, 180u32);
     let mut px = vec![0u32; (w * h) as usize];
@@ -1309,7 +1198,6 @@ fn fixture_thumb(seed: u32) -> Image {
             px[(y * w + x) as usize] = p;
         }
     }
-    // A bright block so the preview has a clear subject.
     let bx = 40 + seed * 30;
     for y in 60..120 {
         for x in bx..(bx + 60).min(w) {
@@ -1319,13 +1207,51 @@ fn fixture_thumb(seed: u32) -> Image {
     Image { w, h, px }
 }
 
-/// Render the pause dashboard with fixture data, for the headless check.
+unsafe extern "C" fn dc_eject(_: bool) -> bool {
+    true
+}
+unsafe extern "C" fn dc_get_eject() -> bool {
+    true
+}
+unsafe extern "C" fn dc_get_index() -> c_uint {
+    0
+}
+unsafe extern "C" fn dc_set_index(_: c_uint) -> bool {
+    true
+}
+unsafe extern "C" fn dc_num_images() -> c_uint {
+    3
+}
+unsafe extern "C" fn dc_replace(_: c_uint, _: *const GameInfo) -> bool {
+    true
+}
+unsafe extern "C" fn dc_add() -> bool {
+    true
+}
+
+fn preview_option(
+    key: &str,
+    desc: &str,
+    values: &[&str],
+    chosen: usize,
+    visible: bool,
+) -> CoreOption {
+    CoreOption {
+        key: key.into(),
+        desc: desc.into(),
+        values: values.iter().map(|v| v.to_string()).collect(),
+        c_values: values.iter().map(|v| CString::new(*v).unwrap()).collect(),
+        chosen,
+        visible,
+    }
+}
+
+/// Render the dashboard with fixture data, for the headless check.
 pub(crate) fn draw_menu_preview(
     cv: &mut Canvas,
     fonts: &mut Fonts,
     sel: usize,
-    focus_pane: bool,
-    state_sel: usize,
+    focus: bool,
     t: f32,
 ) {
     unsafe extern "C" fn ser_size() -> usize {
@@ -1338,17 +1264,36 @@ pub(crate) fn draw_menu_preview(
         false
     }
 
-    let option = CoreOption {
-        key: "gambatte_gb_link_mode".into(),
-        desc: "GB Link Mode".into(),
-        values: vec!["Not Connected".into(), "Network Client".into()],
-        c_values: vec![
-            CString::new("Not Connected").unwrap(),
-            CString::new("Network Client").unwrap(),
-        ],
-        chosen: 0,
-        visible: true,
-    };
+    let options = vec![
+        preview_option(
+            "gambatte_gb_link_mode",
+            "GB Link Mode",
+            &["Not Connected", "Network Client"],
+            0,
+            true,
+        ),
+        preview_option(
+            "gambatte_gb_colorization",
+            "Color Correction",
+            &["Disabled", "GBC", "Auto"],
+            2,
+            true,
+        ),
+        preview_option(
+            "gambatte_mix_frames",
+            "Interframe Blending",
+            &["Off", "On"],
+            1,
+            true,
+        ),
+        preview_option(
+            "gambatte_rumble_level",
+            "Rumble Strength",
+            &["0", "1", "2", "3"],
+            1,
+            true,
+        ),
+    ];
     let mut fixture = Ctx {
         pixfmt: 0,
         geometry: GameGeometry {
@@ -1372,18 +1317,29 @@ pub(crate) fn draw_menu_preview(
         ser_size,
         ser,
         unser,
-        options: vec![option],
+        options,
         opt_key: "gambatte".into(),
         opt_dirty: false,
         saved_opts: std::collections::HashMap::new(),
-        overlay_layers: std::array::from_fn(|_| Vec::new()),
+        overlay_layers: [
+            vec!["CRT/Perfect_CRT.png".into()],
+            vec!["GB/mugwomp93/Perfect_GBP-EX.png".into()],
+        ],
         overlay_dirty: false,
         moto: None,
         rumble_on: false,
         rumble_ok: false,
-        disk: None,
+        disk: Some(DiskControl {
+            set_eject_state: dc_eject,
+            get_eject_state: dc_get_eject,
+            get_image_index: dc_get_index,
+            set_image_index: dc_set_index,
+            get_num_images: dc_num_images,
+            replace_image_index: dc_replace,
+            add_image_index: dc_add,
+        }),
         system: "gb".into(),
-        rom: "Super Mario Land (World).gb".into(),
+        rom: "Metal Gear Solid (Europe) (En,Fr,De,Es).gbc".into(),
         netplay: None,
         netplay_linked: false,
     };
@@ -1395,34 +1351,23 @@ pub(crate) fn draw_menu_preview(
         StateCard {
             path: slot(1),
             label: "SLOT 1".into(),
-            age: "2H AGO".into(),
+            age: "9M AGO".into(),
             thumb: Some(fixture_thumb(0)),
             exists: true,
-            auto: false,
         },
         StateCard {
             path: slot(2),
             label: "SLOT 2".into(),
-            age: String::new(),
-            thumb: None,
-            exists: false,
-            auto: false,
+            age: "3D AGO".into(),
+            thumb: Some(fixture_thumb(2)),
+            exists: true,
         },
         StateCard {
             path: slot(3),
             label: "SLOT 3".into(),
-            age: "3D AGO".into(),
-            thumb: Some(fixture_thumb(2)),
-            exists: true,
-            auto: false,
-        },
-        StateCard {
-            path: std::path::PathBuf::from("Saves/preview.stateauto"),
-            label: "AUTO".into(),
-            age: "5M AGO".into(),
-            thumb: Some(fixture_thumb(4)),
-            exists: true,
-            auto: true,
+            age: String::new(),
+            thumb: None,
+            exists: false,
         },
     ];
     let menu = GameMenu {
@@ -1432,22 +1377,21 @@ pub(crate) fn draw_menu_preview(
         exit_requested: false,
         page: MenuPage::Main,
         slot: 0,
-        opt_sel: 0,
+        opt_sel: 1,
         opt_top: 0,
-        overlay_sel: 0,
+        overlay_sel: 1,
         overlay_idx: [1, 1],
         fps: true,
         sysinfo: false,
         hold: None,
-        disc_sel: 0,
+        disc_sel: 1,
         netplay_page: NetplayPage::Menu,
         netplay_sel: 0,
         netplay_transport: netplay::Transport::Wifi,
         netplay_role: netplay::Role::Host,
         netplay_msg: None,
-        focus_pane,
+        focus_pane: focus,
         states,
-        state_sel,
         state_paths: vec![slot(1), slot(2), slot(3)],
         auto_path: std::path::PathBuf::from("Saves/preview.stateauto"),
         delete_armed: None,

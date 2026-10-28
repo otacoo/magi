@@ -6,13 +6,14 @@ use super::*;
 
 mod draw;
 
-pub(crate) use draw::{draw_disc, draw_menu_preview, draw_overlay_menu_preview};
-pub(super) use draw::{draw_menu, draw_netplay, draw_options, draw_overlay_menu};
+pub(crate) use draw::draw_menu_preview;
+pub(super) use draw::{draw_menu, draw_netplay};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MenuSection {
     Resume,
-    States,
+    Save,
+    Load,
     Core,
     Video,
     Link,
@@ -24,7 +25,8 @@ impl MenuSection {
     fn label(self) -> &'static str {
         match self {
             Self::Resume => "RESUME",
-            Self::States => "STATES",
+            Self::Save => "SAVE STATE",
+            Self::Load => "LOAD STATE",
             Self::Core => "CORE",
             Self::Video => "VIDEO",
             Self::Link => "LINK",
@@ -36,23 +38,35 @@ impl MenuSection {
     fn title(self) -> &'static str {
         match self {
             Self::Resume => "RESUME GAME",
-            Self::States => "SAVE STATES",
+            Self::Save => "SAVE STATE",
+            Self::Load => "LOAD STATE",
             Self::Core => "CORE OPTIONS",
-            Self::Video => "VIDEO & OVERLAYS",
+            Self::Video => "VIDEO",
             Self::Link => "GAME BOY LINK",
-            Self::Disc => "DISC SWAPPER",
+            Self::Disc => "DISC",
             Self::Exit => "EXIT GAME",
         }
     }
 }
 
-const OPT_ROWS: usize = 7;
+/// Rows that fit in the option pane at the current text scale.
+fn option_rows() -> usize {
+    match crate::theme::ui_scale() {
+        s if s >= 1.4 => 4,
+        s if s >= 1.2 => 6,
+        _ => 8,
+    }
+}
 
 fn menu_sections() -> Vec<MenuSection> {
     let linked = ctx().netplay_linked;
-    let mut v = vec![MenuSection::Resume, MenuSection::States];
-    if !linked && ctx().options.iter().any(|o| o.visible) {
-        v.push(MenuSection::Core);
+    let mut v = vec![MenuSection::Resume];
+    if !linked {
+        v.push(MenuSection::Save);
+        v.push(MenuSection::Load);
+        if ctx().options.iter().any(|o| o.visible) {
+            v.push(MenuSection::Core);
+        }
     }
     v.push(MenuSection::Video);
     if netplay_supported() {
@@ -88,14 +102,14 @@ fn netplay_status_line() -> String {
 
 fn section_summary(section: MenuSection) -> String {
     match section {
-        MenuSection::Resume => "RETURN TO THE RUNNING GAME".into(),
-        MenuSection::States if ctx().netplay_linked => "LOCKED WHILE LINKED".into(),
-        MenuSection::States => format!("{STATE_SLOTS} SLOTS + AUTO RESUME"),
-        MenuSection::Core => format!("{} VISIBLE OPTIONS", visible_options(ctx()).len()),
-        MenuSection::Video => "ON-SCREEN DISPLAY AND LAYERS".into(),
+        MenuSection::Resume => "RETURN TO THE GAME".into(),
+        MenuSection::Save => "WRITE THE CURRENT POSITION".into(),
+        MenuSection::Load => "RETURN TO A SAVED POSITION".into(),
+        MenuSection::Core => "PER-GAME SETTINGS".into(),
+        MenuSection::Video => "DISPLAY AND LAYER OPTIONS".into(),
         MenuSection::Link => netplay_status_line(),
-        MenuSection::Disc => format!("DISC {}/{}", disc_index() + 1, disc_count()),
-        MenuSection::Exit => "FLUSH SRAM AND RETURN TO SHELF".into(),
+        MenuSection::Disc => "SWAP WITHOUT RESET".into(),
+        MenuSection::Exit => "FLUSH SRAM AND QUIT".into(),
     }
 }
 
@@ -114,7 +128,7 @@ fn format_state_age(age: Duration) -> String {
     }
 }
 
-fn read_state_card(path: &Path, label: String, auto: bool, now: SystemTime) -> StateCard {
+fn read_state_card(path: &Path, label: String, now: SystemTime) -> StateCard {
     let meta = std::fs::metadata(path).ok();
     let exists = meta.is_some();
     let age = meta
@@ -123,7 +137,14 @@ fn read_state_card(path: &Path, label: String, auto: bool, now: SystemTime) -> S
         .map(format_state_age)
         .unwrap_or_default();
     let thumb = if exists {
-        crate::image::load_image(&state_thumb_path(path))
+        let thumb = crate::image::load_image(&state_thumb_path(path));
+        if thumb.is_none() {
+            util::log(&format!(
+                "state thumb: missing {}",
+                state_thumb_path(path).display()
+            ));
+        }
+        thumb
     } else {
         None
     };
@@ -133,7 +154,6 @@ fn read_state_card(path: &Path, label: String, auto: bool, now: SystemTime) -> S
         age,
         thumb,
         exists,
-        auto,
     }
 }
 
@@ -159,7 +179,9 @@ impl GameMenu {
         self.page = MenuPage::Main;
         self.focus_pane = false;
         self.sel = 0;
-        self.state_sel = self.slot.min(STATE_SLOTS - 1);
+        self.slot = self.slot.min(STATE_SLOTS - 1);
+        self.disc_sel = disc_index().min(disc_count().saturating_sub(1));
+        self.msg = None;
         self.delete_armed = None;
         self.refresh_states();
     }
@@ -182,82 +204,13 @@ impl GameMenu {
             || (e.type_ == ev::EV_ABS && e.code == ev::ABS_HAT0X && e.value > 0);
         let a = e.type_ == ev::EV_KEY && e.code == ev::BTN_SOUTH;
         let b = e.type_ == ev::EV_KEY && e.code == ev::BTN_EAST;
-        let x = e.type_ == ev::EV_KEY && e.code == ev::BTN_NORTH;
         let y = e.type_ == ev::EV_KEY && e.code == ev::BTN_C;
-
-        if self.page == MenuPage::Disc {
-            let count = disc_count();
-            if count < 2 {
-                self.page = MenuPage::Main;
-                return;
-            }
-            if up {
-                self.disc_sel = cycled(self.disc_sel, count, -1);
-            } else if down {
-                self.disc_sel = cycled(self.disc_sel, count, 1);
-            } else if a {
-                self.msg = Some(match disc_swap(self.disc_sel) {
-                    true => (
-                        format!("DISC {} INSERTED", self.disc_sel + 1),
-                        Instant::now(),
-                    ),
-                    false => ("DISC SWAP FAILED".into(), Instant::now()),
-                });
-            } else if b {
-                self.page = MenuPage::Main;
-            }
-            return;
-        }
-
-        if self.page == MenuPage::Options {
-            let count = visible_options(ctx()).len();
-            if up {
-                self.opt_sel = cycled(self.opt_sel, count, -1);
-                self.scroll_options(count);
-            } else if down {
-                self.opt_sel = cycled(self.opt_sel, count, 1);
-                self.scroll_options(count);
-            } else if left {
-                self.change_option(-1);
-            } else if right || a {
-                self.change_option(1);
-            } else if b {
-                self.page = MenuPage::Main;
-            }
-            return;
-        }
-
-        if self.page == MenuPage::Overlays {
-            const ROWS: usize = 4;
-            if up {
-                self.overlay_sel = (self.overlay_sel + ROWS - 1) % ROWS;
-            } else if down {
-                self.overlay_sel = (self.overlay_sel + 1) % ROWS;
-            } else if left || right || a {
-                if self.overlay_sel == 0 {
-                    self.fps = !self.fps;
-                } else if self.overlay_sel == 1 {
-                    self.sysinfo = !self.sysinfo;
-                } else {
-                    let layer = self.overlay_sel - 2;
-                    let n = ctx().overlay_layers[layer].len() as i32 + 1;
-                    let delta = if left { -1 } else { 1 };
-                    let cur = &mut self.overlay_idx[layer];
-                    *cur = (((*cur as i32 + delta) % n) + n) as usize % n as usize;
-                }
-                ctx().overlay_dirty = true;
-            } else if b {
-                self.page = MenuPage::Main;
-            }
-            return;
-        }
 
         if self.page == MenuPage::Netplay {
             self.handle_netplay(up, down, a, b);
             return;
         }
-
-        self.handle_main(up, down, left, right, a, b, x, y);
+        self.handle_main(up, down, left, right, a, b, y);
     }
 
     fn handle_main(
@@ -268,7 +221,6 @@ impl GameMenu {
         right: bool,
         a: bool,
         b: bool,
-        x: bool,
         y: bool,
     ) {
         let sections = menu_sections();
@@ -277,167 +229,116 @@ impl GameMenu {
         }
         let section = sections[self.sel];
 
-        if !self.focus_pane {
-            if up {
-                self.sel = cycled(self.sel, sections.len(), -1);
-            } else if down {
-                self.sel = cycled(self.sel, sections.len(), 1);
-            } else if right {
-                self.focus_pane = true;
-                if section == MenuSection::States {
-                    self.refresh_states();
-                    if self.state_sel < STATE_SLOTS {
-                        self.slot = self.state_sel;
-                    }
+        if self.focus_pane {
+            match section {
+                MenuSection::Core => {
+                    self.handle_core(up, down, left, right, a, b);
+                    return;
                 }
-            } else if a {
-                match section {
-                    MenuSection::Resume => self.open = false,
-                    MenuSection::States | MenuSection::Exit => {
-                        self.focus_pane = true;
-                        if section == MenuSection::States {
-                            self.refresh_states();
-                            if self.state_sel < STATE_SLOTS {
-                                self.slot = self.state_sel;
-                            }
-                        }
-                    }
-                    MenuSection::Core => {
-                        self.page = MenuPage::Options;
-                        self.opt_sel = 0;
-                        self.opt_top = 0;
-                    }
-                    MenuSection::Video => {
-                        self.page = MenuPage::Overlays;
-                        self.overlay_sel = 0;
-                    }
-                    MenuSection::Link => self.open_netplay(),
-                    MenuSection::Disc => {
-                        let count = disc_count();
-                        self.page = MenuPage::Disc;
-                        self.disc_sel = disc_index().min(count.saturating_sub(1));
-                    }
+                MenuSection::Video => {
+                    self.handle_video(up, down, left, right, a, b);
+                    return;
                 }
-            } else if b {
-                self.open = false;
+                _ => self.focus_pane = false,
             }
-            return;
         }
 
-        match section {
-            MenuSection::States => self.handle_states(up, down, left, right, a, b, x, y),
-            MenuSection::Resume => {
-                if a {
-                    self.open = false;
-                } else if b || left {
-                    self.focus_pane = false;
+        if up {
+            self.sel = cycled(self.sel, sections.len(), -1);
+            self.delete_armed = None;
+        } else if down {
+            self.sel = cycled(self.sel, sections.len(), 1);
+            self.delete_armed = None;
+        } else if left || right {
+            let delta = if right { 1 } else { -1 };
+            match section {
+                MenuSection::Save | MenuSection::Load => {
+                    self.slot = cycled(self.slot, STATE_SLOTS, delta);
+                    self.delete_armed = None;
                 }
-            }
-            MenuSection::Core => {
-                if a {
-                    self.page = MenuPage::Options;
-                    self.opt_sel = 0;
-                    self.opt_top = 0;
-                } else if b || left {
-                    self.focus_pane = false;
-                }
-            }
-            MenuSection::Video => {
-                if a {
-                    self.page = MenuPage::Overlays;
-                    self.overlay_sel = 0;
-                } else if b || left {
-                    self.focus_pane = false;
-                }
-            }
-            MenuSection::Link => {
-                if a {
-                    self.open_netplay();
-                } else if b || left {
-                    self.focus_pane = false;
-                }
-            }
-            MenuSection::Disc => {
-                if a {
+                MenuSection::Disc => {
                     let count = disc_count();
-                    self.page = MenuPage::Disc;
-                    self.disc_sel = disc_index().min(count.saturating_sub(1));
-                } else if b || left {
-                    self.focus_pane = false;
+                    self.disc_sel = cycled(self.disc_sel, count, delta);
                 }
+                MenuSection::Core | MenuSection::Video if right => {
+                    self.focus_pane = true;
+                }
+                _ => {}
             }
-            MenuSection::Exit => {
-                if a {
+        } else if a {
+            match section {
+                MenuSection::Resume => self.open = false,
+                MenuSection::Save => self.save_selected_state(),
+                MenuSection::Load => self.load_selected_state(),
+                MenuSection::Core | MenuSection::Video => self.focus_pane = true,
+                MenuSection::Link => self.open_netplay(),
+                MenuSection::Disc => {
+                    if disc_count() > 1 {
+                        self.msg = Some(match disc_swap(self.disc_sel) {
+                            true => (
+                                format!("DISC {} INSERTED", self.disc_sel + 1),
+                                Instant::now(),
+                            ),
+                            false => ("DISC SWAP FAILED".into(), Instant::now()),
+                        });
+                    }
+                }
+                MenuSection::Exit => {
                     netplay_stop();
                     self.exit_requested = true;
-                } else if b || left {
-                    self.focus_pane = false;
                 }
             }
+        } else if y {
+            if matches!(section, MenuSection::Save | MenuSection::Load) {
+                self.delete_selected_state();
+            }
+        } else if b {
+            self.open = false;
         }
     }
 
-    fn handle_states(
-        &mut self,
-        up: bool,
-        down: bool,
-        left: bool,
-        right: bool,
-        a: bool,
-        b: bool,
-        x: bool,
-        y: bool,
-    ) {
-        if self.states.len() < STATE_CARDS {
-            self.refresh_states();
-        }
-        if self.state_sel >= self.states.len() {
-            self.state_sel = 0;
-        }
-        if !y {
-            if let Some((_, at)) = self.delete_armed {
-                if at.elapsed() > Duration::from_secs(3) {
-                    self.delete_armed = None;
-                }
-            }
+    fn handle_core(&mut self, up: bool, down: bool, left: bool, right: bool, a: bool, b: bool) {
+        let count = visible_options(ctx()).len();
+        if count == 0 {
+            self.focus_pane = false;
+            return;
         }
         if up {
-            if self.state_sel >= 2 {
-                self.state_sel -= 2;
-                self.delete_armed = None;
-            }
+            self.opt_sel = cycled(self.opt_sel, count, -1);
+            self.scroll_options(count);
         } else if down {
-            if self.state_sel + 2 < STATE_CARDS {
-                self.state_sel += 2;
-                self.delete_armed = None;
-            }
+            self.opt_sel = cycled(self.opt_sel, count, 1);
+            self.scroll_options(count);
         } else if left {
-            if self.state_sel % 2 == 1 {
-                self.state_sel -= 1;
-                self.delete_armed = None;
-            } else {
-                self.focus_pane = false;
-                self.delete_armed = None;
-            }
-        } else if right {
-            if self.state_sel.is_multiple_of(2) && self.state_sel + 1 < STATE_CARDS {
-                self.state_sel += 1;
-                self.delete_armed = None;
-            }
-        } else if a {
-            self.delete_armed = None;
-            self.load_selected_state();
-        } else if x {
-            self.delete_armed = None;
-            self.save_selected_state();
-        } else if y {
-            self.delete_selected_state();
+            self.change_option(-1);
+        } else if right || a {
+            self.change_option(1);
         } else if b {
             self.focus_pane = false;
-            self.delete_armed = None;
         }
-        if self.state_sel < STATE_SLOTS {
-            self.slot = self.state_sel;
+    }
+
+    fn handle_video(&mut self, up: bool, down: bool, left: bool, right: bool, a: bool, b: bool) {
+        const ROWS: usize = 4;
+        if up {
+            self.overlay_sel = (self.overlay_sel + ROWS - 1) % ROWS;
+        } else if down {
+            self.overlay_sel = (self.overlay_sel + 1) % ROWS;
+        } else if left || right || a {
+            if self.overlay_sel == 0 {
+                self.fps = !self.fps;
+            } else if self.overlay_sel == 1 {
+                self.sysinfo = !self.sysinfo;
+            } else {
+                let layer = self.overlay_sel - 2;
+                let n = ctx().overlay_layers[layer].len() as i32 + 1;
+                let delta = if left { -1 } else { 1 };
+                let cur = &mut self.overlay_idx[layer];
+                *cur = (((*cur as i32 + delta) % n) + n) as usize % n as usize;
+            }
+            ctx().overlay_dirty = true;
+        } else if b {
+            self.focus_pane = false;
         }
     }
 
@@ -446,12 +347,10 @@ impl GameMenu {
         self.states.clear();
         for (i, path) in self.state_paths.iter().enumerate() {
             self.states
-                .push(read_state_card(path, format!("SLOT {}", i + 1), false, now));
+                .push(read_state_card(path, format!("SLOT {}", i + 1), now));
         }
-        self.states
-            .push(read_state_card(&self.auto_path, "AUTO".into(), true, now));
-        if self.state_sel >= self.states.len() {
-            self.state_sel = 0;
+        if self.slot >= self.states.len() {
+            self.slot = 0;
         }
     }
 
@@ -460,13 +359,16 @@ impl GameMenu {
             self.msg = Some(("LINKED: STATES LOCKED".into(), Instant::now()));
             return;
         }
-        let idx = self.state_sel.min(self.states.len().saturating_sub(1));
+        if self.states.len() < STATE_SLOTS {
+            self.refresh_states();
+        }
+        let idx = self.slot.min(self.states.len().saturating_sub(1));
         let Some(card) = self.states.get(idx) else {
             return;
         };
-        let (path, label, auto) = (card.path.clone(), card.label.clone(), card.auto);
+        let (path, label) = (card.path.clone(), card.label.clone());
         let saved = save_state_to(&path);
-        if saved == Some(true) && !auto {
+        if saved == Some(true) {
             // An explicit save is also the resume point for the next launch.
             match save_state_to(&self.auto_path) {
                 Some(true) => util::log("auto state saved (menu)"),
@@ -487,7 +389,10 @@ impl GameMenu {
             self.msg = Some(("LINKED: STATES LOCKED".into(), Instant::now()));
             return;
         }
-        let idx = self.state_sel.min(self.states.len().saturating_sub(1));
+        if self.states.len() < STATE_SLOTS {
+            self.refresh_states();
+        }
+        let idx = self.slot.min(self.states.len().saturating_sub(1));
         let Some(card) = self.states.get(idx) else {
             return;
         };
@@ -496,11 +401,11 @@ impl GameMenu {
             self.msg = Some((format!("{label} EMPTY"), Instant::now()));
             return;
         }
-        self.msg = Some(match load_state_from(&path) {
-            Ok(true) => (format!("{label} LOADED"), Instant::now()),
-            Ok(false) => ("LOAD FAILED".into(), Instant::now()),
-            Err(_) => ("NO STATE FILE".into(), Instant::now()),
-        });
+        match load_state_from(&path) {
+            Ok(true) => self.open = false,
+            Ok(false) => self.msg = Some(("LOAD FAILED".into(), Instant::now())),
+            Err(_) => self.msg = Some(("NO STATE FILE".into(), Instant::now())),
+        }
     }
 
     fn delete_selected_state(&mut self) {
@@ -508,7 +413,10 @@ impl GameMenu {
             self.msg = Some(("LINKED: STATES LOCKED".into(), Instant::now()));
             return;
         }
-        let idx = self.state_sel.min(self.states.len().saturating_sub(1));
+        if self.states.len() < STATE_SLOTS {
+            self.refresh_states();
+        }
+        let idx = self.slot.min(self.states.len().saturating_sub(1));
         let Some(card) = self.states.get(idx) else {
             return;
         };
@@ -531,6 +439,29 @@ impl GameMenu {
         }
         self.delete_armed = Some((idx, now));
         self.msg = Some((format!("PRESS Y AGAIN: DELETE {label}"), now));
+    }
+
+    fn scroll_options(&mut self, count: usize) {
+        let rows = option_rows();
+        if self.opt_sel < self.opt_top {
+            self.opt_top = self.opt_sel;
+        }
+        if self.opt_sel >= self.opt_top + rows {
+            self.opt_top = self.opt_sel + 1 - rows;
+        }
+        self.opt_top = self.opt_top.min(count.saturating_sub(rows));
+    }
+
+    fn change_option(&mut self, delta: isize) {
+        let ctx = ctx();
+        let ids = visible_options(ctx);
+        if self.opt_sel >= ids.len() {
+            return;
+        }
+        let o = &mut ctx.options[ids[self.opt_sel]];
+        o.chosen = cycled(o.chosen, o.values.len(), delta);
+        ctx.opt_dirty = true; // cores that support live updates re-read it
+        save_core_options(ctx);
     }
 
     fn open_netplay(&mut self) {
@@ -765,28 +696,6 @@ impl GameMenu {
         self.netplay_sel = 0;
         self.netplay_msg = None;
     }
-
-    fn scroll_options(&mut self, count: usize) {
-        if self.opt_sel < self.opt_top {
-            self.opt_top = self.opt_sel;
-        }
-        if self.opt_sel >= self.opt_top + OPT_ROWS {
-            self.opt_top = self.opt_sel + 1 - OPT_ROWS;
-        }
-        let _ = count;
-    }
-
-    fn change_option(&mut self, delta: isize) {
-        let ctx = ctx();
-        let ids = visible_options(ctx);
-        if self.opt_sel >= ids.len() {
-            return;
-        }
-        let o = &mut ctx.options[ids[self.opt_sel]];
-        o.chosen = cycled(o.chosen, o.values.len(), delta);
-        ctx.opt_dirty = true; // cores that support live updates re-read it
-        save_core_options(ctx);
-    }
 }
 
 #[cfg(test)]
@@ -812,7 +721,7 @@ mod state_tests {
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("missing.state");
         let _ = std::fs::remove_file(&path);
-        let card = read_state_card(&path, "SLOT 1".into(), false, SystemTime::now());
+        let card = read_state_card(&path, "SLOT 1".into(), SystemTime::now());
         assert!(!card.exists);
         assert!(card.thumb.is_none());
         assert!(card.age.is_empty());

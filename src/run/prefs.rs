@@ -39,6 +39,16 @@ pub(super) fn load_runtime_prefs() -> (u32, bool) {
 }
 
 /// The screenshot-chord preference (MISC page), read once per launch.
+/// The shelf text-size setting, clamped to the available steps.
+pub(super) fn load_text_scale() -> f32 {
+    std::fs::read_to_string(runtime_config_path())
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("text_scale").and_then(|x| x.as_f64()))
+        .map(|v| (v as f32).clamp(1.0, 1.5))
+        .unwrap_or(Defaults::TEXT_SCALE)
+}
+
 pub(super) fn load_shot_chord_pref() -> bool {
     std::fs::read_to_string(runtime_config_path())
         .ok()

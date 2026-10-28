@@ -33,8 +33,8 @@ mod overlay;
 mod pad;
 mod prefs;
 
-pub(crate) use menu::{draw_disc, draw_menu_preview, draw_overlay_menu_preview};
-use menu::{draw_menu, draw_netplay, draw_options, draw_overlay_menu};
+pub(crate) use menu::draw_menu_preview;
+use menu::{draw_menu, draw_netplay};
 #[cfg(target_os = "linux")]
 use overlay::upload_overlay;
 use overlay::{
@@ -44,8 +44,8 @@ use overlay::{
 use pad::{pump_pads, PadHat, PadState};
 use prefs::{
     load_display_prefs, load_runtime_prefs, load_runtime_volume, load_shot_chord_pref,
-    save_display_prefs, save_runtime_volume, scale_factors, AdjKind, AdjState, DisplayPrefs,
-    ScaleMode, COMBO_FIRST_REPEAT, COMBO_REPEAT, COMBO_STEP, DOUBLE_TAP, TRIGGER_ON,
+    load_text_scale, save_display_prefs, save_runtime_volume, scale_factors, AdjKind, AdjState,
+    DisplayPrefs, ScaleMode, COMBO_FIRST_REPEAT, COMBO_REPEAT, COMBO_STEP, DOUBLE_TAP, TRIGGER_ON,
 };
 
 #[cfg(target_os = "linux")]
@@ -1095,6 +1095,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     crate::theme::set_bg_style(disp.background);
     crate::theme::set_anim_bg(disp.anim_bg);
     crate::theme::set_glow(disp.glow);
+    crate::theme::set_ui_scale(load_text_scale());
     crate::theme::set_warmth(disp.warmth as u8);
     crate::input::set_shot_chord(load_shot_chord_pref());
     // The panel keeps its level across reboots only through us.
@@ -1243,7 +1244,6 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         netplay_msg: None,
         focus_pane: false,
         states: Vec::new(),
-        state_sel: 0,
         state_paths: state_paths.clone(),
         auto_path: auto_state_path(&save_dir, &stem),
         delete_armed: None,
@@ -1843,19 +1843,6 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                 let menu_cv = if gpu_menu { &mut layer } else { &mut cv };
                 match menu.page {
                     MenuPage::Main => draw_menu(menu_cv, &mut fonts, &menu, rom, t),
-                    MenuPage::Options => draw_options(menu_cv, &mut fonts, &menu, t),
-                    MenuPage::Overlays => {
-                        draw_overlay_menu(menu_cv, &mut fonts, &menu, &ctx().overlay_layers, t)
-                    }
-                    MenuPage::Disc => draw_disc(
-                        menu_cv,
-                        &mut fonts,
-                        menu.disc_sel,
-                        menu.msg.as_ref().map(|(m, _)| m.as_str()),
-                        disc_count(),
-                        disc_index(),
-                        t,
-                    ),
                     MenuPage::Netplay => draw_netplay(menu_cv, &mut fonts, &menu, t),
                 }
                 // Overlays and screenshots work while paused too.
@@ -2436,7 +2423,6 @@ pub fn apply_gain(samples: &mut [i16], pct: u8) {
 
 /// Save-state slots per game.
 const STATE_SLOTS: usize = 3;
-const STATE_CARDS: usize = STATE_SLOTS + 1;
 
 /// Holding MENU this long saves the state and leaves the game; the
 /// progress bar only appears past the hint delay, so a plain tap never
@@ -2724,7 +2710,12 @@ fn state_thumb_path(path: &Path) -> std::path::PathBuf {
 /// Capture the current game frame as a small PNG beside a state.
 fn save_state_thumb(path: &Path) {
     let ctx = ctx();
-    if ctx.frame.is_null() || ctx.geometry.base_width == 0 || ctx.geometry.base_height == 0 {
+    if ctx.frame.is_null()
+        || ctx.pitch == 0
+        || ctx.geometry.base_width == 0
+        || ctx.geometry.base_height == 0
+    {
+        util::log("state thumb: no frame available");
         return;
     }
     let mut cv = Canvas::new(240, 180);
@@ -2737,11 +2728,17 @@ fn save_state_thumb(path: &Path) {
         }
     };
     let thumb = state_thumb_path(path);
-    if let Err(e) = util::write_file_atomic(&thumb, &bytes) {
-        util::log(&format!(
+    match util::write_file_atomic(&thumb, &bytes) {
+        Ok(()) => util::log(&format!(
+            "state thumb saved: {} ({}x{})",
+            thumb.display(),
+            cv.w,
+            cv.h
+        )),
+        Err(e) => util::log(&format!(
             "state thumb: cannot write {}: {e}",
             thumb.display()
-        ));
+        )),
     }
 }
 
@@ -2823,9 +2820,6 @@ fn cstr(p: *const c_char) -> String {
 #[derive(PartialEq)]
 enum MenuPage {
     Main,
-    Options,
-    Overlays,
-    Disc,
     Netplay,
 }
 
@@ -2846,15 +2840,16 @@ struct StateCard {
     age: String,
     thumb: Option<Image>,
     exists: bool,
-    auto: bool,
 }
 
 struct GameMenu {
     open: bool,
+    /// Selected folder tab.
     sel: usize,
     msg: Option<(String, Instant)>,
     exit_requested: bool,
     page: MenuPage,
+    /// State slot shown by SAVE/LOAD and used by quick save.
     slot: usize,
     opt_sel: usize,
     opt_top: usize,
@@ -2865,16 +2860,16 @@ struct GameMenu {
     sysinfo: bool,
     /// Progress of the held-MENU save-and-exit gesture, when underway.
     hold: Option<f32>,
-    /// The pending image on the DISC page.
+    /// The selected image on the DISC tab.
     disc_sel: usize,
     netplay_page: NetplayPage,
     netplay_sel: usize,
     netplay_transport: netplay::Transport,
     netplay_role: netplay::Role,
     netplay_msg: Option<String>,
+    /// CORE or VIDEO is focused for option changes.
     focus_pane: bool,
     states: Vec<StateCard>,
-    state_sel: usize,
     state_paths: Vec<std::path::PathBuf>,
     auto_path: std::path::PathBuf,
     delete_armed: Option<(usize, Instant)>,
@@ -3439,6 +3434,10 @@ mod state_slot_tests {
         assert_eq!(
             super::state_slot_path(dir, "Game", 2),
             Path::new(dir).join("Game.state3")
+        );
+        assert_eq!(
+            super::state_thumb_path(Path::new("Saves/GBC/Game.state")),
+            Path::new("Saves/GBC/Game.state.png")
         );
     }
 }
