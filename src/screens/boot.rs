@@ -30,6 +30,9 @@ const BRAIN_TOP: i32 = 116;
 const BRAIN_H: u32 = 244;
 const BRAIN_CENTER_Y: i32 = 238;
 
+/// The static bootloader splash uses a larger version of the same brain.
+const SPLASH_H: u32 = 300;
+
 const BOX_W: i32 = 168;
 const BOX_H: i32 = 62;
 const BOX_GAP: i32 = 22;
@@ -54,34 +57,40 @@ fn brain() -> Option<&'static Image> {
     .as_ref()
 }
 
-/// The boot splash brain, cropped to its alpha bounds and graded once.
+/// The animated boot brain, cropped to its alpha bounds and graded once.
 fn boot_brain() -> Option<&'static Image> {
     static IMG: OnceLock<Option<Image>> = OnceLock::new();
-    IMG.get_or_init(|| {
-        let src = brain()?;
-        let (x0, y0, x1, y1) = alpha_bounds(src)?;
-        let (cw, ch) = (x1 - x0, y1 - y0);
-        if cw == 0 || ch == 0 {
-            return None;
+    IMG.get_or_init(|| build_graded_brain(BRAIN_H)).as_ref()
+}
+
+/// The static bootloader splash brain, a larger version of the same art.
+fn splash_brain() -> Option<&'static Image> {
+    static IMG: OnceLock<Option<Image>> = OnceLock::new();
+    IMG.get_or_init(|| build_graded_brain(SPLASH_H)).as_ref()
+}
+
+fn build_graded_brain(target_h: u32) -> Option<Image> {
+    let src = brain()?;
+    let (x0, y0, x1, y1) = alpha_bounds(src)?;
+    let (cw, ch) = (x1 - x0, y1 - y0);
+    if cw == 0 || ch == 0 {
+        return None;
+    }
+    let target_w = (cw as f32 * target_h as f32 / ch as f32).round().max(1.0) as u32;
+    let mut px = vec![0u32; (target_w * target_h) as usize];
+    for y in 0..target_h {
+        let sy = y0 + y * ch / target_h;
+        for x in 0..target_w {
+            let sx = x0 + x * cw / target_w;
+            let p = src.px[(sy * src.w + sx) as usize];
+            px[(y * target_w + x) as usize] = grade_pixel(p);
         }
-        let target_h = BRAIN_H;
-        let target_w = (cw as f32 * target_h as f32 / ch as f32).round().max(1.0) as u32;
-        let mut px = vec![0u32; (target_w * target_h) as usize];
-        for y in 0..target_h {
-            let sy = y0 + y * ch / target_h;
-            for x in 0..target_w {
-                let sx = x0 + x * cw / target_w;
-                let p = src.px[(sy * src.w + sx) as usize];
-                px[(y * target_w + x) as usize] = grade_pixel(p);
-            }
-        }
-        Some(Image {
-            w: target_w,
-            h: target_h,
-            px,
-        })
+    }
+    Some(Image {
+        w: target_w,
+        h: target_h,
+        px,
     })
-    .as_ref()
 }
 
 fn alpha_bounds(img: &Image) -> Option<(u32, u32, u32, u32)> {
@@ -572,8 +581,8 @@ pub fn render_bootlogo(cv: &mut Canvas, fonts: &mut Fonts) {
     let h = cv.h;
     cv.clear(pal().bg0);
     hex_backdrop(cv, 0.0);
-    if let Some(brain) = brain() {
-        brain.draw(cv, (w - brain.w as i32) / 2, (h - brain.h as i32) / 2, 70);
+    if let Some(brain) = splash_brain() {
+        brain.draw(cv, (w - brain.w as i32) / 2, (h - brain.h as i32) / 2, 80);
     }
     let tw = fonts.text_width("M A G I", 34.0);
     fonts.draw_alpha(
