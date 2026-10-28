@@ -16,7 +16,7 @@ use crate::present::Presenter;
 use crate::screens::keyboard::{self, KeyboardState};
 use crate::screens::library::LibraryState;
 use crate::screens::settings::{self, ClockEdit, SettingsState};
-use crate::screens::{boot, info, library, net};
+use crate::screens::{boot, info, library, net, shots};
 use crate::util;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -31,6 +31,7 @@ enum Screen {
     NetBt,
     NetSsh,
     NetNtp,
+    Shots,
     Keyboard,
 }
 
@@ -58,6 +59,7 @@ struct Ui {
     started: Instant,
     library: LibraryState,
     settings: SettingsState,
+    shots: shots::ShotsState,
     game_menu: Option<GameMenuUi>,
     /// The POWER press/hold decision: set on press, resolved on release.
     power_down: Option<Instant>,
@@ -107,6 +109,7 @@ impl Ui {
             started: Instant::now(),
             library: LibraryState::load(std::path::Path::new(".")),
             settings: SettingsState::default(),
+            shots: shots::ShotsState::load(),
             game_menu: None,
             power_down: None,
             shutdown_t0: None,
@@ -174,6 +177,11 @@ impl Ui {
         self.library.set_prefs(self.settings.to_prefs());
         self.library.flush();
         self.screen = Screen::Library;
+    }
+
+    fn open_shots(&mut self) {
+        self.shots = shots::ShotsState::load();
+        self.screen = Screen::Shots;
     }
 
     /// The Y-button game actions menu: RENAME / DELETE (with confirm).
@@ -285,6 +293,10 @@ impl Ui {
             "CHARGE LIMIT" => self.settings.adjust_charge_limit(delta),
             _ => return,
         }
+        self.settings.sel = self
+            .settings
+            .sel
+            .min(self.settings.rows().len().saturating_sub(1));
         self.library.set_prefs(self.settings.to_prefs());
         self.library.flush();
     }
@@ -660,6 +672,7 @@ impl Ui {
                         self.settings.clock = Some(ClockEdit::from_now());
                         self.screen = Screen::Clock;
                     }
+                    "SCREENSHOTS" => self.open_shots(),
                     "NETWORK" => self.open_network(),
                     "ABOUT" => self.open_info(InfoKind::About),
                     _ => self.leave_settings(),
@@ -679,6 +692,27 @@ impl Ui {
                 Action::Back | Action::Start | Action::Menu | Action::Confirm => {
                     // Info screens open from settings; go back there.
                     self.screen = Screen::Settings;
+                }
+                Action::Screenshot => self.pending_screenshot = true,
+                _ => {}
+            },
+            Screen::Shots => match a {
+                Action::Up | Action::Left => self.shots.move_by(-1),
+                Action::Down | Action::Right => self.shots.move_by(1),
+                Action::Confirm => self.shots.toggle_zoom(),
+                Action::Back => {
+                    if self.shots.zoom() {
+                        self.shots.toggle_zoom();
+                    } else {
+                        self.screen = Screen::Settings;
+                    }
+                }
+                Action::Start | Action::Menu => {
+                    if self.shots.zoom() {
+                        self.shots.toggle_zoom();
+                    } else {
+                        self.screen = Screen::Settings;
+                    }
                 }
                 Action::Screenshot => self.pending_screenshot = true,
                 _ => {}
@@ -1048,6 +1082,12 @@ impl Ui {
                 &self.info_lines,
                 &[],
                 0,
+                self.started.elapsed().as_secs_f32(),
+            ),
+            Screen::Shots => shots::draw(
+                &mut self.cv,
+                &mut self.fonts,
+                &mut self.shots,
                 self.started.elapsed().as_secs_f32(),
             ),
             Screen::Network => net::draw_index(

@@ -42,7 +42,15 @@ pub const THEME_ROWS: [&str; 6] = [
     "ANIM BACKGROUND",
     "GLOW FX",
 ];
-pub const SYSTEM_ROWS: [&str; 5] = ["LED", "SCREENSHOT", "HDMI AUTO", "CLOCK", "ABOUT"];
+pub const SYSTEM_ROWS: [&str; 6] = [
+    "LED",
+    "SCREENSHOT",
+    "SCREENSHOTS",
+    "HDMI AUTO",
+    "CLOCK",
+    "ABOUT",
+];
+const SYSTEM_ROWS_NO_SHOTS: [&str; 5] = ["LED", "SCREENSHOT", "HDMI AUTO", "CLOCK", "ABOUT"];
 
 pub const POWER_ROWS: [&str; 6] = [
     "LID SLEEP",
@@ -260,7 +268,13 @@ impl SettingsState {
                 crate::screens::views::View::Simple => &SHELF_ROWS_SIMPLE,
             },
             Page::Theme => &THEME_ROWS,
-            Page::System => &SYSTEM_ROWS,
+            Page::System => {
+                if self.prefs.shot_chord {
+                    &SYSTEM_ROWS
+                } else {
+                    &SYSTEM_ROWS_NO_SHOTS
+                }
+            }
             Page::Power => &POWER_ROWS,
         }
     }
@@ -436,7 +450,7 @@ impl SettingsState {
             "CHARGE LIMIT" => Some((format!("< {} >", pct_label(self.prefs.charge_limit)), true)),
             "CLOCK" => Some((clock.to_string(), false)),
             "THEME" | "SHELF" | "SYSTEM" | "NETWORK" | "ABOUT" | "POWER MANAGEMENT"
-            | "DOWNLOAD ART" => Some((">".into(), false)),
+            | "DOWNLOAD ART" | "SCREENSHOTS" => Some((">".into(), false)),
             _ => None,
         }
     }
@@ -693,5 +707,22 @@ mod tests {
         for row in THEME_ROWS {
             assert!(st.value_text(row, "--").is_some(), "{row} has no value");
         }
+    }
+
+    #[test]
+    fn screenshots_row_follows_the_shot_toggle() {
+        let mut st = SettingsState {
+            page: Page::System,
+            ..Default::default()
+        };
+        st.prefs.shot_chord = false;
+        assert!(!st.rows().contains(&"SCREENSHOTS"));
+        st.prefs.shot_chord = true;
+        let rows = st.rows();
+        let shot = rows
+            .iter()
+            .position(|r| *r == "SCREENSHOT")
+            .expect("SCREENSHOT row");
+        assert_eq!(rows[shot + 1], "SCREENSHOTS");
     }
 }

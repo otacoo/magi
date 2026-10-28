@@ -282,6 +282,97 @@ pub fn run() -> Result<()> {
         );
     }
 
+    // The pause dashboard: the state grid, then the VIDEO pane.
+    library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
+    crate::run::draw_menu_preview(&mut cv, &mut fonts, 1, true, 0, 0.4);
+    let s = stats(&cv);
+    write_ppm(&out.join("pause-states.ppm"), &cv)?;
+    println!(
+        "pause:   warm={} signal={} nonbg={} ({:.1}%)",
+        s.warm,
+        s.signal,
+        s.nonbg,
+        pct(&cv, &s)
+    );
+    if s.warm < 100 || s.nonbg < 5000 {
+        bail!(
+            "pause state grid looks wrong (warm {}, nonbg {})",
+            s.warm,
+            s.nonbg
+        );
+    }
+
+    library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
+    crate::run::draw_menu_preview(&mut cv, &mut fonts, 0, false, 0, 0.4);
+    let s = stats(&cv);
+    write_ppm(&out.join("pause-rail.ppm"), &cv)?;
+    println!(
+        "pause0:  warm={} signal={} nonbg={} ({:.1}%)",
+        s.warm,
+        s.signal,
+        s.nonbg,
+        pct(&cv, &s)
+    );
+    if s.warm < 100 || s.nonbg < 5000 {
+        bail!(
+            "pause resume pane looks wrong (warm {}, nonbg {})",
+            s.warm,
+            s.nonbg
+        );
+    }
+
+    library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
+    crate::run::draw_menu_preview(&mut cv, &mut fonts, 3, true, 0, 0.4);
+    let s = stats(&cv);
+    write_ppm(&out.join("pause-video.ppm"), &cv)?;
+    println!(
+        "pause2:  warm={} signal={} nonbg={} ({:.1}%)",
+        s.warm,
+        s.signal,
+        s.nonbg,
+        pct(&cv, &s)
+    );
+    if s.warm < 100 || s.nonbg < 5000 {
+        bail!(
+            "pause video pane looks wrong (warm {}, nonbg {})",
+            s.warm,
+            s.nonbg
+        );
+    }
+
+    // Screenshot gallery: the list, then the full-screen zoom.
+    crate::screens::shots::draw_preview(&mut cv, &mut fonts, false, 0.4);
+    let s = stats(&cv);
+    write_ppm(&out.join("shots.ppm"), &cv)?;
+    println!(
+        "shots:   warm={} signal={} nonbg={} ({:.1}%)",
+        s.warm,
+        s.signal,
+        s.nonbg,
+        pct(&cv, &s)
+    );
+    if s.warm < 100 || s.nonbg < 5000 {
+        bail!(
+            "screenshot gallery looks wrong (warm {}, nonbg {})",
+            s.warm,
+            s.nonbg
+        );
+    }
+
+    crate::screens::shots::draw_preview(&mut cv, &mut fonts, true, 0.4);
+    let s = stats(&cv);
+    write_ppm(&out.join("shots-zoom.ppm"), &cv)?;
+    println!(
+        "shots2:  warm={} signal={} nonbg={} ({:.1}%)",
+        s.warm,
+        s.signal,
+        s.nonbg,
+        pct(&cv, &s)
+    );
+    if s.nonbg < 10_000 {
+        bail!("screenshot zoom looks blank (nonbg {})", s.nonbg);
+    }
+
     // Settings and the clock wizard.
     let mut settings = crate::screens::settings::SettingsState::default();
     crate::screens::settings::draw(&mut cv, &mut fonts, &settings, 0.4);
