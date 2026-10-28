@@ -210,7 +210,7 @@ try {
         Invoke-Tool "cargo" @("run", "--quiet", "--", "--selftest")
 
         Invoke-Git @("add", "CHANGELOG.md", "Cargo.toml", "Cargo.lock", "README.md")
-        Invoke-Git @("commit", "-m", "release v$next")
+        Invoke-Git @("commit", "-m", "RELEASE v$next")
         Invoke-Git @("tag", "-a", "v$next", "-m", "MAGI v$next")
 
         Write-Host "`nMAGI v$next prepared and tagged locally."

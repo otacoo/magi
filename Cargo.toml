@@ -1,6 +1,6 @@
 [package]
 name = "magi"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 license = "BSD-2-Clause"
 description = "MAGI - a minimal, beautiful frontend for BaseOS on Anbernic H700 handhelds"

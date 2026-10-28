@@ -2,29 +2,38 @@
 
 All notable changes to MAGI are documented here.
 
-## [Unreleased]
+## [1.1.0] - 2026-10-28
+
+### Changes
+
+- REFINE (cecb4d2)
+- GENESIS (ec10c9e)
+- INTERMISSION 2 (e6ea728)
+- INTERMISSION (20bebc4)
+- SHOTS (0a68788)
+- SPLIT (8041de2)
+- SCHEDULER (57dfa62)
+- PLUG ENTRY (7472a6a)
+- GEHIRN OPTIMIERUNG (77a9860)
 
 ### Added
 
-- Game Boy and Game Boy Color netplay over a local hotspot or Wi-Fi, with a
+- Game Boy and Game Boy Color *netplay* over a local hotspot or Wi-Fi, with a
   four-character host code and each player keeping their own save.
-- A redesigned in-game pause menu with folder tabs, direct save/load slots,
+- A *redesigned in-game pause menu* with folder tabs, direct save/load slots,
   full-size state previews and inline core options.
-- SCREENSHOTS below the screenshot toggle, shown while it is on, to browse
-  captures on the card, zoom them full-screen and delete them with Y twice.
+- Added a SCREENSHOTS page below the SCREENSHOT toggle, to browse captures on the card.
 
 ### Changed
 
-- Genesis FM, per-channel FM volume, preamp, CD-DA and PCM options are
-  hidden from the core menu.
+**Genesis:**
+- Genesis will now use the schedutil governor, which should reduce battery usage.
+- Genesis FM, per-channel FM volume, preamp, CD-DA and PCM options have been hidden from the core menu.
+
+**Pause Menu:**
 - Long core option labels and values scroll instead of truncating.
 - The pause menu remembers the last tab used during the game.
 - The hold-MENU save-and-exit prompt is a larger, clearer progress panel.
-
-### Fixed
-
-- Save-state previews from RGB565/1555 cores now render; existing previews are
-  repaired when the menu opens.
 
 ## [1.0.0] - 2026-10-27
 
