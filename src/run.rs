@@ -1689,7 +1689,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
             }
         }
 
-        ctx().bits = pad.bits;
+        ctx().bits = core_pad_bits(pad.bits, game_l2_r2);
         ctx().left = pad.left;
         ctx().right = pad.right;
 
@@ -2539,6 +2539,17 @@ fn double_tap(last: &mut Option<Instant>, now: Instant, window: Duration) -> boo
 /// rewind/FF live under SELECT instead.
 fn needs_l2_r2(system_id: &str) -> bool {
     system_id == "psx"
+}
+
+/// L2/R2 are rewind and fast-forward unless the core owns those buttons.
+/// Keep them out of the core's joypad mask there: mGBA maps them to Turbo
+/// L/R, so pressing R2 to fast-forward would also pull the GBA's R button.
+fn core_pad_bits(bits: u16, game_l2_r2: bool) -> u16 {
+    if game_l2_r2 {
+        bits
+    } else {
+        bits & !((1 << retro::L2) | (1 << retro::R2))
+    }
 }
 
 /// Cores that still need the performance governor after GPU presentation.
@@ -3441,6 +3452,14 @@ mod pad_tests {
             super::retro_subclass(super::RETRO_DEVICE_ANALOG, 1)
         );
         assert_eq!(super::RETRO_DEVICE_PSE_DUALSHOCK, 0x205);
+    }
+
+    #[test]
+    fn frontend_triggers_stay_out_of_the_core() {
+        let triggers = (1 << retro::L2) | (1 << retro::R2);
+        let bits = triggers | (1 << retro::A);
+        assert_eq!(super::core_pad_bits(bits, false), 1 << retro::A);
+        assert_eq!(super::core_pad_bits(bits, true), bits);
     }
 }
 
