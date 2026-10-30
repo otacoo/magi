@@ -2139,6 +2139,16 @@ mod tests {
     }
 
     #[test]
+    fn finds_the_card_mount() {
+        let text = "/dev/root / ext4 rw 0 0\n/dev/mmcblk0p7 /mnt/sdcard vfat ro,noatime 0 0\n";
+        let mount = card_mount_in(text, "/mnt/sdcard").unwrap();
+        assert_eq!(mount.device, "/dev/mmcblk0p7");
+        assert_eq!(mount.point, "/mnt/sdcard");
+        assert_eq!(mount.fs, "vfat");
+        assert!(card_mount_in(text, "/data").is_none());
+    }
+
+    #[test]
     fn atomic_write_swaps_the_file_and_leaves_no_temp() {
         let path = scratch("atomic");
         write_file_atomic(&path, b"first").unwrap();
@@ -2772,6 +2782,168 @@ pub fn hdmi_init() {
             if cable { "hdmi" } else { "lcd" }
         ));
     }
+}
+
+// ---- card repair -----------------------------------------------------
+// The card is mounted with `errors=remount-ro`; a bad FAT chain turns the
+// whole volume read-only. The shelf offers a repair, and this is the
+// unmounted fsck path it hands over to.
+
+#[cfg(any(target_os = "linux", test))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CardMount {
+    device: String,
+    point: String,
+    fs: String,
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn card_mount_in(text: &str, point: &str) -> Option<CardMount> {
+    for line in text.lines() {
+        let mut it = line.split_whitespace();
+        let (Some(device), Some(mounted), Some(fs)) = (it.next(), it.next(), it.next()) else {
+            continue;
+        };
+        if mounted == point && device.starts_with("/dev/") {
+            return Some(CardMount {
+                device: device.to_string(),
+                point: mounted.to_string(),
+                fs: fs.to_string(),
+            });
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn card_mount() -> Option<CardMount> {
+    let text = std::fs::read_to_string("/proc/mounts").ok()?;
+    card_mount_in(&text, "/mnt/sdcard")
+}
+
+/// True when the card's mount is read-only (the kernel remounts it after a
+/// FAT error; the card may still look writable from a PC).
+#[cfg(target_os = "linux")]
+pub fn card_read_only() -> bool {
+    card_read_only_at("/mnt/sdcard")
+}
+
+#[cfg(target_os = "linux")]
+fn card_read_only_at(path: &str) -> bool {
+    let Ok(path) = std::ffi::CString::new(path) else {
+        return false;
+    };
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(path.as_ptr(), &mut st) } != 0 {
+        return false;
+    }
+    (st.f_flag & (libc::ST_RDONLY as libc::c_ulong)) != 0
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn card_read_only() -> bool {
+    false
+}
+
+#[cfg(target_os = "linux")]
+fn repair_tool(fs: &str) -> Option<&'static str> {
+    let tools: &'static [&'static str] = match fs {
+        "vfat" => &["/sbin/fsck.fat", "/usr/sbin/fsck.fat", "/bin/fsck.fat"],
+        "exfat" => &[
+            "/sbin/fsck.exfat",
+            "/usr/sbin/fsck.exfat",
+            "/bin/fsck.exfat",
+        ],
+        _ => return None,
+    };
+    for &tool in tools {
+        if std::path::Path::new(tool).is_file() {
+            return Some(tool);
+        }
+    }
+    None
+}
+
+/// A repair can run here only when the card's filesystem has an fsck tool.
+#[cfg(target_os = "linux")]
+pub fn card_repair_available() -> bool {
+    card_mount().and_then(|m| repair_tool(&m.fs)).is_some()
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn card_repair_available() -> bool {
+    false
+}
+
+/// `exec` the staged repair script in place of the frontend. The card can
+/// then be unmounted; BaseOS init respawns the frontend only after reboot.
+#[cfg(target_os = "linux")]
+pub fn start_card_repair() -> std::io::Error {
+    use std::io::{Error, ErrorKind};
+    let Some(m) = card_mount() else {
+        return Error::new(ErrorKind::NotFound, "no card mount");
+    };
+    if repair_tool(&m.fs).is_none() {
+        return Error::new(ErrorKind::NotFound, "no fsck for this card");
+    }
+    if let Err(e) = std::fs::write("/tmp/magi-repair.sh", include_str!("repair.sh")) {
+        return e;
+    }
+    eprintln!("magi: repair: {} {} {}", m.device, m.point, m.fs);
+    close_extra_fds();
+    use std::os::unix::process::CommandExt;
+    let mut cmd = std::process::Command::new("/bin/sh");
+    cmd.arg("/tmp/magi-repair.sh")
+        .arg(&m.device)
+        .arg(&m.point)
+        .arg(&m.fs)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    cmd.exec()
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn start_card_repair() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Unsupported, "device only")
+}
+
+/// Close every descriptor above stderr before the repair exec, so the card
+/// has no inherited file handles when the script unmounts it.
+#[cfg(target_os = "linux")]
+fn close_extra_fds() {
+    let Ok(dir) = std::fs::read_dir("/proc/self/fd") else {
+        return;
+    };
+    for entry in dir.flatten() {
+        let Ok(fd) = entry.file_name().to_string_lossy().parse::<i32>() else {
+            continue;
+        };
+        if fd > 2 {
+            unsafe {
+                libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+            }
+        }
+    }
+}
+
+/// Written by repair.sh; read once on the next boot so the result is not
+/// only visible in the repair log.
+#[cfg(target_os = "linux")]
+pub fn take_repair_result() -> Option<&'static str> {
+    let path = "/data/magi-repair.result";
+    let text = std::fs::read_to_string(path).ok()?;
+    let _ = std::fs::remove_file(path);
+    Some(match text.trim() {
+        "repaired" => "SD CARD REPAIRED",
+        "clean" => "SD CARD OK",
+        _ => "REPAIR FAILED: USE A COMPUTER",
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn take_repair_result() -> Option<&'static str> {
+    None
 }
 
 // ---- boot logo (U-Boot splash) ---------------------------------------

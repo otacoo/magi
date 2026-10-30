@@ -10,7 +10,7 @@ use anyhow::{bail, Result};
 use crate::canvas::Canvas;
 use crate::device;
 use crate::font::{self, Fonts};
-use crate::screens::{boot, library};
+use crate::screens::{boot, card, library};
 use crate::theme::pal;
 
 pub fn run() -> Result<()> {
@@ -51,6 +51,26 @@ pub fn run() -> Result<()> {
     );
     if s.signal < 100 {
         bail!("boot role lights look wrong (signal {})", s.signal);
+    }
+
+    // The read-only card alert and its repair hint.
+    card::draw(
+        &mut cv,
+        &mut fonts,
+        0.0,
+        card::CardView::Notice { repair: true },
+    );
+    let s = stats(&cv);
+    write_ppm(&out.join("card.ppm"), &cv)?;
+    println!(
+        "card:    warm={} signal={} nonbg={} ({:.1}%)",
+        s.warm,
+        s.signal,
+        s.nonbg,
+        pct(&cv, &s)
+    );
+    if s.nonbg < 5000 {
+        bail!("card alert looks blank (nonbg {})", s.nonbg);
     }
 
     // Library, first frame, with a small fake game list.

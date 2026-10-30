@@ -16,7 +16,7 @@ use crate::present::Presenter;
 use crate::screens::keyboard::{self, KeyboardState};
 use crate::screens::library::LibraryState;
 use crate::screens::settings::{self, ClockEdit, SettingsState};
-use crate::screens::{boot, info, library, net, shots};
+use crate::screens::{boot, card, info, library, net, shots};
 use crate::util;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -96,6 +96,14 @@ struct Ui {
     should_quit: bool,
     pending_screenshot: bool,
     pending_launch: Option<crate::run::Launch>,
+    card_read_only: bool,
+    card_notice: bool,
+    card_confirm: bool,
+    card_repairing: bool,
+    card_repair_ready: bool,
+    card_dismissed: bool,
+    card_check_at: Instant,
+    card_result: Option<&'static str>,
 }
 
 impl Ui {
@@ -141,6 +149,14 @@ impl Ui {
             should_quit: false,
             pending_screenshot: false,
             pending_launch: None,
+            card_read_only: util::card_read_only(),
+            card_notice: false,
+            card_confirm: false,
+            card_repairing: false,
+            card_repair_ready: util::card_repair_available(),
+            card_dismissed: false,
+            card_check_at: Instant::now(),
+            card_result: util::take_repair_result(),
         };
         // Create the card tree and scan immediately: the walk then overlaps
         // the rest of start-up and the boot splash.
@@ -166,6 +182,9 @@ impl Ui {
             || self.settings.clock.is_some()
             || self.library.prefs.glow
             || self.library.prefs.anim_bg
+            || self.card_notice
+            || self.card_confirm
+            || self.card_repairing
     }
 
     fn open_settings(&mut self) {
@@ -177,6 +196,18 @@ impl Ui {
         self.library.set_prefs(self.settings.to_prefs());
         self.library.flush();
         self.screen = Screen::Library;
+    }
+
+    fn repair_card(&mut self) {
+        self.card_confirm = false;
+        self.card_repairing = true;
+        self.library.flush();
+        #[cfg(target_os = "linux")]
+        crate::disp2::clear_stale_layer();
+        let e = util::start_card_repair();
+        util::log(&format!("card repair: {e}"));
+        self.card_repairing = false;
+        crate::status::show("REPAIR FAILED TO START");
     }
 
     fn open_shots(&mut self) {
@@ -570,6 +601,47 @@ impl Ui {
             }
             return;
         }
+        // The card alert owns input while it is open. SELECT+START (or A)
+        // opens the repair question; B dismisses until the card is clean.
+        if a == Action::CardRepair {
+            self.card_dismissed = false;
+            self.card_read_only = util::card_read_only();
+            self.card_repair_ready = util::card_repair_available();
+            if self.card_read_only {
+                self.card_notice = true;
+                if self.card_repair_ready {
+                    self.card_confirm = true;
+                }
+            } else {
+                crate::status::show("SD CARD OK");
+            }
+            return;
+        }
+        if self.card_repairing {
+            return;
+        }
+        if self.card_confirm {
+            match a {
+                Action::Confirm => self.repair_card(),
+                Action::Back => {
+                    self.card_confirm = false;
+                    self.card_repair_ready = util::card_repair_available();
+                }
+                _ => {}
+            }
+            return;
+        }
+        if self.card_notice {
+            match a {
+                Action::Confirm if self.card_repair_ready => self.card_confirm = true,
+                Action::Back => {
+                    self.card_notice = false;
+                    self.card_dismissed = true;
+                }
+                _ => {}
+            }
+            return;
+        }
         match self.screen {
             Screen::Boot => {
                 util::log("boot splash skipped");
@@ -605,19 +677,27 @@ impl Ui {
                             });
                         }
                     }
-                    Action::Confirm => match self.library.selected_launch() {
-                        Some((sys, game)) => match sys.core.filter(|c| !c.is_empty()) {
-                            Some(core) => {
-                                self.pending_launch = Some(crate::run::Launch {
-                                    system: sys.id.clone(),
-                                    core,
-                                    rom: game.path.clone(),
-                                })
-                            }
-                            None => crate::status::show("NO CORE SET FOR SYSTEM"),
-                        },
-                        None => crate::status::show("NO GAMES FOUND"),
-                    },
+                    Action::Confirm => {
+                        if util::card_read_only() && !self.card_dismissed {
+                            self.card_read_only = true;
+                            self.card_repair_ready = util::card_repair_available();
+                            self.card_notice = true;
+                            return;
+                        }
+                        match self.library.selected_launch() {
+                            Some((sys, game)) => match sys.core.filter(|c| !c.is_empty()) {
+                                Some(core) => {
+                                    self.pending_launch = Some(crate::run::Launch {
+                                        system: sys.id.clone(),
+                                        core,
+                                        rom: game.path.clone(),
+                                    })
+                                }
+                                None => crate::status::show("NO CORE SET FOR SYSTEM"),
+                            },
+                            None => crate::status::show("NO GAMES FOUND"),
+                        }
+                    }
                     Action::Select => self.library.toggle_controls(),
                     Action::X => self.library.toggle_favorite(),
                     Action::Back => self.library.stop_art(),
@@ -959,6 +1039,32 @@ impl Ui {
 
     fn update(&mut self) {
         let now = Instant::now();
+        if now >= self.card_check_at {
+            self.card_check_at = now + Duration::from_secs(1);
+            let read_only = util::card_read_only();
+            if read_only != self.card_read_only {
+                util::log(&format!("card: read-only {read_only}"));
+            }
+            self.card_read_only = read_only;
+            if read_only {
+                self.card_repair_ready = util::card_repair_available();
+                if !self.card_dismissed
+                    && !self.card_notice
+                    && !self.card_confirm
+                    && !self.card_repairing
+                    && self.screen != Screen::Boot
+                {
+                    util::log("card: read-only; repair offered");
+                    self.card_notice = true;
+                }
+            } else {
+                self.card_dismissed = false;
+                self.card_notice = false;
+                if !self.card_repairing {
+                    self.card_confirm = false;
+                }
+            }
+        }
         // POWER held: run the EVA countdown; released early, it aborts, and
         // at zero the console powers off (kept dark through the shutdown).
         if let (Some(t0), None, false) = (self.power_down, self.shutdown_t0, self.shutdown_sent) {
@@ -1032,6 +1138,11 @@ impl Ui {
                 util::log(&format!("network: joining {ssid} timed out"));
                 crate::status::show("CONNECTION FAILED");
                 self.joining = None;
+            }
+        }
+        if self.screen != Screen::Boot {
+            if let Some(msg) = self.card_result.take() {
+                crate::status::show(msg);
             }
         }
     }
@@ -1153,6 +1264,30 @@ impl Ui {
                     );
                 }
             }
+        }
+        if self.card_repairing {
+            card::draw(
+                &mut self.cv,
+                &mut self.fonts,
+                self.started.elapsed().as_secs_f32(),
+                card::CardView::Repairing,
+            );
+        } else if self.card_confirm {
+            card::draw(
+                &mut self.cv,
+                &mut self.fonts,
+                self.started.elapsed().as_secs_f32(),
+                card::CardView::Confirm,
+            );
+        } else if self.card_notice {
+            card::draw(
+                &mut self.cv,
+                &mut self.fonts,
+                self.started.elapsed().as_secs_f32(),
+                card::CardView::Notice {
+                    repair: self.card_repair_ready,
+                },
+            );
         }
         if let Some((icon, ratio, _)) = &self.bar_hud {
             crate::theme::bar_hud(&mut self.cv, &mut self.fonts, *icon, *ratio);

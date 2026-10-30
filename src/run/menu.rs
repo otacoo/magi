@@ -370,6 +370,7 @@ impl GameMenu {
         }
         self.msg = Some(match saved {
             Some(true) => (format!("{label} SAVED"), Instant::now()),
+            Some(false) if util::card_read_only() => ("CARD READ-ONLY".into(), Instant::now()),
             Some(false) => ("SAVE FAILED".into(), Instant::now()),
             None => ("SAVES NOT SUPPORTED".into(), Instant::now()),
         });

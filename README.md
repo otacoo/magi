@@ -117,6 +117,7 @@ MAGI will recreate missing folders at boot.
 | [Multi-disc PlayStation](assets/docs/multi-disc.md) | `.m3u` playlists and disc swap. |
 | [Netplay](assets/docs/netplay.md) | Game Boy link play over hotspot or Wi-Fi. |
 | [Controls](assets/docs/controls.md) | Every button, on the shelf and in game. |
+| [SD card repair](assets/docs/storage.md) | What happens when the card turns read-only. |
 | [Cores](assets/docs/cores.md) | Bundled cores and the BIOS files they need. |
 | [Miyoo64 ports](assets/docs/n64-ports.md) | Installing native N64 ports. |
 | [Building MAGI](assets/docs/building.md) | Instructions on how to birth the frontend. |

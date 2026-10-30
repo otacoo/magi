@@ -74,6 +74,8 @@ pub enum Action {
     VolumeUp,
     VolumeDown,
     Screenshot,
+    /// SELECT+START: repair a read-only SD card.
+    CardRepair,
     Quit,
 }
 

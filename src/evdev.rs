@@ -502,6 +502,16 @@ impl Evdev {
                 }
             }
 
+            // SELECT+START is the card-repair chord. Keep SELECT's tap
+            // silent so the CONTROLS panel does not open behind the alert.
+            if ev.type_ == ev::EV_KEY && ev.code == ev::BTN_TR && ev.value == 1 && self.select_held
+            {
+                self.shortcuts.combo_used();
+                util::log(&format!("{name}: SELECT+START -> card repair"));
+                acts.push(Action::CardRepair);
+                continue;
+            }
+
             if let Some(a) = input::evdev_action(ev.type_, ev.code, ev.value) {
                 util::log(&format!(
                     "{name}: {:#x} value {} -> {a:?}",

@@ -1503,6 +1503,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                     }
                     match saved {
                         Some(true) => format!("STATE SAVED {}/{}", slot + 1, STATE_SLOTS),
+                        Some(false) if util::card_read_only() => "CARD READ-ONLY".into(),
                         Some(false) => "SAVE FAILED".into(),
                         None => "SAVES NOT SUPPORTED".into(),
                     }
@@ -1639,6 +1640,9 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                     }
                     match save_state_to(&state_paths[menu.slot]) {
                         Some(true) => util::log("state saved (menu hold)"),
+                        Some(false) if util::card_read_only() => {
+                            util::log("state save failed (menu hold): card read-only")
+                        }
                         Some(false) => util::log("state save failed (menu hold)"),
                         None => util::log("state save not supported by core (menu hold)"),
                     }
@@ -2797,12 +2801,20 @@ fn save_state_to(path: &Path) -> Option<bool> {
     }
     let mut buf = vec![0u8; size];
     let ok = unsafe { (ctx().ser)(buf.as_mut_ptr() as *mut c_void, size) };
-    if ok && util::write_file_atomic(path, &buf).is_ok() {
-        save_state_thumb(path);
-        util::log(&format!("state saved: {}", path.display()));
-        Some(true)
-    } else {
-        Some(false)
+    if !ok {
+        util::log("state save: core refused to serialize");
+        return Some(false);
+    }
+    match util::write_file_atomic(path, &buf) {
+        Ok(()) => {
+            save_state_thumb(path);
+            util::log(&format!("state saved: {}", path.display()));
+            Some(true)
+        }
+        Err(e) => {
+            util::log(&format!("state save failed: {}: {e}", path.display()));
+            Some(false)
+        }
     }
 }
 

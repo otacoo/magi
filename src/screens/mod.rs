@@ -1,4 +1,5 @@
 pub mod boot;
+pub mod card;
 pub mod info;
 pub mod keyboard;
 pub mod library;
