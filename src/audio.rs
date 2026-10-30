@@ -23,6 +23,10 @@ const SND_PCM_STREAM_PLAYBACK: c_int = 0;
 const SND_PCM_FORMAT_S16_LE: c_int = 2;
 const SND_PCM_ACCESS_RW_INTERLEAVED: c_int = 3;
 
+/// Rate MAGI opens the sink at. The H700 codec, HDMI and the usual
+/// Bluetooth sinks all run in the 48 kHz family.
+pub const OUTPUT_HZ: u32 = 48_000;
+
 /// In order: the plug plugin adapts the fixed device rate to whatever the
 /// codec wants; the rest are fallbacks.
 const DEVICES: [&str; 4] = ["plug:default", "default", "plughw:0,0", "hw:0,0"];
@@ -191,7 +195,7 @@ pub struct AlsaOut {
 
 /// Ring cap in samples (stereo pairs), 8/60 s; the writer keeps the level
 /// near half, so drops only happen on real stalls.
-const PUSH_CAP: usize = (32768 / 60 * 8) * 2;
+const PUSH_CAP: usize = (OUTPUT_HZ as usize / 60 * 8) * 2;
 /// Frames per ALSA write.
 const CHUNK_FRAMES: usize = 512;
 
@@ -277,6 +281,16 @@ impl AlsaOut {
         }
     }
 
+    /// Stop the writer and let ALSA drain. Call before cutting power so the
+    /// codec does not click when the speaker amp loses its supply.
+    pub fn close(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+        self.ok.store(false, Ordering::Relaxed);
+    }
+
     /// Hand a batch over; a no-op when no device opened (silent mode).
     /// Returns the ring's fill level (0..1) for gentle rate control.
     pub fn push(&self, samples: &[i16]) -> f32 {
@@ -295,10 +309,7 @@ impl AlsaOut {
 
 impl Drop for AlsaOut {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(join) = self.join.take() {
-            let _ = join.join();
-        }
+        self.close();
     }
 }
 
@@ -329,16 +340,16 @@ pub fn spawn_wav(path: &std::path::Path, gain_pct: u8) {
                 *s = (*s as f32 * g) as i16;
             }
         }
-        let mut out = if rate != 32_768 {
-            let mut r = crate::resample::Resampler::new(rate as f64, 32_768.0);
+        let mut out = if rate != OUTPUT_HZ {
+            let mut r = crate::resample::Resampler::new(rate as f64, OUTPUT_HZ as f64);
             let mut o = Vec::new();
             r.process(&samples, &mut o);
             o
         } else {
             samples
         };
-        crate::resample::fade_out(&mut out, 32_768, 40);
-        if let Some(mut sink) = Alsa::open(32_768, None) {
+        crate::resample::fade_out(&mut out, OUTPUT_HZ, 40);
+        if let Some(mut sink) = Alsa::open(OUTPUT_HZ, None) {
             sink.write(&out);
         }
     });

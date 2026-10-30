@@ -4,8 +4,8 @@ An interrupted write, a reset press or a power cut can leave the card's FAT
 chain damaged. The kernel then remounts the card read-only, so saves, states,
 settings and screenshots fail even though the card looks writable on a PC.
 
-MAGI checks the mount on the shelf and at game launch. When the card is
-read-only it shows a full-screen alert:
+MAGI checks the mount once at boot and again when a game returns. When the
+card is read-only it shows a full-screen alert:
 
 - **SELECT+START** opens the repair question.
 - **A** starts the repair.

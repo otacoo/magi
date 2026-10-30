@@ -102,7 +102,7 @@ struct Ui {
     card_repairing: bool,
     card_repair_ready: bool,
     card_dismissed: bool,
-    card_check_at: Instant,
+    card_alerted: bool,
     card_result: Option<&'static str>,
 }
 
@@ -155,7 +155,7 @@ impl Ui {
             card_repairing: false,
             card_repair_ready: util::card_repair_available(),
             card_dismissed: false,
-            card_check_at: Instant::now(),
+            card_alerted: false,
             card_result: util::take_repair_result(),
         };
         // Create the card tree and scan immediately: the walk then overlaps
@@ -1035,34 +1035,25 @@ impl Ui {
         self.library.reload_volume();
         self.reload_display();
         self.library.flush();
+        // A game can hit the FAT error that remounts the card read-only.
+        self.card_read_only = util::card_read_only();
+        if self.card_read_only {
+            self.card_repair_ready = util::card_repair_available();
+            self.card_notice = true;
+            self.card_dismissed = false;
+            util::log("card: read-only after game; repair offered");
+        }
     }
 
     fn update(&mut self) {
         let now = Instant::now();
-        if now >= self.card_check_at {
-            self.card_check_at = now + Duration::from_secs(1);
-            let read_only = util::card_read_only();
-            if read_only != self.card_read_only {
-                util::log(&format!("card: read-only {read_only}"));
-            }
-            self.card_read_only = read_only;
-            if read_only {
-                self.card_repair_ready = util::card_repair_available();
-                if !self.card_dismissed
-                    && !self.card_notice
-                    && !self.card_confirm
-                    && !self.card_repairing
-                    && self.screen != Screen::Boot
-                {
-                    util::log("card: read-only; repair offered");
-                    self.card_notice = true;
-                }
-            } else {
-                self.card_dismissed = false;
-                self.card_notice = false;
-                if !self.card_repairing {
-                    self.card_confirm = false;
-                }
+        // The card is sampled once at startup; a game can also leave it
+        // read-only, so launch() checks again when the child returns.
+        if !self.card_alerted && self.screen != Screen::Boot {
+            self.card_alerted = true;
+            if self.card_read_only {
+                util::log("card: read-only at boot; repair offered");
+                self.card_notice = true;
             }
         }
         // POWER held: run the EVA countdown; released early, it aborts, and

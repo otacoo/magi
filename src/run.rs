@@ -49,7 +49,7 @@ use prefs::{
 };
 
 #[cfg(target_os = "linux")]
-use crate::audio::AlsaOut;
+use crate::audio::{AlsaOut, OUTPUT_HZ};
 #[cfg(target_os = "linux")]
 use crate::evdev::Evdev;
 #[cfg(target_os = "linux")]
@@ -109,10 +109,6 @@ extern "C" fn rumble_cb(_port: c_uint, _effect: c_uint, strength: u16) -> bool {
 const PIXFMT_0RGB1555: u32 = 0;
 const PIXFMT_XRGB8888: u32 = 1;
 const PIXFMT_RGB565: u32 = 2;
-
-/// Sink rate on the H700; cores reporting their own rate are resampled.
-#[cfg(target_os = "linux")]
-const DEVICE_HZ: u32 = 32_768;
 
 #[repr(C)]
 struct SystemInfo {
@@ -1079,9 +1075,9 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         util::log(&format!("audio: bluetooth output {device}"));
     }
     #[cfg(target_os = "linux")]
-    let audio = AlsaOut::start(DEVICE_HZ, bt_audio);
+    let mut audio = AlsaOut::start(OUTPUT_HZ, bt_audio);
     #[cfg(target_os = "linux")]
-    let mut resampler = Resampler::new(sample_rate as f64, DEVICE_HZ as f64);
+    let mut resampler = Resampler::new(sample_rate as f64, OUTPUT_HZ as f64);
     #[cfg(target_os = "linux")]
     let mut audio_out: Vec<i16> = Vec::new();
 
@@ -1332,6 +1328,8 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
             if save_state_to(&auto_state_path(&save_dir, &stem)) == Some(true) {
                 util::log("battery: auto state saved");
             }
+            #[cfg(target_os = "linux")]
+            audio.close();
             util::set_brightness(0);
             util::spawn_detached("poweroff");
             break;
@@ -1612,6 +1610,8 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                 if save_state_to(&auto_state_path(&save_dir, &stem)) == Some(true) {
                     util::log("power: auto state saved");
                 }
+                #[cfg(target_os = "linux")]
+                audio.close();
                 util::set_brightness(0);
                 util::spawn_detached("poweroff");
             }
