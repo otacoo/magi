@@ -9,11 +9,7 @@ use crate::font::Fonts;
 use crate::image::{self, Image};
 use crate::theme::pal;
 
-const ROLE_NAMES: [(&str, &str); 3] = [
-    ("MELCHIOR-1", "SHELF"),
-    ("BALTHASAR-2", "HOST"),
-    ("CASPER-3", "PORTS"),
-];
+const ROLE_NAMES: [&str; 3] = ["MELCHIOR-1", "BALTHASAR-2", "CASPER-3"];
 
 /// Phase boundaries, seconds. The three link times sit on the ignition
 /// track's strongest beats; the sync times fill the gap before nominal.
@@ -319,7 +315,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, t: f32) {
     }
 
     // The MAGI units.
-    for (i, (name, role)) in ROLE_NAMES.iter().enumerate() {
+    for (i, name) in ROLE_NAMES.iter().enumerate() {
         let x = box_left(w) + i as i32 * (BOX_W + BOX_GAP);
         let t_on = LINK_TIMES[i];
         let t_sync = SYNC_TIMES[i];
@@ -353,7 +349,6 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, t: f32) {
             8.0,
             pal().text_faint,
         );
-        fonts.draw(cv, x + 34, y_top + 16, role, 8.0, pal().text_dim);
         let text = if on { pal().text } else { pal().text_faint };
         fonts.draw(cv, x + 10, y_top + 40, name, 13.0, text);
 

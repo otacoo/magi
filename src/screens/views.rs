@@ -8,7 +8,7 @@ use crate::canvas::Canvas;
 use crate::font::Fonts;
 use crate::games::GameEntry;
 use crate::image::Image;
-use crate::theme::pal;
+use crate::theme::{pal, Color};
 
 /// The interfaces offered in SHELF.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -177,9 +177,9 @@ pub fn draw_systems(
                 0,
                 y + h,
                 w as u32,
-                crate::theme::glow_color(pal().border, pal().glow, t, 0.45),
+                crate::theme::glow_color(pal().border, pal().glow, t, STRIP_GLOW_PHASE),
             );
-            draw_strip(cv, fonts, names, sel, area, scale);
+            draw_strip(cv, fonts, names, sel, area, scale, t);
         }
     }
 }
@@ -236,6 +236,10 @@ fn draw_rail(
 /// How many systems the strip shows at once.
 const STRIP_CHIPS: usize = 5;
 
+/// The strip divider and its selected tab share a phase so they breathe
+/// together instead of glowing at their own pace.
+const STRIP_GLOW_PHASE: f32 = 0.45;
+
 fn draw_strip(
     cv: &mut Canvas,
     fonts: &mut Fonts,
@@ -243,6 +247,7 @@ fn draw_strip(
     sel: usize,
     area: (i32, i32, i32, i32),
     scale: f32,
+    t: f32,
 ) {
     if names.is_empty() {
         return;
@@ -256,9 +261,14 @@ fn draw_strip(
         .take(STRIP_CHIPS)
         .copied()
         .collect();
-    let counter = format!("{:02}/{:02}", sel + 1, names.len());
-    let counter_w = fonts.text_width(&counter, 9.0);
-    let avail = w - counter_w - p(18.0);
+    let has_prev = first > 0;
+    let has_next = first + visible.len() < names.len();
+    // The left gutter only exists while there is a page to go back to; the
+    // right one is always kept so the tabs do not jump on the last page.
+    // Both leave room for the selected tab's padding and the page triangle.
+    let left_gutter = if has_prev { p(30.0) } else { 0 };
+    let right_gutter = p(32.0);
+    let avail = (w - left_gutter - right_gutter).max(p(80.0));
     // One size for every tab: the largest at which the longest name still
     // leaves a little air between the labels.
     let min_gap = p(6.0);
@@ -287,24 +297,99 @@ fn draw_strip(
     };
     let group = total + gap * (n - 1).max(0);
     let baseline = y + h / 2 + 4;
-    let mut tx = x + (avail - group) / 2;
+    let start = x + left_gutter + (avail - group) / 2;
+
+    // The selected title is a folder tab: its top replaces the header rule
+    // and its sides run through the strip divider into the content below.
+    let title = crate::theme::glow_color(pal().accent, pal().glow, t, STRIP_GLOW_PHASE);
+    if let Some(i) = (0..labels.len()).find(|&i| first + i == sel) {
+        let pad = if n > 1 {
+            p(10.0).min((gap / 2).max(p(4.0)))
+        } else {
+            p(10.0)
+        };
+        let before: i32 = widths[..i].iter().sum::<i32>() + gap * i as i32;
+        let tab_w = widths[i] + pad * 2;
+        let tab_x = (start + before - pad).min(x + w - tab_w).max(x);
+        let tab_y = y - 1;
+        let tab_h = h + 2;
+        let edge = crate::theme::glow_color(pal().border, pal().glow, t, STRIP_GLOW_PHASE);
+        cv.fill_rect(tab_x, tab_y, tab_w as u32, tab_h as u32, pal().bg1);
+        cv.fill_rect(tab_x, tab_y, tab_w as u32, p(3.0).max(2) as u32, title);
+        cv.vline(tab_x, tab_y, tab_h as u32, edge);
+        cv.vline(tab_x + tab_w - 1, tab_y, tab_h as u32, edge);
+    }
+
+    let mut tx = start;
     for (i, label) in labels.iter().enumerate() {
-        let selected = first + i == sel;
-        if selected {
-            fonts.draw_bold(cv, tx, baseline, label, size, pal().accent);
+        if first + i == sel {
+            fonts.draw_bold(cv, tx, baseline, label, size, title);
         } else {
             fonts.draw(cv, tx, baseline, label, size, pal().text_dim);
         }
         tx += widths[i] + gap;
     }
-    fonts.draw(
-        cv,
-        x + w - counter_w - p(4.0),
-        baseline,
-        &counter,
-        9.0,
-        pal().text_faint,
-    );
+
+    // A page triangle replaces the old 04/07 counter.
+    let tri_h = p(10.0).max(7);
+    let tri_w = (tri_h * 4 / 5).max(6);
+    let tri_y = y + (h - tri_h) / 2;
+    if has_prev {
+        triangle(cv, x + p(6.0), tri_y, tri_h, tri_w, false, pal().text_dim);
+    }
+    if has_next {
+        triangle(
+            cv,
+            x + w - p(10.0) - tri_w,
+            tri_y,
+            tri_h,
+            tri_w,
+            true,
+            pal().text_dim,
+        );
+    }
+}
+
+/// A small filled page triangle, pointing right (or left when `right` is
+/// false). Supersampled so the short diagonal does not look stepped.
+fn triangle(cv: &mut Canvas, x: i32, y: i32, h: i32, w: i32, right: bool, c: Color) {
+    if h <= 0 || w <= 0 {
+        return;
+    }
+    let (x0, y0, x1, y1) = (x as f32, y as f32, (x + w) as f32, (y + h) as f32);
+    let (ax, ay, bx, by, cx, cy) = if right {
+        (x0, y0, x0, y1, x1, y0 + h as f32 / 2.0)
+    } else {
+        (x1, y0, x1, y1, x0, y0 + h as f32 / 2.0)
+    };
+    const S: i32 = 8;
+    let samples = (S * S) as u32;
+    for py in y..y + h {
+        for px in x..x + w {
+            let mut hits = 0u32;
+            for sy in 0..S {
+                for sx in 0..S {
+                    let fx = px as f32 + (sx as f32 + 0.5) / S as f32;
+                    let fy = py as f32 + (sy as f32 + 0.5) / S as f32;
+                    if in_triangle(fx, fy, ax, ay, bx, by, cx, cy) {
+                        hits += 1;
+                    }
+                }
+            }
+            if hits > 0 {
+                cv.blend(px, py, c, (hits * 255 / samples) as u8);
+            }
+        }
+    }
+}
+
+fn in_triangle(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32, cx: f32, cy: f32) -> bool {
+    let d1 = (px - bx) * (ay - by) - (ax - bx) * (py - by);
+    let d2 = (px - cx) * (by - cy) - (bx - cx) * (py - cy);
+    let d3 = (px - ax) * (cy - ay) - (cx - ax) * (py - ay);
+    let neg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
+    let pos = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
+    !(neg && pos)
 }
 
 /// Horizontal offset for a selected title that does not fit: none until the
