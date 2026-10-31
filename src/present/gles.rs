@@ -1,10 +1,11 @@
 //! EGL/GLES presentation for the H700 Mali GPU.
 //!
-//! The libretro cores still render software frames; this module uploads the
-//! frame once and lets the GPU scale it, draw the bezel/CRT overlay and apply
-//! the warmth tint. The software presenter remains the fallback.
+//! Software cores upload one frame per tick; hardware cores draw into an FBO
+//! this module owns, and the same shader composites either source with the
+//! bezel/CRT overlay and the warmth tint. The software presenter remains the
+//! fallback.
 
-use std::ffi::{c_char, c_void, CString};
+use std::ffi::{c_char, c_void, CStr, CString};
 use std::ptr;
 
 use libloading::Library;
@@ -26,8 +27,16 @@ const EGL_OPENGL_ES2_BIT: i32 = 0x0004;
 const GL_TEXTURE_2D: u32 = 0x0DE1;
 const GL_TEXTURE0: u32 = 0x84C0;
 const GL_BGRA_EXT: u32 = 0x80E1;
+const GL_RGBA: u32 = 0x1908;
+const GL_FRAMEBUFFER: u32 = 0x8D40;
+const GL_RENDERBUFFER: u32 = 0x8D41;
+const GL_COLOR_ATTACHMENT0: u32 = 0x8CE0;
+const GL_DEPTH_ATTACHMENT: u32 = 0x8D00;
+const GL_FRAMEBUFFER_COMPLETE: u32 = 0x8CD5;
+const GL_DEPTH_COMPONENT16: u32 = 0x81A5;
 const GL_UNSIGNED_BYTE: u32 = 0x1401;
 const GL_UNPACK_ALIGNMENT: u32 = 0x0CF5;
+const GL_PACK_ALIGNMENT: u32 = 0x0D05;
 const GL_TEXTURE_MIN_FILTER: u32 = 0x2801;
 const GL_TEXTURE_MAG_FILTER: u32 = 0x2800;
 const GL_TEXTURE_WRAP_S: u32 = 0x2802;
@@ -42,6 +51,10 @@ const GL_FALSE: u8 = 0;
 const GL_TRIANGLE_STRIP: u32 = 0x0005;
 const GL_COLOR_BUFFER_BIT: u32 = 0x4000;
 const GL_BLEND: u32 = 0x0BE2;
+const GL_DEPTH_TEST: u32 = 0x0B71;
+const GL_CULL_FACE: u32 = 0x0B44;
+const GL_STENCIL_TEST: u32 = 0x0B90;
+const GL_SCISSOR_TEST: u32 = 0x0C11;
 const GL_SRC_ALPHA: u32 = 0x0302;
 const GL_ONE_MINUS_SRC_ALPHA: u32 = 0x0303;
 const GL_VERTEX_SHADER: u32 = 0x8B31;
@@ -56,6 +69,21 @@ uniform vec4 u_rect;
 uniform vec2 u_target;
 uniform vec4 u_uv;
 varying vec2 v_uv;
+varying vec2 v_pos;
+void main() {
+    v_uv = u_uv.xy + a_pos * u_uv.zw;
+    v_pos = a_pos;
+    vec2 p = (u_rect.xy + a_pos * u_rect.zw) / u_target;
+    gl_Position = vec4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, 1.0);
+}
+"#;
+
+const VERT_PLAIN: &str = r#"
+attribute vec2 a_pos;
+uniform vec4 u_rect;
+uniform vec2 u_target;
+uniform vec4 u_uv;
+varying vec2 v_uv;
 void main() {
     v_uv = u_uv.xy + a_pos * u_uv.zw;
     vec2 p = (u_rect.xy + a_pos * u_rect.zw) / u_target;
@@ -63,7 +91,106 @@ void main() {
 }
 "#;
 
+// Mode 1 is zadpos's sharp-shimmerless box-filter point (public domain).
+// Modes 2-6 are the public-domain handheld shaders from
+// libretro/glsl-shaders (Color Mangler, lcd3x, dot); see THIRD_PARTY_NOTICES.md.
 const FRAG: &str = r#"
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+uniform sampler2D u_tex;
+uniform vec3 u_gain;
+uniform float u_alpha;
+uniform float u_overlay;
+uniform int u_mode;
+uniform vec2 u_in;
+uniform vec2 u_out;
+uniform float u_flip;
+varying vec2 v_uv;
+varying vec2 v_pos;
+void main() {
+    vec2 uv = v_uv;
+    vec4 c;
+    // 1 shimmerless, 2 PSP colour, 3 GBA colour, 4 GBC colour,
+    // 5 LCD3x, 6 dot matrix.
+    if (u_mode == 1) {
+        vec2 pixel = v_pos * u_out;
+        vec2 scale = u_out / u_in;
+        vec2 invscale = u_in / u_out;
+        vec2 pixel_tl = floor(pixel);
+        vec2 pixel_br = ceil(pixel);
+        vec2 texel_tl = floor(invscale * pixel_tl);
+        vec2 texel_br = floor(invscale * pixel_br);
+        vec2 mod_texel = texel_br + vec2(0.5, 0.5);
+        mod_texel -= (vec2(1.0, 1.0) - step(texel_br, texel_tl)) * (scale * texel_br - pixel_tl);
+        uv = mod_texel / u_in;
+        if (u_flip > 0.5) {
+            uv.y = 1.0 - uv.y;
+        }
+        c = texture2D(u_tex, uv);
+    } else if (u_mode == 2) {
+        vec3 s = pow(texture2D(u_tex, uv).rgb, vec3(2.21, 2.21, 2.21));
+        s = clamp(s, 0.0, 1.0);
+        s = vec3(
+            dot(s, vec3(0.98, 0.20, -0.18)),
+            dot(s, vec3(0.04, 0.795, 0.165)),
+            dot(s, vec3(0.01, 0.01, 0.98))
+        );
+        c = vec4(pow(clamp(s, 0.0, 1.0), vec3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2)), 1.0);
+    } else if (u_mode == 3) {
+        vec3 s = pow(texture2D(u_tex, uv).rgb, vec3(3.2, 3.2, 3.2));
+        s = clamp(s * 0.94, 0.0, 1.0);
+        s = vec3(
+            dot(s, vec3(0.82, 0.24, -0.06)),
+            dot(s, vec3(0.125, 0.665, 0.21)),
+            dot(s, vec3(0.195, 0.075, 0.73))
+        );
+        c = vec4(pow(clamp(s, 0.0, 1.0), vec3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2)), 1.0);
+    } else if (u_mode == 4) {
+        vec3 s = pow(texture2D(u_tex, uv).rgb, vec3(1.2, 1.2, 1.2));
+        s = clamp(s * 0.94, 0.0, 1.0);
+        s = vec3(
+            dot(s, vec3(0.82, 0.24, -0.06)),
+            dot(s, vec3(0.125, 0.665, 0.21)),
+            dot(s, vec3(0.195, 0.075, 0.73))
+        );
+        c = vec4(pow(clamp(s, 0.0, 1.0), vec3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2)), 1.0);
+    } else if (u_mode == 5) {
+        const vec3 offsets = vec3(3.141592654, 3.141592654, 3.141592654)
+            * vec3(0.5, 0.5 - 2.0 / 3.0, 0.5 - 4.0 / 3.0);
+        vec2 omega = vec2(6.283185307, 6.283185307) * u_in;
+        vec2 angle = uv * omega;
+        float yfactor = (16.0 + sin(angle.y)) / 17.0;
+        vec3 xfactors = (4.0 + sin(angle.x + offsets)) / 5.0;
+        c = vec4(texture2D(u_tex, uv).rgb * yfactor * xfactors, 1.0);
+    } else if (u_mode == 6) {
+        vec2 pix = uv * u_in;
+        vec3 s = texture2D(u_tex, uv).rgb;
+        float bright = dot(s, vec3(0.30, 0.59, 0.11));
+        float bloom = mix(1.05, 0.95, bright);
+        vec3 mid = s * exp(-2.4 * length(fract(pix) - vec2(0.5, 0.5)) * bloom);
+        vec3 sum = mid
+            + s * exp(-2.4 * length(fract(pix) - vec2(-0.5, -0.5)) * bloom)
+            + s * exp(-2.4 * length(fract(pix) - vec2(0.5, -0.5)) * bloom)
+            + s * exp(-2.4 * length(fract(pix) - vec2(1.5, -0.5)) * bloom)
+            + s * exp(-2.4 * length(fract(pix) - vec2(-0.5, 0.5)) * bloom)
+            + s * exp(-2.4 * length(fract(pix) - vec2(1.5, 0.5)) * bloom)
+            + s * exp(-2.4 * length(fract(pix) - vec2(-0.5, 1.5)) * bloom)
+            + s * exp(-2.4 * length(fract(pix) - vec2(0.5, 1.5)) * bloom)
+            + s * exp(-2.4 * length(fract(pix) - vec2(1.5, 1.5)) * bloom);
+        c = vec4(mix(1.2 * mid, sum, 0.65), 1.0);
+    } else {
+        c = texture2D(u_tex, uv);
+    }
+    gl_FragColor = vec4(c.rgb * u_gain, mix(1.0, c.a, u_overlay) * u_alpha);
+}
+"#;
+
+// Fallback for drivers that reject the shimmerless branch: the original
+// composite shader, with the shader uniforms simply absent (-1 locations).
+const FRAG_PLAIN: &str = r#"
 precision mediump float;
 uniform sampler2D u_tex;
 uniform vec3 u_gain;
@@ -158,6 +285,7 @@ struct Gles {
     tex_parameteri: unsafe extern "C" fn(u32, u32, i32),
     tex_image_2d: unsafe extern "C" fn(u32, i32, i32, i32, i32, i32, u32, u32, *const c_void),
     tex_sub_image_2d: unsafe extern "C" fn(u32, i32, i32, i32, i32, i32, u32, u32, *const c_void),
+    read_pixels: unsafe extern "C" fn(i32, i32, i32, i32, u32, u32, *mut c_void),
     pixel_storei: unsafe extern "C" fn(u32, i32),
     active_texture: unsafe extern "C" fn(u32),
     gen_buffers: unsafe extern "C" fn(i32, *mut u32),
@@ -165,6 +293,7 @@ struct Gles {
     buffer_data: unsafe extern "C" fn(u32, isize, *const c_void, u32),
     delete_buffers: unsafe extern "C" fn(i32, *const u32),
     enable_vertex_attrib_array: unsafe extern "C" fn(u32),
+    disable_vertex_attrib_array: unsafe extern "C" fn(u32),
     vertex_attrib_pointer: unsafe extern "C" fn(u32, i32, u32, u8, i32, *const c_void),
     create_shader: unsafe extern "C" fn(u32) -> u32,
     shader_source: unsafe extern "C" fn(u32, i32, *const *const c_char, *const i32),
@@ -190,6 +319,17 @@ struct Gles {
     enable: unsafe extern "C" fn(u32),
     disable: unsafe extern "C" fn(u32),
     blend_func: unsafe extern "C" fn(u32, u32),
+    color_mask: unsafe extern "C" fn(u8, u8, u8, u8),
+    gen_framebuffers: unsafe extern "C" fn(i32, *mut u32),
+    delete_framebuffers: unsafe extern "C" fn(i32, *const u32),
+    bind_framebuffer: unsafe extern "C" fn(u32, u32),
+    framebuffer_texture_2d: unsafe extern "C" fn(u32, u32, u32, u32, i32),
+    gen_renderbuffers: unsafe extern "C" fn(i32, *mut u32),
+    delete_renderbuffers: unsafe extern "C" fn(i32, *const u32),
+    bind_renderbuffer: unsafe extern "C" fn(u32, u32),
+    renderbuffer_storage: unsafe extern "C" fn(u32, u32, i32, i32),
+    framebuffer_renderbuffer: unsafe extern "C" fn(u32, u32, u32, u32),
+    check_framebuffer_status: unsafe extern "C" fn(u32) -> u32,
     _lib: Library,
 }
 
@@ -209,6 +349,7 @@ impl Gles {
                 tex_parameteri: load(&lib, Some(egl), "glTexParameteri")?,
                 tex_image_2d: load(&lib, Some(egl), "glTexImage2D")?,
                 tex_sub_image_2d: load(&lib, Some(egl), "glTexSubImage2D")?,
+                read_pixels: load(&lib, Some(egl), "glReadPixels")?,
                 pixel_storei: load(&lib, Some(egl), "glPixelStorei")?,
                 active_texture: load(&lib, Some(egl), "glActiveTexture")?,
                 gen_buffers: load(&lib, Some(egl), "glGenBuffers")?,
@@ -216,6 +357,7 @@ impl Gles {
                 buffer_data: load(&lib, Some(egl), "glBufferData")?,
                 delete_buffers: load(&lib, Some(egl), "glDeleteBuffers")?,
                 enable_vertex_attrib_array: load(&lib, Some(egl), "glEnableVertexAttribArray")?,
+                disable_vertex_attrib_array: load(&lib, Some(egl), "glDisableVertexAttribArray")?,
                 vertex_attrib_pointer: load(&lib, Some(egl), "glVertexAttribPointer")?,
                 create_shader: load(&lib, Some(egl), "glCreateShader")?,
                 shader_source: load(&lib, Some(egl), "glShaderSource")?,
@@ -241,6 +383,17 @@ impl Gles {
                 enable: load(&lib, Some(egl), "glEnable")?,
                 disable: load(&lib, Some(egl), "glDisable")?,
                 blend_func: load(&lib, Some(egl), "glBlendFunc")?,
+                color_mask: load(&lib, Some(egl), "glColorMask")?,
+                gen_framebuffers: load(&lib, Some(egl), "glGenFramebuffers")?,
+                delete_framebuffers: load(&lib, Some(egl), "glDeleteFramebuffers")?,
+                bind_framebuffer: load(&lib, Some(egl), "glBindFramebuffer")?,
+                framebuffer_texture_2d: load(&lib, Some(egl), "glFramebufferTexture2D")?,
+                gen_renderbuffers: load(&lib, Some(egl), "glGenRenderbuffers")?,
+                delete_renderbuffers: load(&lib, Some(egl), "glDeleteRenderbuffers")?,
+                bind_renderbuffer: load(&lib, Some(egl), "glBindRenderbuffer")?,
+                renderbuffer_storage: load(&lib, Some(egl), "glRenderbufferStorage")?,
+                framebuffer_renderbuffer: load(&lib, Some(egl), "glFramebufferRenderbuffer")?,
+                check_framebuffer_status: load(&lib, Some(egl), "glCheckFramebufferStatus")?,
                 _lib: lib,
             })
         }
@@ -262,6 +415,16 @@ pub struct Layer<'a> {
     pub rect: (i32, i32, u32, u32),
 }
 
+/// The framebuffer a hardware-rendered core draws into. The colour texture is
+/// composited by [`Gpu::present_hw`].
+struct HwFbo {
+    fbo: u32,
+    tex: u32,
+    depth: u32,
+    w: i32,
+    h: i32,
+}
+
 pub struct Gpu {
     egl: Egl,
     gl: Gles,
@@ -279,9 +442,15 @@ pub struct Gpu {
     u_gain: i32,
     u_alpha: i32,
     u_overlay: i32,
+    u_mode: i32,
+    u_in: i32,
+    u_out: i32,
+    u_flip: i32,
     vbo: u32,
     game_tex: u32,
     game_size: (i32, i32),
+    shader: u8,
+    shader_ok: bool,
     overlay_tex: u32,
     overlay_size: (i32, i32),
     has_overlay: bool,
@@ -290,6 +459,7 @@ pub struct Gpu {
     ui_rect: Option<(i32, i32, u32, u32)>,
     ui_buf: Vec<u8>,
     frame_buf: Vec<u8>,
+    hw: Option<HwFbo>,
 }
 
 impl Gpu {
@@ -356,7 +526,13 @@ impl Gpu {
             (egl.swap_interval)(display, 1);
         }
 
-        let program = unsafe { make_program(&gl, VERT, FRAG) }?;
+        let (program, shader_ok) = match unsafe { make_program(&gl, VERT, FRAG) } {
+            Ok(program) => (program, true),
+            Err(e) => {
+                util::log(&format!("{e}; using the plain shader"));
+                (unsafe { make_program(&gl, VERT_PLAIN, FRAG_PLAIN) }?, false)
+            }
+        };
         let mut gpu = Self {
             egl,
             gl,
@@ -374,9 +550,15 @@ impl Gpu {
             u_gain: 0,
             u_alpha: 0,
             u_overlay: 0,
+            u_mode: 0,
+            u_in: 0,
+            u_out: 0,
+            u_flip: 0,
             vbo: 0,
             game_tex: 0,
             game_size: (0, 0),
+            shader: 0,
+            shader_ok,
             overlay_tex: 0,
             overlay_size: (0, 0),
             has_overlay: false,
@@ -385,6 +567,7 @@ impl Gpu {
             ui_rect: None,
             ui_buf: Vec::new(),
             frame_buf: Vec::new(),
+            hw: None,
         };
         unsafe {
             gpu.u_tex = uniform(&gpu.gl, program, "u_tex");
@@ -394,6 +577,10 @@ impl Gpu {
             gpu.u_gain = uniform(&gpu.gl, program, "u_gain");
             gpu.u_alpha = uniform(&gpu.gl, program, "u_alpha");
             gpu.u_overlay = uniform(&gpu.gl, program, "u_overlay");
+            gpu.u_mode = uniform(&gpu.gl, program, "u_mode");
+            gpu.u_in = uniform(&gpu.gl, program, "u_in");
+            gpu.u_out = uniform(&gpu.gl, program, "u_out");
+            gpu.u_flip = uniform(&gpu.gl, program, "u_flip");
             (gpu.gl.gen_buffers)(1, &mut gpu.vbo);
             (gpu.gl.bind_buffer)(GL_ARRAY_BUFFER, gpu.vbo);
             let verts: [f32; 8] = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
@@ -409,8 +596,35 @@ impl Gpu {
             (gpu.gl.clear_color)(0.0, 0.0, 0.0, 1.0);
             (gpu.gl.use_program)(gpu.program);
             (gpu.gl.uniform_1i)(gpu.u_tex, 0);
+            (gpu.gl.uniform_1i)(gpu.u_mode, 0);
+            (gpu.gl.uniform_2f)(gpu.u_in, 1.0, 1.0);
+            (gpu.gl.uniform_2f)(gpu.u_out, 1.0, 1.0);
+            (gpu.gl.uniform_1f)(gpu.u_flip, 0.0);
         }
         Ok(gpu)
+    }
+
+    /// Select the game-image shader: 0 = nearest, 1 = shimmerless (linear
+    /// sampling with the box-filter sample point).
+    pub fn set_shader(&mut self, mode: u8) {
+        let mode = if self.shader_ok { mode } else { 0 };
+        if self.shader == mode {
+            return;
+        }
+        self.shader = mode;
+        let filter = if mode == 1 { GL_LINEAR } else { GL_NEAREST } as i32;
+        unsafe {
+            if self.game_tex != 0 {
+                (self.gl.bind_texture)(GL_TEXTURE_2D, self.game_tex);
+                (self.gl.tex_parameteri)(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+                (self.gl.tex_parameteri)(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+            }
+            if let Some(hw) = self.hw.as_ref() {
+                (self.gl.bind_texture)(GL_TEXTURE_2D, hw.tex);
+                (self.gl.tex_parameteri)(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+                (self.gl.tex_parameteri)(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+            }
+        }
     }
 
     pub fn set_overlay(&mut self, px: Option<&[u32]>, w: u32, h: u32) {
@@ -546,6 +760,140 @@ impl Gpu {
         true
     }
 
+    /// Create (or recreate) the FBO a hardware-rendered core draws into.
+    /// Returns the framebuffer name the core must bind.
+    pub fn hw_framebuffer(&mut self, width: u32, height: u32) -> Result<u32, String> {
+        let (w, h) = (width.max(1) as i32, height.max(1) as i32);
+        let filter = if self.shader == 1 {
+            GL_LINEAR
+        } else {
+            GL_NEAREST
+        } as i32;
+        if let Some(old) = self.hw.take() {
+            unsafe { self.free_hw(&old) };
+        }
+        let (mut fbo, mut tex, mut depth) = (0, 0, 0);
+        unsafe {
+            (self.gl.gen_textures)(1, &mut tex);
+            (self.gl.bind_texture)(GL_TEXTURE_2D, tex);
+            (self.gl.tex_image_2d)(
+                GL_TEXTURE_2D,
+                0,
+                GL_RGBA as i32,
+                w,
+                h,
+                0,
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                ptr::null(),
+            );
+            (self.gl.tex_parameteri)(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+            (self.gl.tex_parameteri)(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+            (self.gl.tex_parameteri)(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE as i32);
+            (self.gl.tex_parameteri)(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE as i32);
+            (self.gl.gen_framebuffers)(1, &mut fbo);
+            (self.gl.bind_framebuffer)(GL_FRAMEBUFFER, fbo);
+            (self.gl.framebuffer_texture_2d)(
+                GL_FRAMEBUFFER,
+                GL_COLOR_ATTACHMENT0,
+                GL_TEXTURE_2D,
+                tex,
+                0,
+            );
+            (self.gl.gen_renderbuffers)(1, &mut depth);
+            (self.gl.bind_renderbuffer)(GL_RENDERBUFFER, depth);
+            (self.gl.renderbuffer_storage)(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, w, h);
+            (self.gl.framebuffer_renderbuffer)(
+                GL_FRAMEBUFFER,
+                GL_DEPTH_ATTACHMENT,
+                GL_RENDERBUFFER,
+                depth,
+            );
+            let status = (self.gl.check_framebuffer_status)(GL_FRAMEBUFFER);
+            if status != GL_FRAMEBUFFER_COMPLETE {
+                (self.gl.bind_framebuffer)(GL_FRAMEBUFFER, 0);
+                (self.gl.delete_framebuffers)(1, &fbo);
+                (self.gl.delete_renderbuffers)(1, &depth);
+                (self.gl.delete_textures)(1, &tex);
+                return Err(format!("FBO incomplete: 0x{status:x}"));
+            }
+            // A freshly allocated texture has undefined pixels; clear it so
+            // the boot frames show black rather than garbage.
+            (self.gl.color_mask)(1, 1, 1, 1);
+            (self.gl.viewport)(0, 0, w, h);
+            (self.gl.clear_color)(0.0, 0.0, 0.0, 1.0);
+            (self.gl.clear)(GL_COLOR_BUFFER_BIT);
+            (self.gl.bind_framebuffer)(GL_FRAMEBUFFER, 0);
+        }
+        self.hw = Some(HwFbo {
+            fbo,
+            tex,
+            depth,
+            w,
+            h,
+        });
+        Ok(fbo)
+    }
+
+    /// Resolve a GL symbol for a hardware-rendered core. The symbol may live
+    /// in the EGL dispatch table or in the loaded GLES library.
+    pub fn proc_address(&self, name: &CStr) -> *mut c_void {
+        unsafe {
+            let p = (self.egl.get_proc_address)(name.as_ptr());
+            if !p.is_null() {
+                return p as *mut c_void;
+            }
+            if let Ok(sym) = self.gl._lib.get::<unsafe extern "C" fn()>(name.to_bytes()) {
+                return *sym as usize as *mut c_void;
+            }
+        }
+        ptr::null_mut()
+    }
+
+    /// Read the hardware framebuffer back into top-down `0xAARRGGBB`
+    /// pixels. `flip_v` matches the presenter's bottom-left handling.
+    pub fn read_hw(&mut self, flip_v: bool) -> Option<(Vec<u32>, u32, u32)> {
+        let hw = self.hw.as_ref()?;
+        let (w, h) = (hw.w, hw.h);
+        if w <= 0 || h <= 0 {
+            return None;
+        }
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        unsafe {
+            (self.gl.bind_framebuffer)(GL_FRAMEBUFFER, hw.fbo);
+            (self.gl.pixel_storei)(GL_PACK_ALIGNMENT, 1);
+            (self.gl.read_pixels)(
+                0,
+                0,
+                w,
+                h,
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                rgba.as_mut_ptr() as *mut c_void,
+            );
+            (self.gl.bind_framebuffer)(GL_FRAMEBUFFER, 0);
+        }
+        let (wu, hu) = (w as usize, h as usize);
+        let mut px = vec![0u32; wu * hu];
+        for y in 0..hu {
+            let sy = if flip_v { hu - 1 - y } else { y };
+            for x in 0..wu {
+                let i = (sy * wu + x) * 4;
+                px[y * wu + x] = 0xFF00_0000
+                    | ((rgba[i] as u32) << 16)
+                    | ((rgba[i + 1] as u32) << 8)
+                    | rgba[i + 2] as u32;
+            }
+        }
+        Some((px, w as u32, h as u32))
+    }
+
+    unsafe fn free_hw(&self, hw: &HwFbo) {
+        (self.gl.delete_framebuffers)(1, &hw.fbo);
+        (self.gl.delete_renderbuffers)(1, &hw.depth);
+        (self.gl.delete_textures)(1, &hw.tex);
+    }
+
     pub fn present(
         &mut self,
         frame: *const u8,
@@ -559,6 +907,11 @@ impl Gpu {
         if frame.is_null() || fw == 0 || fh == 0 {
             return false;
         }
+        let filter = if self.shader == 1 {
+            GL_LINEAR
+        } else {
+            GL_NEAREST
+        } as i32;
         let (iw, ih) = (fw as i32, fh as i32);
         let data = if fmt == 1 && pitch == iw as usize * 4 {
             frame as *const c_void
@@ -628,8 +981,8 @@ impl Gpu {
                     GL_UNSIGNED_BYTE,
                     ptr::null(),
                 );
-                (self.gl.tex_parameteri)(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST as i32);
-                (self.gl.tex_parameteri)(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST as i32);
+                (self.gl.tex_parameteri)(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+                (self.gl.tex_parameteri)(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
                 (self.gl.tex_parameteri)(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE as i32);
                 (self.gl.tex_parameteri)(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE as i32);
             }
@@ -651,10 +1004,66 @@ impl Gpu {
             );
         }
 
+        self.draw_scene(
+            self.game_tex,
+            (0.0, 0.0, 1.0, 1.0),
+            rect,
+            warmth,
+            self.shader as i32,
+            (iw as f32, ih as f32),
+            false,
+        );
+        self.swap()
+    }
+
+    /// Composite the framebuffer a hardware-rendered core drew into. Cores
+    /// asking for a bottom-left origin need the texture flipped vertically.
+    pub fn present_hw(&mut self, rect: (i32, i32, u32, u32), warmth: u8, flip_v: bool) -> bool {
+        let Some(hw) = self.hw.as_ref() else {
+            return false;
+        };
+        let tex = hw.tex;
+        let (iw, ih) = (hw.w as f32, hw.h as f32);
+        let uv = if flip_v {
+            (0.0, 1.0, 1.0, -1.0)
+        } else {
+            (0.0, 0.0, 1.0, 1.0)
+        };
+        self.draw_scene(tex, uv, rect, warmth, self.shader as i32, (iw, ih), flip_v);
+        self.swap()
+    }
+
+    fn swap(&mut self) -> bool {
+        let ok = unsafe { (self.egl.swap_buffers)(self.display, self.surface) };
+        if ok == 0 {
+            util::log("gpu: eglSwapBuffers failed");
+            return false;
+        }
+        true
+    }
+
+    fn draw_scene(
+        &mut self,
+        tex: u32,
+        uv: (f32, f32, f32, f32),
+        rect: (i32, i32, u32, u32),
+        warmth: u8,
+        mode: i32,
+        in_size: (f32, f32),
+        flip_v: bool,
+    ) {
         let f = warmth as f32 / 100.0;
         let gain = [1.0 + 0.12 * f, 1.0, 1.0 - 0.40 * f];
         unsafe {
+            // The core may leave its own FBO and 3D state behind.
+            (self.gl.bind_framebuffer)(GL_FRAMEBUFFER, 0);
             (self.gl.viewport)(0, 0, self.w, self.h);
+            (self.gl.disable)(GL_DEPTH_TEST);
+            (self.gl.disable)(GL_CULL_FACE);
+            (self.gl.disable)(GL_STENCIL_TEST);
+            (self.gl.disable)(GL_SCISSOR_TEST);
+            (self.gl.color_mask)(1, 1, 1, 1);
+            (self.gl.clear_color)(0.0, 0.0, 0.0, 1.0);
             (self.gl.clear)(GL_COLOR_BUFFER_BIT);
             (self.gl.disable)(GL_BLEND);
             (self.gl.use_program)(self.program);
@@ -669,15 +1078,20 @@ impl Gpu {
             (self.gl.uniform_3f)(self.u_gain, gain[0], gain[1], gain[2]);
             (self.gl.uniform_1f)(self.u_alpha, 1.0);
             (self.gl.uniform_1f)(self.u_overlay, 0.0);
-            (self.gl.uniform_4f)(self.u_uv, 0.0, 0.0, 1.0, 1.0);
+            (self.gl.uniform_4f)(self.u_uv, uv.0, uv.1, uv.2, uv.3);
+            (self.gl.uniform_1i)(self.u_mode, mode);
+            (self.gl.uniform_2f)(self.u_in, in_size.0, in_size.1);
+            (self.gl.uniform_2f)(self.u_out, rect.2.max(1) as f32, rect.3.max(1) as f32);
+            (self.gl.uniform_1f)(self.u_flip, if flip_v { 1.0 } else { 0.0 });
             (self.gl.active_texture)(GL_TEXTURE0);
-            (self.gl.bind_texture)(GL_TEXTURE_2D, self.game_tex);
+            (self.gl.bind_texture)(GL_TEXTURE_2D, tex);
             self.draw();
             if self.has_overlay {
                 (self.gl.enable)(GL_BLEND);
                 (self.gl.blend_func)(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
                 (self.gl.uniform_4f)(self.u_rect, 0.0, 0.0, self.w as f32, self.h as f32);
                 (self.gl.uniform_1f)(self.u_overlay, 1.0);
+                (self.gl.uniform_1i)(self.u_mode, 0);
                 (self.gl.uniform_4f)(self.u_uv, 0.0, 0.0, 1.0, 1.0);
                 (self.gl.bind_texture)(GL_TEXTURE_2D, self.overlay_tex);
                 self.draw();
@@ -697,6 +1111,7 @@ impl Gpu {
                         w as f32 / tw as f32,
                         h as f32 / th as f32,
                     );
+                    (self.gl.uniform_1i)(self.u_mode, 0);
                     (self.gl.uniform_1f)(self.u_overlay, 1.0);
                     (self.gl.bind_texture)(GL_TEXTURE_2D, self.ui_tex);
                     self.draw();
@@ -704,16 +1119,14 @@ impl Gpu {
             }
             (self.gl.disable)(GL_BLEND);
         }
-        let ok = unsafe { (self.egl.swap_buffers)(self.display, self.surface) };
-        if ok == 0 {
-            util::log("gpu: eglSwapBuffers failed");
-            return false;
-        }
-        true
     }
 
     unsafe fn draw(&self) {
         (self.gl.bind_buffer)(GL_ARRAY_BUFFER, self.vbo);
+        // PPSSPP may leave its own attribute arrays enabled.
+        for i in 1..8 {
+            (self.gl.disable_vertex_attrib_array)(i);
+        }
         (self.gl.enable_vertex_attrib_array)(0);
         (self.gl.vertex_attrib_pointer)(0, 2, GL_FLOAT, GL_FALSE, 0, ptr::null());
         (self.gl.draw_arrays)(GL_TRIANGLE_STRIP, 0, 4);
@@ -723,6 +1136,9 @@ impl Gpu {
 impl Drop for Gpu {
     fn drop(&mut self) {
         unsafe {
+            if let Some(hw) = self.hw.take() {
+                self.free_hw(&hw);
+            }
             if self.game_tex != 0 {
                 (self.gl.delete_textures)(1, &self.game_tex);
             }

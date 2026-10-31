@@ -27,7 +27,8 @@ snes9x2005_plus|https://github.com/libretro/snes9x2005|a79dfe9047e7fec58808aefe4
 genesis_plus_gx|https://github.com/libretro/Genesis-Plus-GX|aa74d79634cd230f65cce4180e92688e53883d2f|gpgx|0
 mednafen_ngp|https://github.com/libretro/beetle-ngp-libretro|a50d5ac288a81f2104ddf43195a4efdd15c72227|make|1
 mednafen_pce|https://github.com/libretro/beetle-pce-libretro|b96c11e095b6a40a412d2da02766ae1c3f4fd539|make|1
-pcsx_rearmed|https://github.com/libretro/pcsx_rearmed|c8816799b50388e61cfe237fe2cdbb7d8175f20a|pcsx|1'
+pcsx_rearmed|https://github.com/libretro/pcsx_rearmed|c8816799b50388e61cfe237fe2cdbb7d8175f20a|pcsx|1
+ppsspp|https://github.com/hrydgard/ppsspp|fa50bb1976065c4f8b1b47af227d367fe9771555|ppsspp|1'
 
 fetch() { # repo commit dir
     git init -q "$3"
@@ -80,6 +81,35 @@ build_core() { # dir kind commit
                     CC="${CROSS}gcc" CXX="${CROSS}g++" AR="${CROSS}ar" \
                     GIT_VERSION="\" $(printf %s "$3" | cut -c1-7)\"" ) 2>&1
             ;;
+        ppsspp)
+            # The libretro target is CMake-only. MAGI cannot provide a GL
+            # context, so the core options force PPSSPP's software renderer.
+            # Discord and system PNG are not part of this build; the bundled
+            # copies keep the payload self-contained.
+            ( cd "$1" && cmake -S . -B build \
+                -DLIBRETRO=ON \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_SYSTEM_NAME=Linux \
+                -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+                -DCMAKE_C_COMPILER="${CROSS}gcc" \
+                -DCMAKE_CXX_COMPILER="${CROSS}g++" \
+                -DCMAKE_C_FLAGS="-mcpu=cortex-a53" \
+                -DCMAKE_CXX_FLAGS="-mcpu=cortex-a53" \
+                -DZLIB_LIBRARY=/usr/lib/aarch64-linux-gnu/libz.so \
+                -DZLIB_INCLUDE_DIR=/usr/include \
+                -DUSING_GLES2=ON \
+                -DUSING_EGL=ON \
+                -DOPENGL_LIBRARIES="GLESv2;EGL" \
+                -DEGL_LIBRARIES=EGL \
+                -DUSE_DISCORD=OFF \
+                -DUSE_MINIUPNPC=OFF \
+                -DUSE_SYSTEM_LIBPNG=OFF \
+                -DUSING_X11_VULKAN=OFF \
+                -DUSE_WAYLAND_WSI=OFF \
+                -DUSE_VULKAN_DISPLAY_KHR=OFF \
+                -DCMAKE_DISABLE_FIND_PACKAGE_Wayland=ON \
+              && cmake --build build --target ppsspp_libretro -j "$JOBS" ) 2>&1
+            ;;
         *)
             ( cd "$1" && make -j"$JOBS" platform=unix \
                 CC="${CROSS}gcc" CXX="${CROSS}g++" AR="${CROSS}ar" ) 2>&1
@@ -116,8 +146,13 @@ run_core() { # name repo commit kind src
         | awk '$3=="*UND*" {print $NF}' | sort -u | tr '\n' ' ')
     echo "-- $name: imports: ${und:-none}"
     if echo " $und" | grep -q ' crc32 '; then
-        echo "!! $name: core references an unprovided crc32 symbol (zlib false positive?)"
-        FAILED="$FAILED $name:undef"
+        if ${CROSS}objdump -p "$OUT/System/magi/cores/${name}_libretro.so" 2>/dev/null \
+            | grep -q 'NEEDED.*libz\.so'; then
+            echo "-- $name: crc32 is provided by libz"
+        else
+            echo "!! $name: core references an unprovided crc32 symbol (zlib false positive?)"
+            FAILED="$FAILED $name:undef"
+        fi
     fi
     for lic in "$dir"/COPYING* "$dir"/LICENSE* "$dir"/LICENCE* "$dir"/license* "$dir"/LICENSES*; do
         [ -e "$lic" ] && cp -r "$lic" "$OUT/System/magi/cores/licenses/$name/" 2>/dev/null

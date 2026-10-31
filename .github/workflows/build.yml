@@ -34,10 +34,22 @@ jobs:
     name: cores (aarch64)
     runs-on: ubuntu-24.04
     container: debian:bullseye
+    # Bump CORE_CACHE_VERSION when the core toolchain or package list changes.
+    env:
+      CORE_CACHE_VERSION: 1
     steps:
       - uses: actions/checkout@v5
 
+      - name: Restore cached cores
+        id: cores-cache
+        continue-on-error: true
+        uses: actions/cache/restore@v6
+        with:
+          path: dist-cores
+          key: magi-cores-v${{ env.CORE_CACHE_VERSION }}-${{ hashFiles('tools/gehirn/cores.sh') }}
+
       - name: System toolchain
+        if: steps.cores-cache.outputs.cache-hit != 'true'
         run: |
           printf '%s\n' \
             'deb http://archive.debian.org/debian bullseye main' \
@@ -46,12 +58,22 @@ jobs:
           dpkg --add-architecture arm64
           apt-get -o Acquire::Check-Valid-Until=false update
           apt-get install -y --no-install-recommends \
-            build-essential make cmake git pkg-config zlib1g-dev:arm64 \
+            build-essential make cmake git pkg-config python3 perl nasm yasm \
+            zlib1g-dev:arm64 libgles2-mesa-dev:arm64 libegl1-mesa-dev:arm64 \
             curl ca-certificates \
             gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu
 
       - name: Build pinned core set
+        if: steps.cores-cache.outputs.cache-hit != 'true'
         run: sh tools/gehirn/cores.sh dist-cores
+
+      - name: Save cached cores
+        if: steps.cores-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: dist-cores
+          key: magi-cores-v${{ env.CORE_CACHE_VERSION }}-${{ hashFiles('tools/gehirn/cores.sh') }}
 
       - uses: actions/upload-artifact@v7
         with:

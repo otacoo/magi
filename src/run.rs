@@ -10,6 +10,8 @@ use std::collections::VecDeque;
 use std::ffi::{c_void, CStr, CString};
 use std::os::raw::{c_char, c_uint};
 use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -45,7 +47,8 @@ use pad::{pump_pads, PadHat, PadState};
 use prefs::{
     load_display_prefs, load_runtime_prefs, load_runtime_volume, load_shot_chord_pref,
     load_text_scale, save_display_prefs, save_runtime_volume, scale_factors, AdjKind, AdjState,
-    DisplayPrefs, ScaleMode, COMBO_FIRST_REPEAT, COMBO_REPEAT, COMBO_STEP, DOUBLE_TAP, TRIGGER_ON,
+    DisplayPrefs, ScaleMode, ShaderMode, COMBO_FIRST_REPEAT, COMBO_REPEAT, COMBO_STEP, DOUBLE_TAP,
+    TRIGGER_ON,
 };
 
 #[cfg(target_os = "linux")]
@@ -76,11 +79,16 @@ const ENV_GET_VARIABLE: u32 = 15;
 const ENV_SET_VARIABLES: u32 = 16;
 const ENV_GET_VARIABLE_UPDATE: u32 = 17;
 const ENV_GET_RUMBLE_INTERFACE: u32 = 23;
+const ENV_GET_LOG_INTERFACE: u32 = 27;
 const ENV_GET_SAVE_DIRECTORY: u32 = 31;
 const ENV_SET_GEOMETRY: u32 = 37;
 const ENV_GET_INPUT_BITMASKS: u32 = 51 | 0x1_0000;
 const ENV_GET_CORE_OPTIONS_VERSION: u32 = 52;
 const ENV_SET_DISK_CONTROL_INTERFACE: u32 = 13;
+
+#[cfg(target_os = "linux")]
+const RETRO_HW_CONTEXT_OPENGLES2: u32 = 2;
+const RETRO_HW_FRAME_BUFFER_VALID: usize = usize::MAX;
 
 type RumbleFn = unsafe extern "C" fn(c_uint, c_uint, u16) -> bool;
 
@@ -177,6 +185,78 @@ struct RetroVariable {
     value: *const c_char,
 }
 
+#[repr(C)]
+struct RetroLogCallback {
+    log: *mut c_void,
+}
+
+/// The libretro hardware-render request. The core fills the context type and
+/// its own callbacks; the frontend fills in the framebuffer and symbol
+/// lookups.
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct RetroHwRender {
+    context_type: u32,
+    context_reset: Option<unsafe extern "C" fn()>,
+    get_current_framebuffer: Option<extern "C" fn() -> usize>,
+    get_proc_address: Option<extern "C" fn(*const c_char) -> *mut c_void>,
+    depth: bool,
+    stencil: bool,
+    bottom_left_origin: bool,
+    version_major: u32,
+    version_minor: u32,
+    cache_context: bool,
+    context_destroy: Option<unsafe extern "C" fn()>,
+    debug_context: bool,
+}
+
+/// The core's half of an accepted hardware context, kept for the lifetime of
+/// the game. The FBO id is published separately for the emu thread.
+#[cfg(target_os = "linux")]
+struct HwRender {
+    reset: Option<unsafe extern "C" fn()>,
+    destroy: Option<unsafe extern "C" fn()>,
+    bottom_left: bool,
+}
+
+#[cfg(target_os = "linux")]
+static HW_GPU: AtomicPtr<crate::present::gles::Gpu> = AtomicPtr::new(std::ptr::null_mut());
+/// The FBO a hardware core must bind. Read from the core's emu thread.
+#[cfg(target_os = "linux")]
+static HW_FBO: AtomicUsize = AtomicUsize::new(0);
+
+fn hw_available() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        !HW_GPU.load(Ordering::Relaxed).is_null()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+/// Core options MAGI controls for PPSSPP. The GPU path is used whenever the
+/// GLES context is up; otherwise the core must stay on its software renderer.
+fn hw_variable(core: &str, key: &str, hw: bool) -> Option<*const c_char> {
+    if core != "ppsspp" {
+        return None;
+    }
+    match key {
+        "ppsspp_backend" => Some(if hw {
+            c"opengl".as_ptr()
+        } else {
+            c"none".as_ptr()
+        }),
+        "ppsspp_software_rendering" => Some(if hw {
+            c"disabled".as_ptr()
+        } else {
+            c"enabled".as_ptr()
+        }),
+        _ => None,
+    }
+}
+
 /// "Descriptor; value1|value2|value3" (the legacy SET_VARIABLES format).
 fn parse_option(raw: &str) -> (String, Vec<String>) {
     let (desc, list) = match raw.split_once(';') {
@@ -202,6 +282,12 @@ fn default_option(core: &str, key: &str) -> Option<&'static str> {
         // Beetle PCE defaults to the Japanese System Card 3. Follow the
         // BIOS that is actually on the card when it is a different one.
         ("mednafen_pce", "pce_cdbios") => pce_bios_default(),
+        // Software fallback: the hardware path overrides both when MAGI's
+        // GLES context is up.
+        ("ppsspp", "ppsspp_backend") => Some("none"),
+        ("ppsspp", "ppsspp_software_rendering") => Some("enabled"),
+        ("ppsspp", "ppsspp_cpu_core") => Some("JIT"),
+        ("ppsspp", "ppsspp_auto_frameskip") => Some("enabled"),
         _ => None,
     }
 }
@@ -329,6 +415,9 @@ struct Ctx {
     rom: String,
     netplay: Option<netplay::Session>,
     netplay_linked: bool,
+    /// Set when the core accepted a libretro hardware GLES context.
+    #[cfg(target_os = "linux")]
+    hw_render: Option<HwRender>,
 }
 
 impl Ctx {
@@ -401,6 +490,44 @@ fn disc_swap(index: usize) -> bool {
     done
 }
 
+/// The core's variadic logger. Only the two string arguments used by
+/// PPSSPP's own callback are read; other format strings are logged as-is.
+unsafe extern "C" fn core_log(
+    level: c_uint,
+    fmt: *const c_char,
+    a: *const c_char,
+    b: *const c_char,
+) {
+    if fmt.is_null() {
+        return;
+    }
+    let fmt = CStr::from_ptr(fmt).to_string_lossy();
+    if fmt == "[%s] %s" && !a.is_null() && !b.is_null() {
+        let tag = CStr::from_ptr(a).to_string_lossy();
+        let msg = CStr::from_ptr(b).to_string_lossy();
+        util::log(&format!("core {level} [{tag}] {msg}"));
+    } else {
+        util::log(&format!("core {level}: {fmt}"));
+    }
+}
+
+/// The FBO a hardware core must bind. PPSSPP reads this from its emu thread,
+/// so it lives outside `Ctx`.
+#[cfg(target_os = "linux")]
+extern "C" fn hw_current_framebuffer() -> usize {
+    HW_FBO.load(Ordering::Relaxed)
+}
+
+#[cfg(target_os = "linux")]
+extern "C" fn hw_proc_address(name: *const c_char) -> *mut c_void {
+    let gpu = HW_GPU.load(Ordering::Relaxed);
+    if gpu.is_null() || name.is_null() {
+        return std::ptr::null_mut();
+    }
+    let name = unsafe { CStr::from_ptr(name) };
+    unsafe { (*gpu).proc_address(name) }
+}
+
 extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
     let ctx = ctx();
     match cmd {
@@ -440,6 +567,15 @@ extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
             false
         }
         ENV_GET_INPUT_BITMASKS => true,
+        ENV_GET_LOG_INTERFACE => {
+            if data.is_null() {
+                return false;
+            }
+            unsafe {
+                (*(data as *mut RetroLogCallback)).log = core_log as *const () as *mut c_void;
+            }
+            true
+        }
         ENV_GET_RUMBLE_INTERFACE => {
             if data.is_null() {
                 return false;
@@ -485,7 +621,7 @@ extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
                         .iter()
                         .map(|v| CString::new(v.as_str()).unwrap_or_default())
                         .collect();
-                    let visible = option_kept(&desc)
+                    let visible = (option_kept(&desc) || option_kept_key(&key))
                         && !(ctx.system == "genesis" && genesis_option_hidden(&desc));
                     if key.to_ascii_lowercase().contains("bios") {
                         util::log(&format!("core option {key}={}", values[chosen]));
@@ -512,6 +648,22 @@ extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
                 labels.join(", ")
             ));
             ctx.options = options;
+            if ctx.opt_key == "ppsspp" {
+                let pick = |key: &str| {
+                    ctx.options
+                        .iter()
+                        .find(|o| o.key == key)
+                        .map(|o| o.values[o.chosen].as_str())
+                        .unwrap_or("?")
+                };
+                util::log(&format!(
+                    "ppsspp: core={} frameskip={} auto_frameskip={} res={}",
+                    pick("ppsspp_cpu_core"),
+                    pick("ppsspp_frameskip"),
+                    pick("ppsspp_auto_frameskip"),
+                    pick("ppsspp_internal_resolution")
+                ));
+            }
             true
         }
         ENV_GET_VARIABLE => {
@@ -520,11 +672,13 @@ extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
             }
             let rv = data as *mut RetroVariable;
             let key = cstr(unsafe { (*rv).key });
-            let value = ctx
-                .options
-                .iter()
-                .find(|o| o.key == key)
-                .map(|o| o.c_values[o.chosen].as_ptr())
+            let value = hw_variable(&ctx.opt_key, &key, hw_available())
+                .or_else(|| {
+                    ctx.options
+                        .iter()
+                        .find(|o| o.key == key)
+                        .map(|o| o.c_values[o.chosen].as_ptr())
+                })
                 .unwrap_or(std::ptr::null());
             unsafe { (*rv).value = value };
             true
@@ -557,17 +711,78 @@ extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
             ctx.shutdown = true;
             true
         }
-        // No GL, no logging interface: cores cope.
-        ENV_SET_HW_RENDER => false,
+        ENV_SET_HW_RENDER => {
+            #[cfg(target_os = "linux")]
+            {
+                if data.is_null() || !hw_available() {
+                    return false;
+                }
+                let hw = unsafe { &mut *(data as *mut RetroHwRender) };
+                if hw.context_type != RETRO_HW_CONTEXT_OPENGLES2 || hw.context_reset.is_none() {
+                    util::log(&format!("hw: cannot provide context {}", hw.context_type));
+                    return false;
+                }
+                // Probe the FBO now: a failure here lets the core fall back
+                // to its software context instead of failing after load.
+                let (fw, fh) = (
+                    if ctx.geometry.base_width > 0 {
+                        ctx.geometry.base_width
+                    } else {
+                        640
+                    },
+                    if ctx.geometry.base_height > 0 {
+                        ctx.geometry.base_height
+                    } else {
+                        480
+                    },
+                );
+                let gpu = HW_GPU.load(Ordering::Relaxed);
+                if gpu.is_null() {
+                    return false;
+                }
+                let fbo = match unsafe { (&mut *gpu).hw_framebuffer(fw, fh) } {
+                    Ok(fbo) => fbo,
+                    Err(e) => {
+                        util::log(&format!("hw: {e}; software fallback"));
+                        return false;
+                    }
+                };
+                HW_FBO.store(fbo as usize, Ordering::Relaxed);
+                hw.get_current_framebuffer = Some(hw_current_framebuffer);
+                hw.get_proc_address = Some(hw_proc_address);
+                ctx.hw_render = Some(HwRender {
+                    reset: hw.context_reset,
+                    destroy: hw.context_destroy,
+                    bottom_left: hw.bottom_left_origin,
+                });
+                util::log(&format!(
+                    "hw: GLES2 context accepted (depth {}, bottom-left {})",
+                    hw.depth, hw.bottom_left_origin
+                ));
+                true
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                false
+            }
+        }
         _ => false,
     }
 }
 
 extern "C" fn video_cb(data: *const c_void, width: c_uint, height: c_uint, pitch: usize) {
-    if data.is_null() || data as usize == usize::MAX {
-        return; // duplicate frame, or a HW buffer (we refuse HW render)
+    if data.is_null() {
+        return; // duplicate frame
     }
     let ctx = ctx();
+    if data as usize == RETRO_HW_FRAME_BUFFER_VALID {
+        // The core drew into MAGI's FBO; only the geometry changes here.
+        ctx.frame_seq += 1;
+        ctx.geometry.base_width = width;
+        ctx.geometry.base_height = height;
+        ctx.pitch = 0;
+        return;
+    }
     ctx.frame = data as *const u8;
     ctx.frame_seq += 1;
     ctx.geometry.base_width = width;
@@ -770,6 +985,24 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         .unwrap_or_else(|| system_id.to_uppercase());
     let save_dir = format!("Saves/{folder}");
     std::fs::create_dir_all(&save_dir).with_context(|| format!("create {save_dir}"))?;
+    // PPSSPP's memstick root is this directory. The libretro VFS does not
+    // create missing parents on mkdir, so give the core its standard layout.
+    if system_id == "psp" {
+        for dir in [
+            "SAVEDATA",
+            "PSP/SAVEDATA",
+            "GAME",
+            "PSP/GAME",
+            "TEXTURES",
+            "PSP/TEXTURES",
+            "SYSTEM",
+            "PSP/SYSTEM",
+            "PSP/Cheats",
+        ] {
+            let _ = std::fs::create_dir_all(Path::new(&save_dir).join(dir));
+        }
+        util::log(&format!("psp: memstick {save_dir}"));
+    }
     let bios_dir = std::env::current_dir()
         .map(|cwd| cwd.join("BIOS"))
         .unwrap_or_else(|_| Path::new("BIOS").to_path_buf());
@@ -912,6 +1145,8 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         rom: rom.to_string(),
         netplay: None,
         netplay_linked: false,
+        #[cfg(target_os = "linux")]
+        hw_render: None,
     });
     CTX.store(&mut *ctx_box, Ordering::Relaxed);
 
@@ -951,6 +1186,55 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         None => (std::ptr::null(), 0),
     };
 
+    let sdl = sdl2::init().map_err(anyhow::Error::msg)?;
+    // SDL owns Bluetooth/USB pads (its controller database maps them); the
+    // stock pad stays on evdev.
+    let mut pads = crate::pads::Pads::new(&sdl);
+    let mut sdl_events = sdl.event_pump().map_err(anyhow::Error::msg)?;
+    let dev = crate::device::detect();
+    let mut presenter = Presenter::open(&sdl, dev, crate::device::window_scale())?;
+    let (cw, ch) = presenter.canvas_size();
+    let mut cv = Canvas::new(cw, ch);
+    // The GPU composites this layer over the game frame: the in-game
+    // overlays, the OSD and the pause menu are drawn here, with a real
+    // alpha, so the panel is never handed back to the software presenter
+    // (two presenters fighting over the framebuffer pages leave a stale
+    // frame on screen).
+    let mut layer = Canvas::transparent(cw, ch);
+    let mut fonts = Fonts::new(font::FONT_DATA)?;
+    #[cfg(target_os = "linux")]
+    let hdmi_at_launch = util::hdmi_active();
+    #[cfg(target_os = "linux")]
+    let mut gpu = if std::env::var("MAGI_GPU").map_or(true, |v| v != "0") {
+        match crate::present::gles::Gpu::new(cw, ch) {
+            Ok(gpu) => {
+                util::log("gpu: EGL/GLES presenter up");
+                Some(gpu)
+            }
+            Err(e) => {
+                util::log(&format!("gpu: {e}; software presenter"));
+                None
+            }
+        }
+    } else {
+        util::log("gpu: disabled by MAGI_GPU=0");
+        None
+    };
+    // The core may only use the hardware path while the EGL context can be
+    // composited; HDMI keeps the software presenter.
+    #[cfg(target_os = "linux")]
+    {
+        let ptr = if hdmi_at_launch {
+            std::ptr::null_mut()
+        } else {
+            gpu.as_mut().map_or(std::ptr::null_mut(), |g| g as *mut _)
+        };
+        HW_GPU.store(ptr, Ordering::Relaxed);
+        if ptr.is_null() {
+            util::log("hw: no GLES context; cores run software");
+        }
+    }
+
     let rom_c = CString::new(rom).unwrap();
     let game = GameInfo {
         path: rom_c.as_ptr(),
@@ -979,6 +1263,38 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         av.geometry.base_width, av.geometry.base_height, fps, sample_rate
     ));
 
+    // A core that took the hardware path draws into an FBO the size of its
+    // base geometry. `context_reset` is only safe after `retro_load_game`
+    // returns: PPSSPP's context object exists by then.
+    #[cfg(target_os = "linux")]
+    let hw_render = ctx().hw_render.is_some();
+    #[cfg(target_os = "linux")]
+    let hw_flip = ctx().hw_render.as_ref().is_some_and(|hw| hw.bottom_left);
+    #[cfg(target_os = "linux")]
+    if hw_render {
+        let (fw, fh) = (
+            av.geometry.base_width.max(1),
+            av.geometry.base_height.max(1),
+        );
+        let Some(g) = gpu.as_mut() else {
+            bail!("hardware render without a GL context");
+        };
+        let fbo = match g.hw_framebuffer(fw, fh) {
+            Ok(fbo) => fbo,
+            Err(e) => {
+                util::log(&format!("hw: {e}"));
+                bail!("hardware framebuffer setup failed");
+            }
+        };
+        HW_FBO.store(fbo as usize, Ordering::Relaxed);
+        util::log(&format!("hw: framebuffer {fbo} {fw}x{fh}"));
+        let reset = ctx().hw_render.as_ref().and_then(|hw| hw.reset);
+        if let Some(reset) = reset {
+            unsafe { reset() };
+            util::log("hw: context reset");
+        }
+    }
+
     // SRAM.
     let sram_size = unsafe { mem_size(0) };
     let sram_ptr = unsafe { mem_data(0) } as *mut u8;
@@ -990,39 +1306,6 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
             util::log(&format!("sram: loaded {n} bytes"));
         }
     }
-
-    let sdl = sdl2::init().map_err(anyhow::Error::msg)?;
-    // SDL owns Bluetooth/USB pads (its controller database maps them); the
-    // stock pad stays on evdev.
-    let mut pads = crate::pads::Pads::new(&sdl);
-    let mut sdl_events = sdl.event_pump().map_err(anyhow::Error::msg)?;
-    let dev = crate::device::detect();
-    let mut presenter = Presenter::open(&sdl, dev, crate::device::window_scale())?;
-    let (cw, ch) = presenter.canvas_size();
-    let mut cv = Canvas::new(cw, ch);
-    // The GPU composites this layer over the game frame: the in-game
-    // overlays, the OSD and the pause menu are drawn here, with a real
-    // alpha, so the panel is never handed back to the software presenter
-    // (two presenters fighting over the framebuffer pages leave a stale
-    // frame on screen).
-    let mut layer = Canvas::transparent(cw, ch);
-    let mut fonts = Fonts::new(font::FONT_DATA)?;
-    #[cfg(target_os = "linux")]
-    let mut gpu = if std::env::var("MAGI_GPU").map_or(true, |v| v != "0") {
-        match crate::present::gles::Gpu::new(cw, ch) {
-            Ok(gpu) => {
-                util::log("gpu: EGL/GLES presenter up");
-                Some(gpu)
-            }
-            Err(e) => {
-                util::log(&format!("gpu: {e}; software presenter"));
-                None
-            }
-        }
-    } else {
-        util::log("gpu: disabled by MAGI_GPU=0");
-        None
-    };
 
     #[cfg(target_os = "linux")]
     let mut evdev = Evdev::open();
@@ -1071,6 +1354,10 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     let mut gain_pct: u8 = load_runtime_volume();
     let (ff_steps, ff_sound) = load_runtime_prefs();
     let mut disp = load_display_prefs();
+    #[cfg(target_os = "linux")]
+    if let Some(gpu) = gpu.as_mut() {
+        gpu.set_shader(disp.shader.as_u8());
+    }
     ctx().rumble_ok = disp.rumble;
     crate::theme::load_user_themes(std::path::Path::new(crate::systems::DIR_THEMES));
     crate::theme::set_theme_index(disp.theme);
@@ -1115,7 +1402,15 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     let mut auto_pending = true;
     let mut auto_hold: Option<(std::path::PathBuf, Instant)> = None;
     let mut a_down = false;
-    let mut rewind_ok = unsafe { (ctx().ser_size)() > 0 };
+    let ser_size = unsafe { (ctx().ser_size)() };
+    let mut rewind_ok = rewind_allowed(system_id, ser_size);
+    if !rewind_ok {
+        if matches!(system_id, "psx" | "psp") {
+            util::log(&format!("rewind: off for {system_id}"));
+        } else if ser_size > REWIND_MAX_STATE {
+            util::log(&format!("rewind: off ({ser_size} byte states)"));
+        }
+    }
     let mut rewind_ring: VecDeque<Vec<u8>> = VecDeque::new();
     let mut rewind_bytes = 0usize;
     let mut rewind_cost_ms = 0.0f64;
@@ -1194,13 +1489,13 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     #[cfg(target_os = "linux")]
     let mut overlay_rect: Option<(i32, i32, u32, u32)> = None;
     #[cfg(target_os = "linux")]
-    let hdmi_at_launch = util::hdmi_active();
-    #[cfg(target_os = "linux")]
     let mut scanout_active = false;
     #[cfg(target_os = "linux")]
     let mut fb_hide_warned = false;
     #[cfg(target_os = "linux")]
     let mut ui_was_active = false;
+    #[cfg(target_os = "linux")]
+    let mut hw_present_warned = false;
     #[cfg(target_os = "linux")]
     let mut last_seq = 0u64;
 
@@ -1216,6 +1511,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         opt_since: Instant::now(),
         overlay_sel: 0,
         overlay_idx,
+        shader: disp.shader,
         fps: disp.fps_counter,
         sysinfo: disp.sysinfo,
         hold: None,
@@ -1665,6 +1961,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
             save_overlay_prefs(system_id, &overlay_names);
             disp.fps_counter = menu.fps;
             disp.sysinfo = menu.sysinfo;
+            disp.shader = menu.shader;
             save_display_prefs(&disp);
             overlay_art = load_composite(&overlay_names, cw, ch);
             bezel_area = load_bezel_area(&overlay_names, cw, ch);
@@ -1672,6 +1969,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
             #[cfg(target_os = "linux")]
             {
                 if let Some(gpu) = gpu.as_mut() {
+                    gpu.set_shader(disp.shader.as_u8());
                     gpu.set_overlay(overlay_art.as_deref(), cw, ch);
                 }
                 overlay_rect = None;
@@ -1742,7 +2040,8 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
             let mut want = SCANOUT_ENABLED
                 && hw_game.is_some()
                 && crate::theme::warmth() == 0
-                && !hdmi_at_launch;
+                && !hdmi_at_launch
+                && !hw_render;
             if want && !scanout_active {
                 // Channel 1 mixes above channel 0: disable the fb layer or
                 // the frozen shelf frame hides the game.
@@ -1801,7 +2100,8 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
             // With the GPU up the menu is a layer over the frozen game; the
             // software path still paints it on the canvas.
             #[cfg(target_os = "linux")]
-            let gpu_menu = gpu.is_some() && !hdmi_at_launch && !ctx().frame.is_null();
+            let gpu_menu =
+                gpu.is_some() && !hdmi_at_launch && (hw_render || !ctx().frame.is_null());
             #[cfg(not(target_os = "linux"))]
             let gpu_menu = false;
             if hw_scanout {
@@ -1863,6 +2163,10 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
             if take_shot {
                 take_shot = false;
                 let shot = if gpu_menu {
+                    #[cfg(target_os = "linux")]
+                    let hw = if hw_render { hw_capture(hw_flip) } else { None };
+                    #[cfg(not(target_os = "linux"))]
+                    let hw: Option<Canvas> = None;
                     Some(compose_shot(
                         ctx(),
                         disp.scale,
@@ -1871,6 +2175,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                         &layer,
                         cw,
                         ch,
+                        hw,
                     ))
                 } else {
                     None
@@ -1895,21 +2200,33 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                     ctx.geometry.base_height.max(1),
                 );
                 let rect = game_rect(disp.scale, fw as usize, fh as usize, game_area);
-                if !gpu_present(
-                    &mut gpu,
-                    &layer,
-                    ctx.frame,
-                    ctx.pitch,
-                    fw,
-                    fh,
-                    ctx.pixfmt,
-                    rect,
-                    disp.warmth as u8,
-                ) {
-                    gpu = None;
-                    util::log("gpu: presenter failed; software path");
-                    crate::theme::apply_warmth(&mut cv);
-                    presenter.present(&cv)?;
+                let ok = if hw_render {
+                    gpu_present_hw(&mut gpu, &layer, rect, disp.warmth as u8, hw_flip)
+                } else {
+                    gpu_present(
+                        &mut gpu,
+                        &layer,
+                        ctx.frame,
+                        ctx.pitch,
+                        fw,
+                        fh,
+                        ctx.pixfmt,
+                        rect,
+                        disp.warmth as u8,
+                    )
+                };
+                if !ok {
+                    if hw_render {
+                        if !hw_present_warned {
+                            util::log("gpu: hardware present failed");
+                            hw_present_warned = true;
+                        }
+                    } else {
+                        drop_gpu(&mut gpu);
+                        util::log("gpu: presenter failed; software path");
+                        crate::theme::apply_warmth(&mut cv);
+                        presenter.present(&cv)?;
+                    }
                 }
             } else {
                 crate::theme::apply_warmth(&mut cv);
@@ -2063,7 +2380,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         // surface each flip a page, and mixing them leaves a stale frame on
         // screen).
         #[cfg(target_os = "linux")]
-        let gpu_frame = gpu.is_some() && !hdmi_at_launch && !ctx.frame.is_null();
+        let gpu_frame = gpu.is_some() && !hdmi_at_launch && (hw_render || !ctx.frame.is_null());
         #[cfg(not(target_os = "linux"))]
         let gpu_frame = false;
 
@@ -2176,9 +2493,13 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
             );
             if take_shot {
                 take_shot = false;
+                #[cfg(target_os = "linux")]
+                let hw = if hw_render { hw_capture(hw_flip) } else { None };
+                #[cfg(not(target_os = "linux"))]
+                let hw: Option<Canvas> = None;
                 hud = Some((
                     take_screenshot(&compose_shot(
-                        ctx, disp.scale, game_area, &overlays, &layer, cw, ch,
+                        ctx, disp.scale, game_area, &overlays, &layer, cw, ch, hw,
                     )),
                     Instant::now(),
                 ));
@@ -2261,27 +2582,38 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                     ctx.geometry.base_height.max(1),
                 );
                 let rect = game_rect(disp.scale, fw as usize, fh as usize, game_area);
-                let ok = gpu_present(
-                    &mut gpu,
-                    &layer,
-                    ctx.frame,
-                    ctx.pitch,
-                    fw,
-                    fh,
-                    ctx.pixfmt,
-                    rect,
-                    disp.warmth as u8,
-                );
+                let ok = if hw_render {
+                    gpu_present_hw(&mut gpu, &layer, rect, disp.warmth as u8, hw_flip)
+                } else {
+                    gpu_present(
+                        &mut gpu,
+                        &layer,
+                        ctx.frame,
+                        ctx.pitch,
+                        fw,
+                        fh,
+                        ctx.pixfmt,
+                        rect,
+                        disp.warmth as u8,
+                    )
+                };
                 if !ok {
-                    gpu = None;
-                    util::log("gpu: presenter failed; software path");
-                    if !ctx.frame.is_null() {
-                        blit(ctx, &mut cv, disp.scale, game_area);
+                    if hw_render {
+                        if !hw_present_warned {
+                            util::log("gpu: hardware present failed");
+                            hw_present_warned = true;
+                        }
+                    } else {
+                        drop_gpu(&mut gpu);
+                        util::log("gpu: presenter failed; software path");
+                        if !ctx.frame.is_null() {
+                            blit(ctx, &mut cv, disp.scale, game_area);
+                        }
+                        apply_overlays(&mut cv, &overlays);
+                        blend_layer(&mut cv, &layer);
+                        crate::theme::apply_warmth(&mut cv);
+                        presenter.present(&cv)?;
                     }
-                    apply_overlays(&mut cv, &overlays);
-                    blend_layer(&mut cv, &layer);
-                    crate::theme::apply_warmth(&mut cv);
-                    presenter.present(&cv)?;
                 }
             }
             #[cfg(not(target_os = "linux"))]
@@ -2393,9 +2725,26 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     // through ALSA directly.
     #[cfg(target_os = "linux")]
     util::set_mixer_volume(gain_pct);
+    // Tear the core's GL resources down while the EGL context is current and
+    // the core is still loaded: PPSSPP's context_destroy needs both.
+    #[cfg(target_os = "linux")]
+    {
+        let destroy = ctx().hw_render.as_ref().and_then(|hw| hw.destroy);
+        if let Some(destroy) = destroy {
+            unsafe { destroy() };
+            util::log("hw: context destroyed");
+        }
+        HW_FBO.store(0, Ordering::Relaxed);
+    }
     unsafe {
         unload_game();
         retro_deinit();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        HW_GPU.store(std::ptr::null_mut(), Ordering::Relaxed);
+        ctx().hw_render = None;
+        drop(gpu.take());
     }
     util::log("game loop down");
     Ok(())
@@ -2436,11 +2785,14 @@ const SHUTDOWN_TOTAL: Duration = Duration::from_millis(2500);
 /// The rewind ring: one state every this many frames, memory-bounded.
 const REWIND_EVERY: u64 = 6;
 const REWIND_MAX_BYTES: usize = 48 << 20;
+/// Cores with states this large (PPSSPP) cannot snapshot often enough to
+/// rewind without stalling the frame loop.
+const REWIND_MAX_STATE: usize = 8 << 20;
 
 /// Only these core options are surfaced in the UI — matched loosely against
 /// the label (cores append things like "(Restart Required)"); everything else
 /// stays at the core's default (the owner's list for the handheld cores).
-const KEEP_OPTIONS: [&str; 38] = [
+const KEEP_OPTIONS: [&str; 40] = [
     "color correction",
     "color correction mode",
     "dark filter level (%)",
@@ -2481,10 +2833,26 @@ const KEEP_OPTIONS: [&str; 38] = [
     "enhanced resolution",
     "sound interpolation",
     "reverb",
+    // PSP (PPSSPP)
+    "cpu core",
+    "frameskip",
     "rumble effects",
     // CD systems
     "cd bios",
     "bios select",
+];
+
+/// PPSSPP options kept visible by key; descriptions alone are too ambiguous.
+const KEEP_KEYS: [&str; 9] = [
+    "ppsspp_button_preference",
+    "ppsspp_texture_anisotropic_filtering",
+    "ppsspp_texture_filtering",
+    "ppsspp_skip_buffer_effects",
+    "ppsspp_disable_range_culling",
+    "ppsspp_skip_gpu_readbacks",
+    "ppsspp_lazy_texture_caching",
+    "ppsspp_spline_quality",
+    "ppsspp_lower_resolution_for_effects",
 ];
 
 fn visible_options(ctx: &Ctx) -> Vec<usize> {
@@ -2499,6 +2867,12 @@ fn visible_options(ctx: &Ctx) -> Vec<usize> {
 fn option_kept(desc: &str) -> bool {
     let d = desc.to_ascii_lowercase();
     KEEP_OPTIONS.iter().any(|k| d.contains(k))
+}
+
+/// Key-based visibility for options whose descriptions are too generic.
+fn option_kept_key(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    KEEP_KEYS.contains(&k.as_str())
 }
 
 /// Genesis Plus GX options that are too detailed for the handheld menu.
@@ -2543,10 +2917,16 @@ fn core_pad_bits(bits: u16, game_l2_r2: bool) -> u16 {
 
 /// Cores that still need the performance governor after GPU presentation.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-/// PS1 keeps the performance governor; Genesis and PCE run on schedutil
-/// and ramp only when they need to.
+/// PS1 and PSP keep the performance governor; Genesis and PCE run on
+/// schedutil and ramp only when they need to.
 fn needs_performance(system_id: &str) -> bool {
-    system_id == "psx"
+    matches!(system_id, "psx" | "psp")
+}
+
+/// Rewind is off for the heavy cores and for any state too large to snapshot
+/// without stalling the frame loop.
+fn rewind_allowed(system_id: &str, ser_size: usize) -> bool {
+    !matches!(system_id, "psx" | "psp") && ser_size > 0 && ser_size <= REWIND_MAX_STATE
 }
 
 /// Live on-screen counters: frames per second and a once-a-second system
@@ -2726,16 +3106,34 @@ fn state_thumb_path(path: &Path) -> std::path::PathBuf {
 /// Capture the current game frame as a small PNG beside a state.
 fn save_state_thumb(path: &Path) {
     let ctx = ctx();
-    if ctx.frame.is_null()
-        || ctx.pitch == 0
-        || ctx.geometry.base_width == 0
-        || ctx.geometry.base_height == 0
-    {
+    #[cfg(target_os = "linux")]
+    let hw = if ctx.frame.is_null() {
+        hw_capture(ctx.hw_render.as_ref().is_some_and(|h| h.bottom_left))
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "linux"))]
+    let hw: Option<Canvas> = None;
+    if ctx.frame.is_null() && hw.is_none() {
         util::log("state thumb: no frame available");
         return;
     }
     let mut cv = Canvas::new(240, 180);
-    blit(ctx, &mut cv, ScaleMode::Fit, (0, 0, 240, 180));
+    if let Some(frame) = hw.as_ref() {
+        blit_px(
+            &frame.px,
+            frame.w as usize,
+            frame.h as usize,
+            &mut cv,
+            ScaleMode::Fit,
+            (0, 0, 240, 180),
+        );
+    } else if ctx.pitch > 0 && ctx.geometry.base_width > 0 && ctx.geometry.base_height > 0 {
+        blit(ctx, &mut cv, ScaleMode::Fit, (0, 0, 240, 180));
+    } else {
+        util::log("state thumb: no frame available");
+        return;
+    }
     for p in &mut cv.px {
         *p |= 0xFF00_0000;
     }
@@ -2778,22 +3176,62 @@ fn restore_auto_state(path: &Path, hud: &mut Option<(String, Instant)>) {
     }
 }
 
+/// Prefix for LZ4-compressed state files; raw legacy states lack it.
+const STATE_MAGIC: &[u8; 8] = b"MAGIS1\0\0";
+
+fn pack_state(buf: Vec<u8>) -> (Vec<u8>, bool) {
+    let packed = lz4_flex::compress_prepend_size(&buf);
+    if STATE_MAGIC.len() + packed.len() < buf.len() {
+        let mut out = Vec::with_capacity(STATE_MAGIC.len() + packed.len());
+        out.extend_from_slice(STATE_MAGIC);
+        out.extend_from_slice(&packed);
+        (out, true)
+    } else {
+        (buf, false)
+    }
+}
+
+fn unpack_state(bytes: Vec<u8>) -> std::io::Result<Vec<u8>> {
+    if bytes.starts_with(STATE_MAGIC) {
+        lz4_flex::decompress_size_prepended(&bytes[STATE_MAGIC.len()..])
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
+    } else {
+        Ok(bytes)
+    }
+}
+
 /// Serialize into a file; `None` means the core cannot save at all.
 fn save_state_to(path: &Path) -> Option<bool> {
     let size = unsafe { (ctx().ser_size)() };
     if size == 0 {
         return None;
     }
+    let t0 = Instant::now();
     let mut buf = vec![0u8; size];
     let ok = unsafe { (ctx().ser)(buf.as_mut_ptr() as *mut c_void, size) };
+    let ser_ms = t0.elapsed().as_secs_f64() * 1000.0;
     if !ok {
         util::log("state save: core refused to serialize");
         return Some(false);
     }
-    match util::write_file_atomic(path, &buf) {
+    let (data, compressed) = pack_state(buf);
+    let pack_ms = t0.elapsed().as_secs_f64() * 1000.0 - ser_ms;
+    let stored = data.len();
+    let t1 = Instant::now();
+    match util::write_file_atomic(path, &data) {
         Ok(()) => {
+            let write_ms = t1.elapsed().as_secs_f64() * 1000.0;
             save_state_thumb(path);
-            util::log(&format!("state saved: {}", path.display()));
+            util::log(&format!(
+                "state saved: {} ({} -> {} bytes{}, serialize {:.1} ms, pack {:.1} ms, write {:.1} ms)",
+                path.display(),
+                size,
+                stored,
+                if compressed { ", lz4" } else { "" },
+                ser_ms,
+                pack_ms,
+                write_ms
+            ));
             Some(true)
         }
         Err(e) => {
@@ -2804,7 +3242,7 @@ fn save_state_to(path: &Path) -> Option<bool> {
 }
 
 fn load_state_from(path: &Path) -> std::io::Result<bool> {
-    let buf = std::fs::read(path)?;
+    let buf = unpack_state(std::fs::read(path)?)?;
     Ok(unsafe { (ctx().unser)(buf.as_ptr() as *const c_void, buf.len()) })
 }
 
@@ -2885,6 +3323,8 @@ struct GameMenu {
     opt_since: Instant,
     overlay_sel: usize,
     overlay_idx: [usize; 2],
+    /// Game-image shader, persisted with the display prefs.
+    shader: ShaderMode,
     /// On-screen counters (persisted as display prefs).
     fps: bool,
     sysinfo: bool,
@@ -3145,7 +3585,8 @@ fn blend_layer(dst: &mut Canvas, layer: &Canvas) {
 }
 
 /// The screenshot frame: the game with the bezel and the overlays, composed
-/// on the CPU (the GPU keeps its frame in texture memory).
+/// on the CPU. A hardware core has no CPU frame, so its FBO is read back
+/// before this call and passed as `hw`.
 fn compose_shot(
     ctx: &Ctx,
     scale: ScaleMode,
@@ -3154,9 +3595,20 @@ fn compose_shot(
     layer: &Canvas,
     cw: u32,
     ch: u32,
+    hw: Option<Canvas>,
 ) -> Canvas {
     let mut shot = Canvas::new(cw, ch);
-    if ctx.frame.is_null() {
+    if let Some(frame) = hw.as_ref() {
+        blit_px(
+            &frame.px,
+            frame.w as usize,
+            frame.h as usize,
+            &mut shot,
+            scale,
+            game_area,
+        );
+        apply_overlays(&mut shot, overlays);
+    } else if ctx.frame.is_null() {
         shot.clear(pal().bg0);
     } else {
         blit(ctx, &mut shot, scale, game_area);
@@ -3166,8 +3618,51 @@ fn compose_shot(
     shot
 }
 
-/// Hand a frame to the GPU: the game, the bezel overlay and the UI layer
-/// (the overlays and the menu) in one pass.
+/// Drop the GPU presenter and withdraw its pointer from the core callbacks.
+#[cfg(target_os = "linux")]
+fn drop_gpu(gpu: &mut Option<crate::present::gles::Gpu>) {
+    HW_GPU.store(std::ptr::null_mut(), Ordering::Relaxed);
+    *gpu = None;
+}
+
+/// Read the hardware framebuffer back for screenshots and state previews.
+#[cfg(target_os = "linux")]
+fn hw_capture(flip_v: bool) -> Option<Canvas> {
+    let gpu = HW_GPU.load(Ordering::Relaxed);
+    if gpu.is_null() {
+        return None;
+    }
+    let (px, w, h) = unsafe { (*gpu).read_hw(flip_v)? };
+    let mut cv = Canvas::new(w, h);
+    cv.px = px;
+    Some(cv)
+}
+
+/// Upload the UI layer once for either present path.
+#[cfg(target_os = "linux")]
+fn gpu_ui<'a>(
+    gpu: &'a mut Option<crate::present::gles::Gpu>,
+    layer: &Canvas,
+) -> Option<&'a mut crate::present::gles::Gpu> {
+    let g = gpu.as_mut()?;
+    let uploaded = match layer.dirty_rect() {
+        Some((x, y, w, h)) => g.set_ui(Some(&crate::present::gles::Layer {
+            px: &layer.px,
+            w: layer.w as u32,
+            h: layer.h as u32,
+            rect: (x, y, w, h),
+        })),
+        None => g.set_ui(None),
+    };
+    if !uploaded {
+        util::log("gpu: UI layer upload failed");
+        return None;
+    }
+    Some(g)
+}
+
+/// Hand a software frame to the GPU: the game, the bezel overlay and the UI
+/// layer (the overlays and the menu) in one pass.
 #[cfg(target_os = "linux")]
 fn gpu_present(
     gpu: &mut Option<crate::present::gles::Gpu>,
@@ -3180,23 +3675,25 @@ fn gpu_present(
     rect: (i32, i32, u32, u32),
     warmth: u8,
 ) -> bool {
-    let Some(g) = gpu.as_mut() else {
+    let Some(g) = gpu_ui(gpu, layer) else {
         return false;
     };
-    let uploaded = match layer.dirty_rect() {
-        Some((x, y, w, h)) => g.set_ui(Some(&crate::present::gles::Layer {
-            px: &layer.px,
-            w: layer.w as u32,
-            h: layer.h as u32,
-            rect: (x, y, w, h),
-        })),
-        None => g.set_ui(None),
-    };
-    if !uploaded {
-        util::log("gpu: UI layer upload failed");
-        return false;
-    }
     g.present(frame, pitch, fw, fh, fmt, rect, warmth)
+}
+
+/// Composite the FBO a hardware-rendered core drew into.
+#[cfg(target_os = "linux")]
+fn gpu_present_hw(
+    gpu: &mut Option<crate::present::gles::Gpu>,
+    layer: &Canvas,
+    rect: (i32, i32, u32, u32),
+    warmth: u8,
+    flip_v: bool,
+) -> bool {
+    let Some(g) = gpu_ui(gpu, layer) else {
+        return false;
+    };
+    g.present_hw(rect, warmth, flip_v)
 }
 
 enum HudSpot {
@@ -3221,31 +3718,6 @@ fn blit(ctx: &Ctx, cv: &mut Canvas, mode: ScaleMode, area: (i32, i32, u32, u32))
     if fw == 0 || fh == 0 || ctx.pitch == 0 {
         return;
     }
-    let cw = cv.w as usize;
-    let (x0, y0, dw, dh) = game_rect(mode, fw, fh, area);
-    let (dw, dh) = (dw as usize, dh as usize);
-    let (x0, y0) = (x0 as usize, y0 as usize);
-
-    let ch = cv.h as usize;
-    let bg = pal().bg0.to_u32();
-    if y0 > 0 {
-        cv.px[..y0 * cw].fill(bg);
-    }
-    let below = (y0 + dh).min(ch) * cw;
-    if below < cv.px.len() {
-        cv.px[below..].fill(bg);
-    }
-    for row in y0..(y0 + dh).min(ch) {
-        let base = row * cw;
-        cv.px[base..base + x0.min(cw)].fill(bg);
-        let right = (x0 + dw).min(cw);
-        cv.px[base + right..base + cw].fill(bg);
-    }
-
-    // One division per destination column.
-    let sx_map: Vec<usize> = (0..dw)
-        .map(|dx| ((dx as f32 * fw as f32 / dw as f32) as usize).min(fw - 1))
-        .collect();
 
     // Convert the source once; rows that scale to several output rows are
     // expanded once and copied, instead of converting every pixel again.
@@ -3283,6 +3755,47 @@ fn blit(ctx: &Ctx, cv: &mut Canvas, mode: ScaleMode, area: (i32, i32, u32, u32))
         }
     }
 
+    blit_px(&src, fw, fh, cv, mode, area);
+}
+
+/// Scale an already-converted top-down `0xAARRGGBB` frame into `cv`.
+fn blit_px(
+    src: &[u32],
+    fw: usize,
+    fh: usize,
+    cv: &mut Canvas,
+    mode: ScaleMode,
+    area: (i32, i32, u32, u32),
+) {
+    if fw == 0 || fh == 0 || src.len() < fw * fh {
+        return;
+    }
+    let cw = cv.w as usize;
+    let (x0, y0, dw, dh) = game_rect(mode, fw, fh, area);
+    let (dw, dh) = (dw as usize, dh as usize);
+    let (x0, y0) = (x0 as usize, y0 as usize);
+
+    let ch = cv.h as usize;
+    let bg = pal().bg0.to_u32();
+    if y0 > 0 {
+        cv.px[..y0 * cw].fill(bg);
+    }
+    let below = (y0 + dh).min(ch) * cw;
+    if below < cv.px.len() {
+        cv.px[below..].fill(bg);
+    }
+    for row in y0..(y0 + dh).min(ch) {
+        let base = row * cw;
+        cv.px[base..base + x0.min(cw)].fill(bg);
+        let right = (x0 + dw).min(cw);
+        cv.px[base + right..base + cw].fill(bg);
+    }
+
+    // One division per destination column.
+    let sx_map: Vec<usize> = (0..dw)
+        .map(|dx| ((dx as f32 * fw as f32 / dw as f32) as usize).min(fw - 1))
+        .collect();
+
     // The scaler is the largest software cost in the frame; split the
     // output rows over two cores while the emulator core is idle.
     let split = dh / 2;
@@ -3292,14 +3805,14 @@ fn blit(ctx: &Ctx, cv: &mut Canvas, mode: ScaleMode, area: (i32, i32, u32, u32))
         std::thread::scope(|scope| {
             scope.spawn(|| {
                 blit_rows(
-                    &src, &sx_map, bottom, split_row, cw, x0, y0, dw, fw, fh, dh, split, dh,
+                    src, &sx_map, bottom, split_row, cw, x0, y0, dw, fw, fh, dh, split, dh,
                 );
             });
-            blit_rows(&src, &sx_map, top, 0, cw, x0, y0, dw, fw, fh, dh, 0, split);
+            blit_rows(src, &sx_map, top, 0, cw, x0, y0, dw, fw, fh, dh, 0, split);
         });
     } else {
         blit_rows(
-            &src, &sx_map, &mut cv.px, 0, cw, x0, y0, dw, fw, fh, dh, 0, dh,
+            src, &sx_map, &mut cv.px, 0, cw, x0, y0, dw, fw, fh, dh, 0, dh,
         );
     }
 }
@@ -3403,14 +3916,25 @@ mod option_tests {
 
 #[cfg(test)]
 mod key_mode_tests {
-    use super::needs_performance;
+    use super::{needs_performance, rewind_allowed, REWIND_MAX_STATE};
 
     #[test]
     fn light_systems_stay_on_schedutil() {
         for system in ["gb", "gbc", "gba", "ngp", "snes", "pce", "genesis"] {
             assert!(!needs_performance(system), "{system}");
         }
-        assert!(needs_performance("psx"));
+        for system in ["psx", "psp"] {
+            assert!(needs_performance(system), "{system}");
+        }
+    }
+
+    #[test]
+    fn rewind_is_off_for_psx_psp_and_large_states() {
+        assert!(!rewind_allowed("psx", 1 << 20));
+        assert!(!rewind_allowed("psp", 1 << 20));
+        assert!(rewind_allowed("gba", 1 << 20));
+        assert!(!rewind_allowed("gba", REWIND_MAX_STATE + 1));
+        assert!(!rewind_allowed("gba", 0));
     }
 }
 
@@ -3482,12 +4006,44 @@ mod state_slot_tests {
             Path::new("Saves/GBC/Game.state.png")
         );
     }
+
+    #[test]
+    fn state_compression_round_trips() {
+        let raw = vec![0u8; 1 << 20];
+        let (packed, compressed) = super::pack_state(raw.clone());
+        assert!(compressed);
+        assert!(packed.starts_with(super::STATE_MAGIC));
+        assert_eq!(super::unpack_state(packed).unwrap(), raw);
+
+        let raw = b"legacy raw state".to_vec();
+        let (packed, compressed) = super::pack_state(raw.clone());
+        assert!(!compressed);
+        assert_eq!(super::unpack_state(packed).unwrap(), raw);
+    }
 }
 
 #[cfg(test)]
 mod overlay_tests {
-    use super::{double_tap, option_kept, DOUBLE_TAP};
+    use super::{double_tap, option_kept, option_kept_key, DOUBLE_TAP};
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn psp_option_keys_are_visible() {
+        for key in [
+            "ppsspp_button_preference",
+            "ppsspp_texture_anisotropic_filtering",
+            "ppsspp_texture_filtering",
+            "ppsspp_skip_buffer_effects",
+            "ppsspp_disable_range_culling",
+            "ppsspp_skip_gpu_readbacks",
+            "ppsspp_lazy_texture_caching",
+            "ppsspp_spline_quality",
+            "ppsspp_lower_resolution_for_effects",
+        ] {
+            assert!(option_kept_key(key), "{key}");
+        }
+        assert!(!option_kept_key("ppsspp_wlan_channel"));
+    }
 
     #[test]
     fn option_whitelist_matches_loosely() {
@@ -3516,7 +4072,10 @@ mod overlay_tests {
         assert!(option_kept("CD Bios (Restart Required)"));
         assert!(option_kept("Enhanced Resolution"));
         assert!(option_kept("Rumble Effects"));
-        assert!(!option_kept("Frameskip"));
+        assert!(option_kept("CPU Core"));
+        assert!(option_kept("Frameskip"));
+        assert!(option_kept("Frameskip Type"));
+        assert!(!option_kept("Texture Scaling"));
         assert!(!option_kept("Game Boy Player Rumble (Restart)"));
         assert!(!option_kept("Color"));
         assert!(option_kept("Solar Sensor Level"));

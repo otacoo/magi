@@ -39,7 +39,7 @@ fi
 
 rm -rf "$OUT"
 mkdir -p "$OUT/System/magi/assets" "$OUT/System/magi/cores" \
-         "$OUT/Config" "$OUT/BIOS" "$OUT/Overlays" "$OUT/Saves" \
+         "$OUT/Config" "$OUT/BIOS" "$OUT/BIOS/PPSSPP" "$OUT/Overlays" "$OUT/Saves" \
          "$OUT/Screenshots" "$OUT/Logs" "$OUT/Games" "$OUT/Themes"
 
 cp "$BIN" "$OUT/System/frontend"
@@ -105,8 +105,8 @@ if [ -n "$CORES" ] && [ -d "$CORES" ]; then
 fi
 
 cat > "$OUT/Games/README.txt" <<'EOF'
-Games, one folder per console: GB, GBC, GBA, NES, SNES, GENESIS, PS1, NGPC,
-PCE, ...
+Games, one folder per console: GB, GBC, GBA, NES, SNES, GENESIS, PS1, PSP,
+NGPC, PCE, ...
 Folder names are declared in System/magi/systems.json ("folder").
 EOF
 
@@ -118,6 +118,7 @@ cat > "$OUT/BIOS/README.txt" <<'EOF'
 Console BIOS files (for systems that need one):
   GBA: gba_bios.bin (gba_bios.gba is copied to it)
   PS1: scph5501.bin (US), scph5500.bin (Japan), scph5502.bin (Europe)
+  PSP: no BIOS required; optional PPSSPP assets (contents of assets/) go in BIOS/PPSSPP/
   PC Engine CD: syscard3.pce, syscard3u.pce (US), syscard2/1.pce, gexpress.pce
                 (HuCards do not use a CD System Card)
 EOF

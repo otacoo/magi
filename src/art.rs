@@ -99,6 +99,7 @@ fn builtin(id: &str) -> Option<&'static str> {
         "genesis" => "Sega - Mega Drive - Genesis",
         "ngp" => "SNK - Neo Geo Pocket",
         "psx" => "Sony - PlayStation",
+        "psp" => "Sony - PlayStation Portable",
         "pce" => "NEC - PC Engine - TurboGrafx 16",
         "n64" => "Nintendo - Nintendo 64",
         _ => return None,
@@ -107,7 +108,9 @@ fn builtin(id: &str) -> Option<&'static str> {
 
 fn dat_set(collection: &str) -> &'static str {
     match collection {
-        "Sony - PlayStation" | "NEC - PC Engine CD - TurboGrafx-CD" => "redump",
+        "Sony - PlayStation"
+        | "Sony - PlayStation Portable"
+        | "NEC - PC Engine CD - TurboGrafx-CD" => "redump",
         _ => "no-intro",
     }
 }
@@ -442,7 +445,7 @@ fn is_disc(sys: &SystemDef, rom: &str) -> bool {
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    sys.id == "psx" || (sys.id == "pce" && (ext == "cue" || ext == "chd"))
+    sys.id == "psx" || sys.id == "psp" || (sys.id == "pce" && (ext == "cue" || ext == "chd"))
 }
 
 /// A multi-disc dump's game name without the disc tag.

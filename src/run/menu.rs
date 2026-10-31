@@ -311,7 +311,7 @@ impl GameMenu {
     }
 
     fn handle_overlays(&mut self, up: bool, down: bool, left: bool, right: bool, a: bool, b: bool) {
-        const ROWS: usize = 4;
+        const ROWS: usize = 5;
         if up {
             self.overlay_sel = (self.overlay_sel + ROWS - 1) % ROWS;
         } else if down {
@@ -321,8 +321,10 @@ impl GameMenu {
                 self.fps = !self.fps;
             } else if self.overlay_sel == 1 {
                 self.sysinfo = !self.sysinfo;
+            } else if self.overlay_sel == 2 {
+                self.shader = self.shader.next();
             } else {
-                let layer = self.overlay_sel - 2;
+                let layer = self.overlay_sel - 3;
                 let n = ctx().overlay_layers[layer].len() as i32 + 1;
                 let delta = if left { -1 } else { 1 };
                 let cur = &mut self.overlay_idx[layer];

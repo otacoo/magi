@@ -6,7 +6,7 @@ use std::ffi::c_void;
 use std::os::raw::{c_char, c_int, c_long, c_uint, c_ulong};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::util;
 
@@ -234,7 +234,7 @@ impl AlsaOut {
                 // ring stays empty long enough to underrun for real.
                 let mut buf = vec![0i16; CHUNK_FRAMES * 2];
                 let mut starved = 0u32;
-                let mut quiet = false;
+                let mut last_empty: Option<Instant> = None;
                 loop {
                     let take = {
                         let mut ring = r.lock().unwrap();
@@ -247,8 +247,9 @@ impl AlsaOut {
                         if s.load(Ordering::Relaxed) {
                             break;
                         }
-                        if !quiet {
-                            quiet = true;
+                        let now = Instant::now();
+                        if last_empty.map_or(true, |t| now.duration_since(t).as_secs() >= 2) {
+                            last_empty = Some(now);
                             util::log("audio: ring empty; holding silence");
                         }
                         starved += 1;
@@ -268,7 +269,6 @@ impl AlsaOut {
                         }
                         continue;
                     }
-                    quiet = false;
                     starved = 0;
                     if !alsa.write(&buf[..take]) {
                         break;

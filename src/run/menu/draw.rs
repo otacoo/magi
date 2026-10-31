@@ -12,6 +12,7 @@ use crate::netplay;
 use crate::screens::views::marquee_offset;
 use crate::theme::pal;
 
+use super::super::prefs::ShaderMode;
 use super::super::{
     ctx, disc_count, disc_index, visible_options, CoreOption, Ctx, DiskControl, GameGeometry,
     GameInfo, GameMenu, MenuPage, NetplayPage, OverlayLayers, StateCard, CTX, STATE_SLOTS,
@@ -452,6 +453,7 @@ fn draw_video_pane(
     let rows = [
         ("FPS COUNTER", onoff(menu.fps).to_string()),
         ("SYSINFO", onoff(menu.sysinfo).to_string()),
+        ("SHADER", menu.shader.label().to_string()),
         (
             "CRT",
             overlay_pick(&ctx().overlay_layers, menu.overlay_idx[0], 0),
@@ -833,7 +835,7 @@ pub(crate) fn draw_overlay_menu(
     let s = crate::theme::ui_scale();
     let p = |v: f32| (v * s).round() as i32;
     let ww = p(400.0).min(w - p(24.0));
-    let hh = p(92.0) + 4 * p(32.0) + p(24.0);
+    let hh = p(92.0) + 5 * p(32.0) + p(24.0);
     let x0 = w / 2 - ww / 2;
     let y0 = h / 2 - hh / 2;
     cv.fill_rect_a(x0, y0, ww as u32, hh as u32, pal().bg0, 220);
@@ -848,26 +850,19 @@ pub(crate) fn draw_overlay_menu(
         t,
         0.2,
     );
-    fonts.draw_center(
-        cv,
-        w / 2,
-        y0 + p(24.0),
-        "MAGI // OVERLAYS",
-        15.0,
-        pal().title,
-    );
+    fonts.draw_center(cv, w / 2, y0 + p(24.0), "MAGI // VIDEO", 15.0, pal().title);
     fonts.draw_center(
         cv,
         w / 2,
         y0 + p(46.0),
-        "OSD, THEN LOWEST LAYER FIRST",
+        "OSD, SHADER AND OVERLAYS",
         10.0,
         pal().text_faint,
     );
 
     // Same row geometry as the pause menu: 32 px pitch, 24 px inset, the
     // text baseline 5 px under the row centre.
-    let rows = ["FPS", "SYS INFO", "CRT", "BEZEL"];
+    let rows = ["FPS", "SYS INFO", "SHADER", "CRT", "BEZEL"];
     let pitch = p(32.0);
     for (row, label) in rows.iter().enumerate() {
         let c = y0 + p(76.0) + row as i32 * pitch + pitch / 2;
@@ -902,11 +897,12 @@ pub(crate) fn draw_overlay_menu(
         let value = match row {
             0 => cell(menu.fps),
             1 => cell(menu.sysinfo),
-            _ => match menu.overlay_idx[row - 2] {
+            2 => menu.shader.label().to_string(),
+            _ => match menu.overlay_idx[row - 3] {
                 0 => "OFF".to_string(),
                 k => {
                     let name = files
-                        .get(row - 2)
+                        .get(row - 3)
                         .and_then(|l| l.get(k - 1))
                         .map(|s| s.as_str())
                         .unwrap_or("");
@@ -1344,6 +1340,7 @@ pub(crate) fn draw_overlay_menu_preview(
         opt_since: std::time::Instant::now(),
         overlay_sel: sel,
         overlay_idx: idx,
+        shader: ShaderMode::Off,
         fps: false,
         sysinfo: false,
         hold: None,
@@ -1524,6 +1521,8 @@ pub(crate) fn draw_menu_preview(
         rom: "Metal Gear Solid (Europe) (En,Fr,De,Es).gbc".into(),
         netplay: None,
         netplay_linked: false,
+        #[cfg(target_os = "linux")]
+        hw_render: None,
     };
     let rom = fixture.rom.clone();
     let prev = CTX.swap(&mut fixture as *mut Ctx, Ordering::Relaxed);
@@ -1564,6 +1563,7 @@ pub(crate) fn draw_menu_preview(
         opt_since: std::time::Instant::now(),
         overlay_sel: 1,
         overlay_idx: [1, 1],
+        shader: ShaderMode::Off,
         fps: true,
         sysinfo: false,
         hold,

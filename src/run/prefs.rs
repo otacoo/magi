@@ -131,6 +131,68 @@ impl ScaleMode {
     }
 }
 
+/// Screen shader applied to the game image by the GLES presenter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ShaderMode {
+    Off,
+    Shimmerless,
+    PspColor,
+    GbaColor,
+    GbcColor,
+    Lcd3x,
+    Dot,
+}
+
+impl ShaderMode {
+    pub(super) fn next(self) -> Self {
+        match self {
+            ShaderMode::Off => ShaderMode::Shimmerless,
+            ShaderMode::Shimmerless => ShaderMode::PspColor,
+            ShaderMode::PspColor => ShaderMode::GbaColor,
+            ShaderMode::GbaColor => ShaderMode::GbcColor,
+            ShaderMode::GbcColor => ShaderMode::Lcd3x,
+            ShaderMode::Lcd3x => ShaderMode::Dot,
+            ShaderMode::Dot => ShaderMode::Off,
+        }
+    }
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            ShaderMode::Off => "OFF",
+            ShaderMode::Shimmerless => "SHIMMERLESS",
+            ShaderMode::PspColor => "PSP COLOR",
+            ShaderMode::GbaColor => "GBA COLOR",
+            ShaderMode::GbcColor => "GBC COLOR",
+            ShaderMode::Lcd3x => "LCD3X",
+            ShaderMode::Dot => "DOT",
+        }
+    }
+
+    pub(super) fn as_u8(self) -> u8 {
+        match self {
+            ShaderMode::Off => 0,
+            ShaderMode::Shimmerless => 1,
+            ShaderMode::PspColor => 2,
+            ShaderMode::GbaColor => 3,
+            ShaderMode::GbcColor => 4,
+            ShaderMode::Lcd3x => 5,
+            ShaderMode::Dot => 6,
+        }
+    }
+
+    pub(super) fn from_u8(v: u8) -> Self {
+        match v {
+            1 => ShaderMode::Shimmerless,
+            2 => ShaderMode::PspColor,
+            3 => ShaderMode::GbaColor,
+            4 => ShaderMode::GbcColor,
+            5 => ShaderMode::Lcd3x,
+            6 => ShaderMode::Dot,
+            _ => ShaderMode::Off,
+        }
+    }
+}
+
 /// Per-axis scale factors for a mode; `blit` clamps the result to the panel.
 pub(super) fn scale_factors(
     mode: ScaleMode,
@@ -159,6 +221,7 @@ pub(super) struct DisplayPrefs {
     pub(super) anim_bg: bool,
     pub(super) glow: bool,
     pub(super) scale: ScaleMode,
+    pub(super) shader: ShaderMode,
     pub(super) brightness: u32,
     pub(super) warmth: u32,
     pub(super) lid_sleep: bool,
@@ -200,6 +263,7 @@ pub(super) fn load_display_prefs() -> DisplayPrefs {
             .and_then(|x| x.as_bool())
             .unwrap_or(Defaults::GLOW),
         scale: ScaleMode::from_u8(v.get("scale_mode").and_then(|x| x.as_u64()).unwrap_or(0) as u8),
+        shader: ShaderMode::from_u8(v.get("shader").and_then(|x| x.as_u64()).unwrap_or(0) as u8),
         brightness,
         warmth: v
             .get("warmth")
@@ -243,6 +307,7 @@ pub(super) fn save_display_prefs(p: &DisplayPrefs) {
         .filter(|v: &serde_json::Value| v.is_object())
         .unwrap_or_else(|| serde_json::json!({}));
     v["scale_mode"] = serde_json::json!(p.scale.as_u8());
+    v["shader"] = serde_json::json!(p.shader.as_u8());
     v["rumble"] = serde_json::json!(p.rumble);
     v["brightness"] = serde_json::json!(p.brightness);
     v["warmth"] = serde_json::json!(p.warmth);
