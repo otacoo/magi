@@ -12,11 +12,11 @@ The box-filter sample point used by MAGI's `SHIMMERLESS` screen shader in
 
 ## libretro/glsl-shaders handheld set
 
-The built-in `PSP COLOR`, `GBA COLOR`, `GBC COLOR`, `LCD3X` and `DOT` modes
+The built-in `GBA COLOR`, `GBC COLOR`, `LCD3X` and `DOT` modes
 are ports of public-domain shaders from
 https://github.com/libretro/glsl-shaders/tree/master/handheld:
 
-- Color Mangler (`psp-color`, `gba-color`, `gbc-color`)
+- Color Mangler (`gba-color`, `gbc-color`)
   Author: hunterk; modified by Pokefan531. License: Public domain.
 - `lcd3x`
   Author: Gigaherz. License: Public domain.

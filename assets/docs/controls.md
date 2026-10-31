@@ -25,7 +25,7 @@ reference.
 | In game | Pause menu **B** | Resume |
 | In game | Pause menu **Y** | Delete the shown state (press Y twice) |
 | In game | Hold **MENU** | Save state and exit |
-| In game | **L2** hold | Rewind (except N64, PS1 and PSP) |
+| In game | **L2** hold | Rewind (except N64 and PS1) |
 | In game | **R2** hold / double-tap | Fast-forward / latch (except N64; PS1 requires holding SELECT) |
 | In game | **SELECT+R1 / SELECT+L1** | Save state / load state |
 | In game | **SELECT+X** | Scale: fit / integer / stretch |

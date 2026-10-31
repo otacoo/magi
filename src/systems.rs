@@ -103,9 +103,6 @@ impl Catalogue {
         for s in &self.systems {
             dirs.push(format!("{}/{}", DIR_GAMES, s.folder()));
         }
-        if self.systems.iter().any(|s| s.id == "psp") {
-            dirs.push(format!("{DIR_BIOS}/PPSSPP"));
-        }
         let mut made = 0;
         for d in &dirs {
             if !Path::new(d).is_dir() {
@@ -154,7 +151,7 @@ mod tests {
         let s = builtin();
         assert!(s.len() >= 5);
         for id in [
-            "gb", "gbc", "gba", "nes", "snes", "genesis", "psx", "psp", "ngp", "pce",
+            "gb", "gbc", "gba", "nes", "snes", "genesis", "psx", "ngp", "pce",
         ] {
             assert!(s.iter().any(|d| d.id == id), "missing {id}");
         }

@@ -225,36 +225,9 @@ static HW_GPU: AtomicPtr<crate::present::gles::Gpu> = AtomicPtr::new(std::ptr::n
 #[cfg(target_os = "linux")]
 static HW_FBO: AtomicUsize = AtomicUsize::new(0);
 
+#[cfg(target_os = "linux")]
 fn hw_available() -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        !HW_GPU.load(Ordering::Relaxed).is_null()
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        false
-    }
-}
-
-/// Core options MAGI controls for PPSSPP. The GPU path is used whenever the
-/// GLES context is up; otherwise the core must stay on its software renderer.
-fn hw_variable(core: &str, key: &str, hw: bool) -> Option<*const c_char> {
-    if core != "ppsspp" {
-        return None;
-    }
-    match key {
-        "ppsspp_backend" => Some(if hw {
-            c"opengl".as_ptr()
-        } else {
-            c"none".as_ptr()
-        }),
-        "ppsspp_software_rendering" => Some(if hw {
-            c"disabled".as_ptr()
-        } else {
-            c"enabled".as_ptr()
-        }),
-        _ => None,
-    }
+    !HW_GPU.load(Ordering::Relaxed).is_null()
 }
 
 /// "Descriptor; value1|value2|value3" (the legacy SET_VARIABLES format).
@@ -282,13 +255,6 @@ fn default_option(core: &str, key: &str) -> Option<&'static str> {
         // Beetle PCE defaults to the Japanese System Card 3. Follow the
         // BIOS that is actually on the card when it is a different one.
         ("mednafen_pce", "pce_cdbios") => pce_bios_default(),
-        // Software fallback: the hardware path overrides both when MAGI's
-        // GLES context is up.
-        ("ppsspp", "ppsspp_backend") => Some("none"),
-        ("ppsspp", "ppsspp_software_rendering") => Some("enabled"),
-        ("ppsspp", "ppsspp_cpu_core") => Some("JIT"),
-        ("ppsspp", "ppsspp_fast_memory") => Some("enabled"),
-        ("ppsspp", "ppsspp_auto_frameskip") => Some("enabled"),
         _ => None,
     }
 }
@@ -491,8 +457,8 @@ fn disc_swap(index: usize) -> bool {
     done
 }
 
-/// The core's variadic logger. Only the two string arguments used by
-/// PPSSPP's own callback are read; other format strings are logged as-is.
+/// The core's variadic logger. Only the two string arguments used by the
+/// core's own callback are read; other format strings are logged as-is.
 unsafe extern "C" fn core_log(
     level: c_uint,
     fmt: *const c_char,
@@ -512,8 +478,8 @@ unsafe extern "C" fn core_log(
     }
 }
 
-/// The FBO a hardware core must bind. PPSSPP reads this from its emu thread,
-/// so it lives outside `Ctx`.
+/// The FBO a hardware core must bind. The core reads this from its emu
+/// thread, so it lives outside `Ctx`.
 #[cfg(target_os = "linux")]
 extern "C" fn hw_current_framebuffer() -> usize {
     HW_FBO.load(Ordering::Relaxed)
@@ -622,7 +588,7 @@ extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
                         .iter()
                         .map(|v| CString::new(v.as_str()).unwrap_or_default())
                         .collect();
-                    let visible = (option_kept(&desc) || option_kept_key(&key))
+                    let visible = option_kept(&desc)
                         && !(ctx.system == "genesis" && genesis_option_hidden(&desc));
                     if key.to_ascii_lowercase().contains("bios") {
                         util::log(&format!("core option {key}={}", values[chosen]));
@@ -649,22 +615,6 @@ extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
                 labels.join(", ")
             ));
             ctx.options = options;
-            if ctx.opt_key == "ppsspp" {
-                let pick = |key: &str| {
-                    ctx.options
-                        .iter()
-                        .find(|o| o.key == key)
-                        .map(|o| o.values[o.chosen].as_str())
-                        .unwrap_or("?")
-                };
-                util::log(&format!(
-                    "ppsspp: core={} frameskip={} auto_frameskip={} res={}",
-                    pick("ppsspp_cpu_core"),
-                    pick("ppsspp_frameskip"),
-                    pick("ppsspp_auto_frameskip"),
-                    pick("ppsspp_internal_resolution")
-                ));
-            }
             true
         }
         ENV_GET_VARIABLE => {
@@ -673,13 +623,11 @@ extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
             }
             let rv = data as *mut RetroVariable;
             let key = cstr(unsafe { (*rv).key });
-            let value = hw_variable(&ctx.opt_key, &key, hw_available())
-                .or_else(|| {
-                    ctx.options
-                        .iter()
-                        .find(|o| o.key == key)
-                        .map(|o| o.c_values[o.chosen].as_ptr())
-                })
+            let value = ctx
+                .options
+                .iter()
+                .find(|o| o.key == key)
+                .map(|o| o.c_values[o.chosen].as_ptr())
                 .unwrap_or(std::ptr::null());
             unsafe { (*rv).value = value };
             true
@@ -986,24 +934,6 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         .unwrap_or_else(|| system_id.to_uppercase());
     let save_dir = format!("Saves/{folder}");
     std::fs::create_dir_all(&save_dir).with_context(|| format!("create {save_dir}"))?;
-    // PPSSPP's memstick root is this directory. The libretro VFS does not
-    // create missing parents on mkdir, so give the core its standard layout.
-    if system_id == "psp" {
-        for dir in [
-            "SAVEDATA",
-            "PSP/SAVEDATA",
-            "GAME",
-            "PSP/GAME",
-            "TEXTURES",
-            "PSP/TEXTURES",
-            "SYSTEM",
-            "PSP/SYSTEM",
-            "PSP/Cheats",
-        ] {
-            let _ = std::fs::create_dir_all(Path::new(&save_dir).join(dir));
-        }
-        util::log(&format!("psp: memstick {save_dir}"));
-    }
     let bios_dir = std::env::current_dir()
         .map(|cwd| cwd.join("BIOS"))
         .unwrap_or_else(|_| Path::new("BIOS").to_path_buf());
@@ -1266,7 +1196,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
 
     // A core that took the hardware path draws into an FBO the size of its
     // base geometry. `context_reset` is only safe after `retro_load_game`
-    // returns: PPSSPP's context object exists by then.
+    // returns: the core's context object exists by then.
     #[cfg(target_os = "linux")]
     let hw_render = ctx().hw_render.is_some();
     #[cfg(target_os = "linux")]
@@ -1406,7 +1336,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     let ser_size = unsafe { (ctx().ser_size)() };
     let mut rewind_ok = rewind_allowed(system_id, ser_size);
     if !rewind_ok {
-        if matches!(system_id, "psx" | "psp") {
+        if system_id == "psx" {
             util::log(&format!("rewind: off for {system_id}"));
         } else if ser_size > REWIND_MAX_STATE {
             util::log(&format!("rewind: off ({ser_size} byte states)"));
@@ -2727,7 +2657,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     #[cfg(target_os = "linux")]
     util::set_mixer_volume(gain_pct);
     // Tear the core's GL resources down while the EGL context is current and
-    // the core is still loaded: PPSSPP's context_destroy needs both.
+    // the core is still loaded: the core's context_destroy needs both.
     #[cfg(target_os = "linux")]
     {
         let destroy = ctx().hw_render.as_ref().and_then(|hw| hw.destroy);
@@ -2786,14 +2716,14 @@ const SHUTDOWN_TOTAL: Duration = Duration::from_millis(2500);
 /// The rewind ring: one state every this many frames, memory-bounded.
 const REWIND_EVERY: u64 = 6;
 const REWIND_MAX_BYTES: usize = 48 << 20;
-/// Cores with states this large (PPSSPP) cannot snapshot often enough to
-/// rewind without stalling the frame loop.
+/// Cores with states this large cannot snapshot often enough to rewind
+/// without stalling the frame loop.
 const REWIND_MAX_STATE: usize = 8 << 20;
 
 /// Only these core options are surfaced in the UI — matched loosely against
 /// the label (cores append things like "(Restart Required)"); everything else
 /// stays at the core's default (the owner's list for the handheld cores).
-const KEEP_OPTIONS: [&str; 40] = [
+const KEEP_OPTIONS: [&str; 39] = [
     "color correction",
     "color correction mode",
     "dark filter level (%)",
@@ -2834,28 +2764,12 @@ const KEEP_OPTIONS: [&str; 40] = [
     "enhanced resolution",
     "sound interpolation",
     "reverb",
-    // PSP (PPSSPP)
-    "cpu core",
+    // Generic labels used by several cores
     "frameskip",
     "rumble effects",
     // CD systems
     "cd bios",
     "bios select",
-];
-
-/// PPSSPP options kept visible by key; descriptions alone are too ambiguous.
-const KEEP_KEYS: [&str; 11] = [
-    "ppsspp_button_preference",
-    "ppsspp_internal_resolution",
-    "ppsspp_fast_memory",
-    "ppsspp_texture_anisotropic_filtering",
-    "ppsspp_texture_filtering",
-    "ppsspp_skip_buffer_effects",
-    "ppsspp_disable_range_culling",
-    "ppsspp_skip_gpu_readbacks",
-    "ppsspp_lazy_texture_caching",
-    "ppsspp_spline_quality",
-    "ppsspp_lower_resolution_for_effects",
 ];
 
 fn visible_options(ctx: &Ctx) -> Vec<usize> {
@@ -2870,12 +2784,6 @@ fn visible_options(ctx: &Ctx) -> Vec<usize> {
 fn option_kept(desc: &str) -> bool {
     let d = desc.to_ascii_lowercase();
     KEEP_OPTIONS.iter().any(|k| d.contains(k))
-}
-
-/// Key-based visibility for options whose descriptions are too generic.
-fn option_kept_key(key: &str) -> bool {
-    let k = key.to_ascii_lowercase();
-    KEEP_KEYS.contains(&k.as_str())
 }
 
 /// Genesis Plus GX options that are too detailed for the handheld menu.
@@ -2920,16 +2828,16 @@ fn core_pad_bits(bits: u16, game_l2_r2: bool) -> u16 {
 
 /// Cores that still need the performance governor after GPU presentation.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-/// PS1 and PSP keep the performance governor; Genesis and PCE run on
-/// schedutil and ramp only when they need to.
+/// PS1 keeps the performance governor; Genesis and PCE run on schedutil and
+/// ramp only when they need to.
 fn needs_performance(system_id: &str) -> bool {
-    matches!(system_id, "psx" | "psp")
+    system_id == "psx"
 }
 
 /// Rewind is off for the heavy cores and for any state too large to snapshot
 /// without stalling the frame loop.
 fn rewind_allowed(system_id: &str, ser_size: usize) -> bool {
-    !matches!(system_id, "psx" | "psp") && ser_size > 0 && ser_size <= REWIND_MAX_STATE
+    system_id != "psx" && ser_size > 0 && ser_size <= REWIND_MAX_STATE
 }
 
 /// Live on-screen counters: frames per second and a once-a-second system
@@ -3928,15 +3836,12 @@ mod key_mode_tests {
         for system in ["gb", "gbc", "gba", "ngp", "snes", "pce", "genesis"] {
             assert!(!needs_performance(system), "{system}");
         }
-        for system in ["psx", "psp"] {
-            assert!(needs_performance(system), "{system}");
-        }
+        assert!(needs_performance("psx"));
     }
 
     #[test]
-    fn rewind_is_off_for_psx_psp_and_large_states() {
+    fn rewind_is_off_for_psx_and_large_states() {
         assert!(!rewind_allowed("psx", 1 << 20));
-        assert!(!rewind_allowed("psp", 1 << 20));
         assert!(rewind_allowed("gba", 1 << 20));
         assert!(!rewind_allowed("gba", REWIND_MAX_STATE + 1));
         assert!(!rewind_allowed("gba", 0));
@@ -4029,28 +3934,8 @@ mod state_slot_tests {
 
 #[cfg(test)]
 mod overlay_tests {
-    use super::{double_tap, option_kept, option_kept_key, DOUBLE_TAP};
+    use super::{double_tap, option_kept, DOUBLE_TAP};
     use std::time::{Duration, Instant};
-
-    #[test]
-    fn psp_option_keys_are_visible() {
-        for key in [
-            "ppsspp_button_preference",
-            "ppsspp_internal_resolution",
-            "ppsspp_fast_memory",
-            "ppsspp_texture_anisotropic_filtering",
-            "ppsspp_texture_filtering",
-            "ppsspp_skip_buffer_effects",
-            "ppsspp_disable_range_culling",
-            "ppsspp_skip_gpu_readbacks",
-            "ppsspp_lazy_texture_caching",
-            "ppsspp_spline_quality",
-            "ppsspp_lower_resolution_for_effects",
-        ] {
-            assert!(option_kept_key(key), "{key}");
-        }
-        assert!(!option_kept_key("ppsspp_wlan_channel"));
-    }
 
     #[test]
     fn option_whitelist_matches_loosely() {
@@ -4079,7 +3964,6 @@ mod overlay_tests {
         assert!(option_kept("CD Bios (Restart Required)"));
         assert!(option_kept("Enhanced Resolution"));
         assert!(option_kept("Rumble Effects"));
-        assert!(option_kept("CPU Core"));
         assert!(option_kept("Frameskip"));
         assert!(option_kept("Frameskip Type"));
         assert!(!option_kept("Texture Scaling"));

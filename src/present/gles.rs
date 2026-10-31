@@ -92,7 +92,7 @@ void main() {
 "#;
 
 // Mode 1 is zadpos's sharp-shimmerless box-filter point (public domain).
-// Modes 2-6 are the public-domain handheld shaders from
+// Modes 3-6 are the public-domain handheld shaders from
 // libretro/glsl-shaders (Color Mangler, lcd3x, dot); see THIRD_PARTY_NOTICES.md.
 const FRAG: &str = r#"
 #ifdef GL_FRAGMENT_PRECISION_HIGH
@@ -113,7 +113,7 @@ varying vec2 v_pos;
 void main() {
     vec2 uv = v_uv;
     vec4 c;
-    // 1 shimmerless, 2 PSP colour, 3 GBA colour, 4 GBC colour,
+    // 1 shimmerless, 3 GBA colour, 4 GBC colour,
     // 5 LCD3x, 6 dot matrix.
     if (u_mode == 1) {
         vec2 pixel = v_pos * u_out;
@@ -130,15 +130,6 @@ void main() {
             uv.y = 1.0 - uv.y;
         }
         c = texture2D(u_tex, uv);
-    } else if (u_mode == 2) {
-        vec3 s = pow(texture2D(u_tex, uv).rgb, vec3(2.21, 2.21, 2.21));
-        s = clamp(s, 0.0, 1.0);
-        s = vec3(
-            dot(s, vec3(0.98, 0.20, -0.18)),
-            dot(s, vec3(0.04, 0.795, 0.165)),
-            dot(s, vec3(0.01, 0.01, 0.98))
-        );
-        c = vec4(pow(clamp(s, 0.0, 1.0), vec3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2)), 1.0);
     } else if (u_mode == 3) {
         vec3 s = pow(texture2D(u_tex, uv).rgb, vec3(3.2, 3.2, 3.2));
         s = clamp(s * 0.94, 0.0, 1.0);
@@ -1123,7 +1114,7 @@ impl Gpu {
 
     unsafe fn draw(&self) {
         (self.gl.bind_buffer)(GL_ARRAY_BUFFER, self.vbo);
-        // PPSSPP may leave its own attribute arrays enabled.
+        // The core may leave its own attribute arrays enabled.
         for i in 1..8 {
             (self.gl.disable_vertex_attrib_array)(i);
         }
