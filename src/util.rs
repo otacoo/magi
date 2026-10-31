@@ -2169,6 +2169,14 @@ mod tests {
     }
 
     #[test]
+    fn brightness_never_goes_dark_from_the_overlay() {
+        assert_eq!(clamp_brightness(0), MIN_BRIGHTNESS);
+        assert_eq!(clamp_brightness(3), MIN_BRIGHTNESS);
+        assert_eq!(clamp_brightness(50), 50);
+        assert_eq!(clamp_brightness(100), 100);
+    }
+
+    #[test]
     fn finds_the_card_mount() {
         let text = "/dev/root / ext4 rw 0 0\n/dev/mmcblk0p7 /mnt/sdcard vfat ro,noatime 0 0\n";
         let mount = card_mount_in(text, "/mnt/sdcard").unwrap();
@@ -3186,6 +3194,14 @@ const DISP_LCD_GET_BRIGHTNESS: libc::c_ulong = 0x103;
 /// The brightness the panel boots with (the driver starts at 180 of 255).
 /// Used when nothing was saved yet: the panel keeps what it shows.
 pub const STOCK_BRIGHTNESS: u32 = 70;
+
+/// Lowest user-selectable brightness. 0 is reserved for shutdown/sleep, where
+/// the panel is intentionally turned off.
+pub const MIN_BRIGHTNESS: u32 = 5;
+
+pub fn clamp_brightness(pct: u32) -> u32 {
+    pct.clamp(MIN_BRIGHTNESS, 100)
+}
 
 #[cfg(target_os = "linux")]
 fn disp_file() -> Option<std::fs::File> {

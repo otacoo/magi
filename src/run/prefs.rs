@@ -241,9 +241,9 @@ pub(super) fn load_display_prefs() -> DisplayPrefs {
     let brightness = v
         .get("brightness")
         .and_then(|x| x.as_u64())
-        .map(|x| x.min(100) as u32)
+        .map(|x| crate::util::clamp_brightness(x.min(100) as u32))
         // Never surprise the user: unsaved brightness is what the panel shows.
-        .or_else(crate::util::brightness_now)
+        .or_else(|| crate::util::brightness_now().map(crate::util::clamp_brightness))
         .unwrap_or(crate::util::STOCK_BRIGHTNESS);
     DisplayPrefs {
         theme: v

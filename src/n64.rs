@@ -621,8 +621,8 @@ fn load_display() -> Display {
         brightness: v
             .get("brightness")
             .and_then(|x| x.as_u64())
-            .map(|x| x.min(100) as u32)
-            .or_else(util::brightness_now)
+            .map(|x| util::clamp_brightness(x.min(100) as u32))
+            .or_else(|| util::brightness_now().map(util::clamp_brightness))
             .unwrap_or(util::STOCK_BRIGHTNESS),
         warmth: v
             .get("warmth")
@@ -774,7 +774,7 @@ fn adjust(d: &mut Display, a: Action) -> Option<HudKind> {
             Some(HudKind::Brightness)
         }
         Action::BrightnessDown => {
-            d.brightness = d.brightness.saturating_sub(5);
+            d.brightness = util::clamp_brightness(d.brightness.saturating_sub(5));
             util::set_brightness(d.brightness);
             Some(HudKind::Brightness)
         }
@@ -817,6 +817,7 @@ fn supervise(mut cmd: Command, mut display: Display) -> Result<()> {
     crate::theme::set_glow(display.glow);
     crate::theme::set_ui_scale(display.text_scale);
     crate::theme::set_warmth(display.warmth as u8);
+    util::set_brightness(display.brightness);
     let mut evdev = crate::evdev::Evdev::open();
     let mut lid = util::LidWatch::new();
     let mut power = PowerState::default();

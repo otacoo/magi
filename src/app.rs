@@ -430,7 +430,8 @@ impl Ui {
     /// SELECT + d-pad on the shelf: brightness and warmth, with the bar.
     fn adjust_display(&mut self, brightness: bool, delta: i32) {
         let (icon, ratio) = if brightness {
-            self.brightness = (self.brightness as i32 + delta).clamp(0, 100) as u32;
+            self.brightness =
+                util::clamp_brightness((self.brightness as i32 + delta).max(0) as u32);
             util::set_brightness(self.brightness);
             (
                 crate::theme::BarIcon::Brightness,
@@ -458,7 +459,7 @@ impl Ui {
             return;
         };
         if let Some(pct) = v.get("brightness").and_then(|x| x.as_u64()) {
-            self.brightness = pct.min(100) as u32;
+            self.brightness = util::clamp_brightness(pct.min(100) as u32);
             util::set_brightness(self.brightness);
         }
         if let Some(warmth) = v.get("warmth").and_then(|x| x.as_u64()) {
@@ -1415,10 +1416,11 @@ pub fn run() -> Result<()> {
     if let Ok(text) = std::fs::read_to_string("Config/magi.json") {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
             if let Some(pct) = v.get("brightness").and_then(|x| x.as_u64()) {
-                ui.brightness = pct.min(100) as u32;
+                ui.brightness = util::clamp_brightness(pct.min(100) as u32);
                 util::set_brightness(ui.brightness);
             } else if let Some(pct) = util::brightness_now() {
-                ui.brightness = pct;
+                ui.brightness = util::clamp_brightness(pct);
+                util::set_brightness(ui.brightness);
             }
             if let Some(w) = v.get("warmth").and_then(|x| x.as_u64()) {
                 ui.warmth = w.min(100) as u32;

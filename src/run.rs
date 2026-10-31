@@ -287,6 +287,7 @@ fn default_option(core: &str, key: &str) -> Option<&'static str> {
         ("ppsspp", "ppsspp_backend") => Some("none"),
         ("ppsspp", "ppsspp_software_rendering") => Some("enabled"),
         ("ppsspp", "ppsspp_cpu_core") => Some("JIT"),
+        ("ppsspp", "ppsspp_fast_memory") => Some("enabled"),
         ("ppsspp", "ppsspp_auto_frameskip") => Some("enabled"),
         _ => None,
     }
@@ -2843,8 +2844,10 @@ const KEEP_OPTIONS: [&str; 40] = [
 ];
 
 /// PPSSPP options kept visible by key; descriptions alone are too ambiguous.
-const KEEP_KEYS: [&str; 9] = [
+const KEEP_KEYS: [&str; 11] = [
     "ppsspp_button_preference",
+    "ppsspp_internal_resolution",
+    "ppsspp_fast_memory",
     "ppsspp_texture_anisotropic_filtering",
     "ppsspp_texture_filtering",
     "ppsspp_skip_buffer_effects",
@@ -3478,7 +3481,9 @@ fn draw_shutdown_overlay(
 fn apply_adjust(disp: &mut DisplayPrefs, kind: AdjKind, dir: i32) {
     match kind {
         AdjKind::Brightness => {
-            disp.brightness = (disp.brightness as i32 + dir * COMBO_STEP).clamp(0, 100) as u32;
+            disp.brightness = crate::util::clamp_brightness(
+                (disp.brightness as i32 + dir * COMBO_STEP).max(0) as u32,
+            );
             util::set_brightness(disp.brightness);
         }
         AdjKind::Warmth => {
@@ -4031,6 +4036,8 @@ mod overlay_tests {
     fn psp_option_keys_are_visible() {
         for key in [
             "ppsspp_button_preference",
+            "ppsspp_internal_resolution",
+            "ppsspp_fast_memory",
             "ppsspp_texture_anisotropic_filtering",
             "ppsspp_texture_filtering",
             "ppsspp_skip_buffer_effects",
