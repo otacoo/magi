@@ -164,7 +164,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, t: f32) {
         cv,
         w / 2,
         78,
-        "MULTIPURPOSE ARTIFICIAL GENERAL INTELLIGENCE",
+        "MULTI ARCHITECTURE GAMING INTERFACE",
         9.0,
         pal().text_dim,
     );
@@ -593,7 +593,7 @@ pub fn render_bootlogo(cv: &mut Canvas, fonts: &mut Fonts) {
         cv,
         w / 2,
         h / 2 + 24,
-        "MULTIPURPOSE ARTIFICIAL GENERAL INTELLIGENCE",
+        "MULTI ARCHITECTURE GAMING INTERFACE",
         9.0,
         pal().text_dim,
     );

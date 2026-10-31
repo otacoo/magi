@@ -2,7 +2,7 @@
   <img src="assets/readme/boot.png" width="360" alt="MAGI boot screen">
 </p>
 
-<p align="center"><b>MULTIPURPOSE ARTIFICIAL GENERAL INTELLIGENCE</b></p>
+<p align="center"><b>MULTI ARCHITECTURE GAMING INTERFACE</b></p>
 <p align="center"><i>Frontend genesis for BaseOS.</i></p>
 
 <p align="center">
@@ -103,7 +103,7 @@ MAGI will recreate missing folders at boot.
 | **MELCHIOR-1** | **BALTHASAR-2** | **CASPER-3** |
 |---|---|---|
 | **Shelf**<br>Simple (text) or Art (cover preview) lists, art downloads, favorites, resume, per-system overlays, themes, clock and battery. | **Play**<br>Save states, resume, rewind, fast-forward, integer scaling, screenshots and an in-game OSD. | **N64**<br>[Miyoo64 native ports](assets/docs/n64-ports.md) with automatic discovery, save states, brightness/warmth OSD and a performance governor. |
-| **Connectivity**<br>Wi-Fi, Bluetooth gamepads, SSH, NTP and an on-device hostname editor. | **Display**<br>EGL/GLES on the Mali GPU: hardware scaling, a shimmerless game shader, bezel/CRT compositing, warmth and the in-game overlays, with a software `/dev/fb0` fallback. | **Audio**<br>Software volume, speaker/headphones/HDMI, Bluetooth A2DP and N64 audio through a small ALSA bridge. |
+| **Connectivity**<br>Wi-Fi, Bluetooth gamepads, SSH, NTP and an on-device hostname editor. | **Display**<br>EGL/GLES on the Mali GPU: hardware scaling, game shaders, bezel/CRT compositing, warmth and the in-game overlays, with a software `/dev/fb0` fallback. | **Audio**<br>Software volume, speaker/headphones/HDMI, Bluetooth A2DP and N64 audio through a small ALSA bridge. |
 | **Power**<br>Lid sleep and wake, timed shutdown, battery shutdown, charge limit, LED control and the EVA shutdown countdown. | | |
 
 
