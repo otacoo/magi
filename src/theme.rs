@@ -725,6 +725,15 @@ pub fn bt_icon(cv: &mut Canvas, x: i32, y: i32, color: Color) {
     line(cv, x + 8, y + 8, x, y + 3, color);
 }
 
+/// Wired headphones: a headband over two earcups.
+pub fn headphone_icon(cv: &mut Canvas, x: i32, y: i32, color: Color) {
+    cv.fill_rect(x + 2, y, 8, 2, color);
+    cv.fill_rect(x + 1, y + 1, 1, 2, color);
+    cv.fill_rect(x + 10, y + 1, 1, 2, color);
+    cv.fill_rect(x, y + 3, 3, 6, color);
+    cv.fill_rect(x + 9, y + 3, 3, 6, color);
+}
+
 /// A small rotating ring of dots, for a background job.
 pub fn spinner(cv: &mut Canvas, x: i32, y: i32, t: f32, color: Color) {
     let head = t * 8.0;

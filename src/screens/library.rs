@@ -210,6 +210,7 @@ pub struct LibraryState {
     pub wifi_on: bool,
     pub wifi_signal: u8,
     pub bt_on: bool,
+    pub headphones: bool,
     sel_system: usize,
     /// The system the state file asked for, resolved once its scan lands.
     want_system: Option<String>,
@@ -289,6 +290,7 @@ impl LibraryState {
             wifi_on: false,
             wifi_signal: 0,
             bt_on: false,
+            headphones: false,
             sel_system: 0,
             want_system,
             positions: state.positions,
@@ -569,6 +571,7 @@ impl LibraryState {
         self.last_poll = now;
         self.battery = util::battery_percent();
         self.clock = util::clock_hhmm();
+        self.headphones = util::headphones_in();
         self.refresh_radio();
         // BaseOS's boot udhcpc can miss the lease when it starts before the
         // association. While the shelf is up, retry once there is an
@@ -1161,6 +1164,10 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
 
     // The radio icons, right next to the clock.
     let mut icons_x = clock_x - p(8.0);
+    if st.headphones {
+        crate::theme::headphone_icon(cv, icons_x - p(14.0), p(9.0), pal().link);
+        icons_x -= p(16.0);
+    }
     if st.bt_on {
         crate::theme::bt_icon(cv, icons_x - p(12.0), p(9.0), pal().link);
         icons_x -= p(16.0);

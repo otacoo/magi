@@ -79,6 +79,7 @@ pub fn run() -> Result<()> {
     lib.prefs.interface = 0;
     lib.battery = Some(87);
     lib.clock = Some("19:07".into());
+    lib.headphones = true;
     lib.games.insert(
         "gb".into(),
         vec![

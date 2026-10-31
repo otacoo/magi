@@ -93,6 +93,11 @@ impl Alsa {
             if let Some(device) = preferred.filter(|d| !d.is_empty()) {
                 devices.push(device);
             }
+            if crate::util::headphones_in() {
+                crate::util::speaker_amp_off();
+                devices.push("plug:playback_hp");
+                devices.push("playback_hp");
+            }
             if crate::util::hdmi_active() {
                 devices.push("plug:playback_hdmi");
                 devices.push("playback_hdmi");

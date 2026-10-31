@@ -879,6 +879,28 @@ pub fn bt_on() -> bool {
     std::path::Path::new("/sys/class/bluetooth/hci0").exists()
 }
 
+/// Wired headphones. The h700_speaker_amp module exposes the jack as a
+/// GPIO input named "Headphone detection".
+#[cfg(target_os = "linux")]
+pub fn headphones_in() -> bool {
+    std::fs::read_to_string("/sys/kernel/debug/gpio")
+        .map(|text| gpio_headphones(&text))
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn headphones_in() -> bool {
+    false
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn gpio_headphones(text: &str) -> bool {
+    text.lines()
+        .find(|l| l.contains("Headphone detection"))
+        .and_then(|l| l.rsplit_once(')'))
+        .is_some_and(|(_, state)| state.split_whitespace().nth(1) == Some("hi"))
+}
+
 /// A2DP needs an audio endpoint; BlueZ alone has no profile on BaseOS.
 /// BlueALSA is shipped but never started, so start it with the adapter.
 #[cfg(target_os = "linux")]
@@ -1470,6 +1492,14 @@ pub fn rumble_pulse() {
 
 #[cfg(not(target_os = "linux"))]
 pub fn rumble_pulse() {}
+
+/// Keep the speaker amplifier off while the headphone route is selected.
+#[cfg(target_os = "linux")]
+pub fn speaker_amp_off() {
+    let _ = std::process::Command::new("amixer")
+        .args(["-c", "0", "sset", &amixer_control("SPK"), "off"])
+        .output();
+}
 
 /// Set the ALSA mixer playback volume (0..100). Ports play through ALSA
 /// directly, so this is how MAGI's volume setting governs them; the
@@ -2223,6 +2253,15 @@ mod tests {
         );
         assert!(!text.contains("line 0000"), "starts over at the cap");
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn headphone_jack_reads_the_gpio_line() {
+        let hi = " gpio-259 (                    |Headphone detection ) in  hi\n";
+        let lo = " gpio-259 (                    |Headphone detection ) in  lo\n";
+        assert!(gpio_headphones(hi));
+        assert!(!gpio_headphones(lo));
+        assert!(!gpio_headphones(""));
     }
 
     #[test]
