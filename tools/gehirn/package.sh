@@ -79,19 +79,10 @@ cp "$ROOT/assets/n64/LICENSE-SDL" "$OUT/System/magi/n64/LICENSE-SDL"
 cat > "$OUT/System/magi/README.txt" <<'EOF'
 MAGI
 ====
-System/frontend            the MAGI binary — BaseOS runs it automatically
+System/frontend            the MAGI binary
 System/magi/systems.json   system -> folder -> extensions -> core mapping
 System/magi/cores/         libretro cores (aarch64, BaseOS glibc runtime)
-Logs/                      one capped log per process (diagnostics)
-
-Card folders: Games/<CONSOLE>/ for games, Config/ for user settings,
-BIOS/, Overlays/, Saves/, Themes/. Add a system by appending to systems.json
-and dropping its core in cores/. Add a theme by copying Themes/_template.ini
-to a new name ending in .ini and editing its colours.
-
-N64 native ports: copy the port's App/<Game>/ folder into Games/N64/<Game>/
-and put your own ROM beside it as rom.z64 (so Games/N64/<Game>/rom.z64).
-
+Logs/                      one log per process (diagnostics)
 EOF
 
 cat > "$OUT/System/magi/cores/README.txt" <<'EOF'
@@ -116,7 +107,8 @@ EOF
 
 cat > "$OUT/BIOS/README.txt" <<'EOF'
 Console BIOS files (for systems that need one):
-  GBA: gba_bios.bin (gba_bios.gba is copied to it)
+  GB: GB_bios.bin
+  GBA: gba_bios.bin (gba_bios.gba is renamed to it)
   PS1: scph5501.bin (US), scph5500.bin (Japan), scph5502.bin (Europe)
   PC Engine CD: syscard3.pce, syscard3u.pce (US), syscard2/1.pce, gexpress.pce
                 (HuCards do not use a CD System Card)
@@ -129,10 +121,6 @@ and sorted by name: folders or files with "crt" (e.g. CRT/) go to the CRT
 layer, everything else is a bezel. Colour-correction files are ignored
 (use the core options for that). RetroArch .cfg files are not used: the game
 screen area comes from the PNG's transparent pixels, not from viewports.
-
-The bundled set is "Perfect Overlays" by ourigen, derived from the work of
-1playerinsertcoin with bezels by mugwomp_93 and drkhrse:
-https://github.com/ourigen/Perfect_Overlays
 EOF
 
 cat > "$OUT/Saves/README.txt" <<'EOF'
@@ -148,20 +136,32 @@ One capped log per process: magi.log (shelf), magi-run.log (libretro host),
 magi-n64-supervisor.log, magi-n64.log and magi-n64-aplay.log (N64 ports).
 EOF
 
+# Extensions declared for a system folder, as ".gb, .gbc".
+system_exts() {
+    awk -v folder="$1" '
+        $0 ~ "\"folder\": *\"" folder "\"" {
+            if (match($0, /"exts": *\[[^]]*\]/)) {
+                s = substr($0, RSTART, RLENGTH)
+                sub(/.*\[/, "", s)
+                sub(/\].*/, "", s)
+                gsub(/[" ]/, "", s)
+                n = split(s, a, ",")
+                out = ""
+                for (i = 1; i <= n; i++) out = out (i > 1 ? ", " : "") "." a[i]
+                print out
+            }
+        }
+    ' "$OUT/System/magi/systems.json"
+}
+
 for f in $(sed -n 's/.*"folder": *"\([^"]*\)".*/\1/p' "$OUT/System/magi/systems.json"); do
     mkdir -p "$OUT/Games/$f"
     if [ "$f" = "N64" ]; then
         cat > "$OUT/Games/$f/README.txt" <<'EOF'
 N64 native ports: copy a port's App/<Game>/ contents here as
-Games/N64/<Game>/ and put your own matching ROM inside it as rom.z64.
+Games/N64/<Game>/ and put the matching ROM inside it as rom.z64.
 Only the App/<Game>/ folder is needed; the zip's Apps/, Emus/ and Roms/
-folders are Miyoo launcher metadata and are not used by MAGI. There is no
-App/ folder on the card after the port is installed. MAGI finds the port's
-executable and data directory from its launch.sh, so new ports need no
-per-game entry. Start it from the N64 shelf; the port builds its data on
-first launch.
-In a port, VOLUME adjusts the sound; SELECT + D-PAD adjusts brightness and
-temperature with the MAGI bar.
+folders are Miyoo launcher metadata and are not used by MAGI.
 EOF
     elif [ "$f" = "PS1" ]; then
         cat > "$OUT/Games/$f/README.txt" <<'EOF'
@@ -170,7 +170,8 @@ its disc files, one name per line, relative to this folder. The shelf shows
 the playlist as one title and the pause menu gains SWAP DISC.
 EOF
     else
-        echo "Games for $f. Unzipped ROMs only." > "$OUT/Games/$f/README.txt"
+        exts=$(system_exts "$f")
+        echo "Games for $f. ROMs: $exts. Unzipped only." > "$OUT/Games/$f/README.txt"
     fi
 done
 
