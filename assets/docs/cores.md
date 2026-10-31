@@ -13,7 +13,6 @@ core. Use unzipped ROMs.
 | Genesis / Mega Drive | `GENESIS` | `genesis_plus_gx` |
 | Neo Geo Pocket / Color | `NGPC` | `mednafen_ngp` |
 | PlayStation | `PS1` | `pcsx_rearmed` |
-| Neo Geo CD | `NEOCD` | `neocd` |
 | PC Engine / SuperGrafx | `PCE` | `mednafen_pce` |
 | Nintendo 64 | `N64` | native ports (see [Miyoo64 ports](n64-ports.md)) |
 
@@ -28,7 +27,6 @@ MAGI loads BIOS files automatically from `BIOS/`:
 - **GBA**: `gba_bios.bin` (`gba_bios.gba` is copied to that name).
 - **PlayStation**: the BIOS matching the game's region — `scph5501.bin` (USA),
   `scph5500.bin` (Japan), `scph5502.bin` (Europe).
-- **Neo Geo CD**: a `.bin` or `.rom` file under `BIOS/neocd/`.
 - **PC Engine CD**: `syscard3.pce` (or `syscard3u.pce` or another System
   Card). HuCards do not use a CD System Card.
 

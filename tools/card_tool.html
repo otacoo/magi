@@ -604,7 +604,6 @@ const BUILTIN_SYSTEMS = [
   { id: "genesis", name: "GENESIS",          exts: ["md", "gen"],                folder: "GENESIS", art: "Sega - Mega Drive - Genesis" },
   { id: "ngp",     name: "NEO GEO POCKET",   exts: ["ngp", "ngc", "ngpc"],       folder: "NGPC",    art: "SNK - Neo Geo Pocket" },
   { id: "psx",     name: "PLAYSTATION",      exts: ["cue", "chd", "pbp", "m3u"], folder: "PS1",     art: "Sony - PlayStation" },
-  { id: "neocd",   name: "NEO GEO CD",       exts: ["cue", "chd"],               folder: "NEOCD",   art: "SNK - Neo Geo CD" },
   { id: "pce",     name: "PC ENGINE / SFX",  exts: ["pce", "sgx", "cue", "chd"], folder: "PCE",     art: "NEC - PC Engine - TurboGrafx 16" },
   { id: "n64",     name: "NINTENDO 64",      exts: ["z64", "v64", "n64"],        folder: "N64",     art: "Nintendo - Nintendo 64" },
 ];
@@ -1834,7 +1833,6 @@ async function renameEntry(path, kind) {
 
 const REDUMP_COLLECTIONS = new Set([
   "Sony - PlayStation",
-  "SNK - Neo Geo CD",
   "NEC - PC Engine CD - TurboGrafx-CD",
 ]);
 const searchCache = new Map();
@@ -1998,7 +1996,7 @@ function crc32Bytes(bytes, start = 0) {
 
 function isDiscGame(game) {
   const ext = lower(extname(game.path));
-  return game.systemId === "psx" || game.systemId === "neocd" ||
+  return game.systemId === "psx" ||
     (game.systemId === "pce" && (ext === "cue" || ext === "chd"));
 }
 

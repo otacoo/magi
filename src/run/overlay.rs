@@ -391,7 +391,7 @@ fn default_overlays(system: &str, rom: &str, wide: bool) -> [&'static str; 2] {
     };
     match system {
         "psx" => [crt, ""],
-        "snes" | "pce" | "nes" | "neocd" => [crt240, ""],
+        "snes" | "pce" | "nes" => [crt240, ""],
         "genesis" => [crt240_noframe, ""],
         "gba" => {
             if wide {
@@ -529,7 +529,7 @@ mod image_overlay_tests {
             overlay_prefs_from(&v, "psx", "", false),
             ["CRT/Perfect_CRT.png".to_string(), String::new()]
         );
-        for system in ["snes", "pce", "nes", "neocd"] {
+        for system in ["snes", "pce", "nes"] {
             assert_eq!(
                 overlay_prefs_from(&v, system, "", false),
                 ["CRT/Perfect_CRT-240p.png".to_string(), String::new()],

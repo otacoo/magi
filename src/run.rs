@@ -702,29 +702,14 @@ fn log_bios(system_id: &str, dir: &Path) {
         ],
         _ => &[],
     };
-    if names.is_empty() && system_id != "neocd" {
+    if names.is_empty() {
         return;
     }
-    let mut found: Vec<String> = names
+    let found: Vec<String> = names
         .iter()
         .filter(|name| dir.join(name).is_file())
         .map(|name| (*name).to_string())
         .collect();
-    if system_id == "neocd" {
-        let sub = dir.join("neocd");
-        if let Ok(entries) = std::fs::read_dir(&sub) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file()
-                    && path.extension().and_then(|s| s.to_str()).is_some_and(|e| {
-                        e.eq_ignore_ascii_case("bin") || e.eq_ignore_ascii_case("rom")
-                    })
-                {
-                    found.push(format!("neocd/{}", entry.file_name().to_string_lossy()));
-                }
-            }
-        }
-    }
     util::log(&format!(
         "bios: {system_id} dir={} found=[{}]",
         dir.display(),
@@ -2558,10 +2543,10 @@ fn core_pad_bits(bits: u16, game_l2_r2: bool) -> u16 {
 
 /// Cores that still need the performance governor after GPU presentation.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-/// PS1 and Neo CD keep the performance governor; Genesis and PCE run on
-/// schedutil and ramp only when they need to.
+/// PS1 keeps the performance governor; Genesis and PCE run on schedutil
+/// and ramp only when they need to.
 fn needs_performance(system_id: &str) -> bool {
-    matches!(system_id, "psx" | "neocd")
+    system_id == "psx"
 }
 
 /// Live on-screen counters: frames per second and a once-a-second system
@@ -3425,9 +3410,7 @@ mod key_mode_tests {
         for system in ["gb", "gbc", "gba", "ngp", "snes", "pce", "genesis"] {
             assert!(!needs_performance(system), "{system}");
         }
-        for system in ["psx", "neocd"] {
-            assert!(needs_performance(system), "{system}");
-        }
+        assert!(needs_performance("psx"));
     }
 }
 
