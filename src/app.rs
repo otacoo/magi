@@ -646,6 +646,8 @@ impl Ui {
         match self.screen {
             Screen::Boot => {
                 util::log("boot splash skipped");
+                #[cfg(target_os = "linux")]
+                crate::audio::stop_boot_audio();
                 self.screen = Screen::Library;
             }
             Screen::Library => {

@@ -321,9 +321,22 @@ impl Drop for AlsaOut {
 /// One-shot PCM16 WAV playback for the boot ignition, in the background;
 /// resampled to the device rate and silent when anything is missing.
 #[cfg(target_os = "linux")]
+static BOOT_AUDIO_STOP: AtomicBool = AtomicBool::new(false);
+
+/// Cut the boot ignition track short when the splash is skipped.
+#[cfg(target_os = "linux")]
+pub fn stop_boot_audio() {
+    BOOT_AUDIO_STOP.store(true, Ordering::Relaxed);
+}
+
+#[cfg(target_os = "linux")]
 pub fn spawn_wav(path: &std::path::Path, gain_pct: u8) {
+    BOOT_AUDIO_STOP.store(false, Ordering::Relaxed);
     let path = path.to_path_buf();
     std::thread::spawn(move || {
+        if BOOT_AUDIO_STOP.load(Ordering::Relaxed) {
+            return;
+        }
         let Ok(bytes) = std::fs::read(&path) else {
             return;
         };
@@ -354,8 +367,20 @@ pub fn spawn_wav(path: &std::path::Path, gain_pct: u8) {
             samples
         };
         crate::resample::fade_out(&mut out, OUTPUT_HZ, 40);
+        if BOOT_AUDIO_STOP.load(Ordering::Relaxed) {
+            return;
+        }
         if let Some(mut sink) = Alsa::open(OUTPUT_HZ, None) {
-            sink.write(&out);
+            let chunk = (OUTPUT_HZ as usize / 50).max(1) * 2;
+            for part in out.chunks(chunk) {
+                if BOOT_AUDIO_STOP.load(Ordering::Relaxed) {
+                    crate::util::log("boot audio: stopped");
+                    return;
+                }
+                if !sink.write(part) {
+                    return;
+                }
+            }
         }
     });
 }
