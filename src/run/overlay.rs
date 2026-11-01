@@ -370,15 +370,9 @@ pub(super) fn apply_overlays(cv: &mut Canvas, overlay: &Option<Overlay>) {
 }
 
 /// Per-system overlay choices from Config/magi.json ("" = off). A missing
-/// layer uses the shipped default; the legacy global keys seed the first
-/// launch, and an explicit empty string turns it off. NGP/NGPC share one
-/// system, so the ROM extension picks the bezel.
+/// layer uses the shipped default, and an explicit empty string turns it
+/// off. NGP/NGPC share one system, so the ROM extension picks the bezel.
 fn default_overlays(system: &str, rom: &str, wide: bool) -> [&'static str; 2] {
-    let crt = if wide {
-        "CRT/Perfect_CRT-720x480.png"
-    } else {
-        "CRT/Perfect_CRT.png"
-    };
     let crt240 = if wide {
         "CRT/Perfect_CRT-240p-720x480.png"
     } else {
@@ -390,7 +384,7 @@ fn default_overlays(system: &str, rom: &str, wide: bool) -> [&'static str; 2] {
         "CRT/Perfect_CRT-240p(noframe).png"
     };
     match system {
-        "psx" => [crt, ""],
+        "psx" => [crt240_noframe, ""],
         "snes" | "pce" | "nes" => [crt240, ""],
         "genesis" => [crt240_noframe, ""],
         "gba" => {
@@ -432,15 +426,9 @@ fn default_overlays(system: &str, rom: &str, wide: bool) -> [&'static str; 2] {
 }
 
 fn overlay_prefs_from(v: &serde_json::Value, system: &str, rom: &str, wide: bool) -> [String; 2] {
-    let has_map = v.get("overlays").is_some_and(|o| o.is_object());
     let per = v.get("overlays").and_then(|o| o.get(system));
     let get = |layer: usize, key: &str| -> String {
-        let explicit = if has_map {
-            per.and_then(|p| p.get(key)).and_then(|x| x.as_str())
-        } else {
-            v.get(format!("overlay_{key}")).and_then(|x| x.as_str())
-        };
-        match explicit {
+        match per.and_then(|p| p.get(key)).and_then(|x| x.as_str()) {
             Some(value) => value.to_string(),
             None => default_overlays(system, rom, wide)[layer].to_string(),
         }
@@ -470,9 +458,6 @@ pub(super) fn save_overlay_prefs(system: &str, names: &[String; 2]) {
         "crt": names[0],
         "bezel": names[1],
     });
-    // Keep the old top-level keys current for older builds and downgrades.
-    v["overlay_crt"] = serde_json::json!(names[0]);
-    v["overlay_bezel"] = serde_json::json!(names[1]);
     if let Ok(text) = serde_json::to_string_pretty(&v) {
         let _ = std::fs::create_dir_all("Config");
         let _ = util::write_file_atomic(path, text.as_bytes());
@@ -509,16 +494,7 @@ mod image_overlay_tests {
                 "CRT/Perfect_CRT-240p(noframe).png".to_string(),
                 String::new()
             ],
-            "the global keys do not leak across systems"
-        );
-        let legacy = serde_json::json!({
-            "overlay_crt": "CRT/x.png",
-            "overlay_bezel": ""
-        });
-        assert_eq!(
-            overlay_prefs_from(&legacy, "snes", "", false),
-            ["CRT/x.png".to_string(), String::new()],
-            "the legacy globals seed the first launch"
+            "an unset system uses its defaults"
         );
     }
 
@@ -527,7 +503,17 @@ mod image_overlay_tests {
         let v = serde_json::json!({});
         assert_eq!(
             overlay_prefs_from(&v, "psx", "", false),
-            ["CRT/Perfect_CRT.png".to_string(), String::new()]
+            [
+                "CRT/Perfect_CRT-240p(noframe).png".to_string(),
+                String::new()
+            ]
+        );
+        assert_eq!(
+            overlay_prefs_from(&v, "psx", "", true),
+            [
+                "CRT/Perfect_CRT-240p(noframe)-720x480.png".to_string(),
+                String::new()
+            ]
         );
         for system in ["snes", "pce", "nes"] {
             assert_eq!(

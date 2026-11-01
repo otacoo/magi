@@ -20,15 +20,15 @@ const THUMBS: &str = "https://thumbnails.libretro.com";
 const DATABASE: &str =
     "https://raw.githubusercontent.com/libretro/libretro-database/master/metadat";
 
-/// The art folders, in request order for ALL.
+/// The art folders, in art-type order.
 pub const FOLDERS: [&str; 4] = [
     "Named_Boxarts",
     "Named_Snaps",
     "Named_Titles",
     "Named_Logos",
 ];
-/// The ART TYPE choices; ALL fetches every folder.
-pub const LABELS: [&str; 5] = ["BOXART", "SNAP", "TITLE", "LOGO", "ALL"];
+/// The ART TYPE choices.
+pub const LABELS: [&str; 4] = ["BOXART", "SNAP", "TITLE", "LOGO"];
 
 /// A game to look up, and the art files to fill.
 pub struct Game {
@@ -37,8 +37,8 @@ pub struct Game {
     /// The system the ROM belongs to. The FAVORITES list mixes systems, so a
     /// job cannot assume one collection for every game.
     pub system: SystemDef,
-    /// (art type, destination) for each file still missing.
-    pub covers: Vec<(u8, PathBuf)>,
+    /// The art type and destination for the file still missing.
+    pub cover: (u8, PathBuf),
 }
 
 pub struct Job {
@@ -583,13 +583,14 @@ pub fn run(job: Job, tx: Sender<Msg>, stop: &AtomicBool) {
         let mut fuzzy: Option<Vec<String>> = None;
         let mut any = false;
         let mut offline = false;
-        for (art_type, cover) in &game.covers {
+        'fill: {
+            let (art_type, cover) = &game.cover;
             let folder = FOLDERS[(*art_type as usize).min(FOLDERS.len() - 1)];
             let mut found = match fetch(&collection, folder, stem) {
                 Ok(found) => found,
                 Err(()) => {
                     offline = true;
-                    break;
+                    break 'fill;
                 }
             };
             if found.is_none() {
@@ -601,7 +602,7 @@ pub fn run(job: Job, tx: Sender<Msg>, stop: &AtomicBool) {
                         Some(_) => Dat::default(),
                         None => {
                             offline = true;
-                            break;
+                            break 'fill;
                         }
                     };
                     dats.insert(collection.clone(), dat);
@@ -617,7 +618,7 @@ pub fn run(job: Job, tx: Sender<Msg>, stop: &AtomicBool) {
                         Ok(found) => found,
                         Err(()) => {
                             offline = true;
-                            break;
+                            break 'fill;
                         }
                     };
                 }
@@ -655,7 +656,7 @@ pub fn run(job: Job, tx: Sender<Msg>, stop: &AtomicBool) {
                 }
             }
             if offline {
-                break;
+                break 'fill;
             }
             if let Some(png) = found {
                 save(cover, &png);

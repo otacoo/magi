@@ -135,7 +135,6 @@ impl ScaleMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ShaderMode {
     Off,
-    Shimmerless,
     GbaColor,
     GbcColor,
     Lcd3x,
@@ -145,8 +144,7 @@ pub(super) enum ShaderMode {
 impl ShaderMode {
     pub(super) fn next(self) -> Self {
         match self {
-            ShaderMode::Off => ShaderMode::Shimmerless,
-            ShaderMode::Shimmerless => ShaderMode::GbaColor,
+            ShaderMode::Off => ShaderMode::GbaColor,
             ShaderMode::GbaColor => ShaderMode::GbcColor,
             ShaderMode::GbcColor => ShaderMode::Lcd3x,
             ShaderMode::Lcd3x => ShaderMode::Dot,
@@ -157,8 +155,7 @@ impl ShaderMode {
     pub(super) fn prev(self) -> Self {
         match self {
             ShaderMode::Off => ShaderMode::Dot,
-            ShaderMode::Shimmerless => ShaderMode::Off,
-            ShaderMode::GbaColor => ShaderMode::Shimmerless,
+            ShaderMode::GbaColor => ShaderMode::Off,
             ShaderMode::GbcColor => ShaderMode::GbaColor,
             ShaderMode::Lcd3x => ShaderMode::GbcColor,
             ShaderMode::Dot => ShaderMode::Lcd3x,
@@ -168,7 +165,6 @@ impl ShaderMode {
     pub(super) fn label(self) -> &'static str {
         match self {
             ShaderMode::Off => "OFF",
-            ShaderMode::Shimmerless => "SHIMMERLESS",
             ShaderMode::GbaColor => "GBA COLOR",
             ShaderMode::GbcColor => "GBC COLOR",
             ShaderMode::Lcd3x => "LCD3X",
@@ -179,21 +175,19 @@ impl ShaderMode {
     pub(super) fn as_u8(self) -> u8 {
         match self {
             ShaderMode::Off => 0,
-            ShaderMode::Shimmerless => 1,
-            ShaderMode::GbaColor => 3,
-            ShaderMode::GbcColor => 4,
-            ShaderMode::Lcd3x => 5,
-            ShaderMode::Dot => 6,
+            ShaderMode::GbaColor => 1,
+            ShaderMode::GbcColor => 2,
+            ShaderMode::Lcd3x => 3,
+            ShaderMode::Dot => 4,
         }
     }
 
     pub(super) fn from_u8(v: u8) -> Self {
         match v {
-            1 => ShaderMode::Shimmerless,
-            3 => ShaderMode::GbaColor,
-            4 => ShaderMode::GbcColor,
-            5 => ShaderMode::Lcd3x,
-            6 => ShaderMode::Dot,
+            1 => ShaderMode::GbaColor,
+            2 => ShaderMode::GbcColor,
+            3 => ShaderMode::Lcd3x,
+            4 => ShaderMode::Dot,
             _ => ShaderMode::Off,
         }
     }
@@ -380,10 +374,9 @@ mod tests {
     }
 
     #[test]
-    fn shader_modes_round_trip_and_keep_old_values() {
+    fn shader_modes_round_trip() {
         for mode in [
             ShaderMode::Off,
-            ShaderMode::Shimmerless,
             ShaderMode::GbaColor,
             ShaderMode::GbcColor,
             ShaderMode::Lcd3x,
@@ -391,24 +384,21 @@ mod tests {
         ] {
             assert_eq!(ShaderMode::from_u8(mode.as_u8()), mode);
         }
-        assert_eq!(ShaderMode::from_u8(2), ShaderMode::Off);
-        assert_eq!(ShaderMode::from_u8(3), ShaderMode::GbaColor);
-        assert_eq!(ShaderMode::from_u8(6), ShaderMode::Dot);
-        assert_eq!(ShaderMode::from_u8(7), ShaderMode::Off);
+        assert_eq!(ShaderMode::from_u8(5), ShaderMode::Off);
     }
 
     #[test]
     fn shader_modes_step_both_ways() {
         let mut mode = ShaderMode::Off;
-        for _ in 0..6 {
+        for _ in 0..5 {
             mode = mode.next();
         }
         assert_eq!(mode, ShaderMode::Off);
-        for _ in 0..6 {
+        for _ in 0..5 {
             mode = mode.prev();
         }
         assert_eq!(mode, ShaderMode::Off);
-        assert_eq!(ShaderMode::Shimmerless.prev(), ShaderMode::Off);
+        assert_eq!(ShaderMode::GbaColor.prev(), ShaderMode::Off);
         assert_eq!(ShaderMode::Off.prev(), ShaderMode::Dot);
     }
 }

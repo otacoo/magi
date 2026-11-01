@@ -69,10 +69,8 @@ uniform vec4 u_rect;
 uniform vec2 u_target;
 uniform vec4 u_uv;
 varying vec2 v_uv;
-varying vec2 v_pos;
 void main() {
     v_uv = u_uv.xy + a_pos * u_uv.zw;
-    v_pos = a_pos;
     vec2 p = (u_rect.xy + a_pos * u_rect.zw) / u_target;
     gl_Position = vec4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, 1.0);
 }
@@ -91,8 +89,7 @@ void main() {
 }
 "#;
 
-// Mode 1 is zadpos's sharp-shimmerless box-filter point (public domain).
-// Modes 3-6 are the public-domain handheld shaders from libretro/glsl-shaders
+// Modes 1-4 are the public-domain handheld shaders from libretro/glsl-shaders
 // (Color Mangler, lcd3x, dot); see THIRD_PARTY_NOTICES.md.
 const FRAG: &str = r#"
 #ifdef GL_FRAGMENT_PRECISION_HIGH
@@ -106,30 +103,12 @@ uniform float u_alpha;
 uniform float u_overlay;
 uniform int u_mode;
 uniform vec2 u_in;
-uniform vec2 u_out;
-uniform float u_flip;
 varying vec2 v_uv;
-varying vec2 v_pos;
 
 void main() {
     vec2 uv = v_uv;
     vec4 c;
     if (u_mode == 1) {
-        vec2 pixel = v_pos * u_out;
-        vec2 scale = u_out / u_in;
-        vec2 invscale = u_in / u_out;
-        vec2 pixel_tl = floor(pixel);
-        vec2 pixel_br = ceil(pixel);
-        vec2 texel_tl = floor(invscale * pixel_tl);
-        vec2 texel_br = floor(invscale * pixel_br);
-        vec2 mod_texel = texel_br + vec2(0.5, 0.5);
-        mod_texel -= (vec2(1.0, 1.0) - step(texel_br, texel_tl)) * (scale * texel_br - pixel_tl);
-        uv = mod_texel / u_in;
-        if (u_flip > 0.5) {
-            uv.y = 1.0 - uv.y;
-        }
-        c = texture2D(u_tex, uv);
-    } else if (u_mode == 3) {
         vec3 s = pow(texture2D(u_tex, uv).rgb, vec3(3.2, 3.2, 3.2));
         s = clamp(s * 0.94, 0.0, 1.0);
         s = vec3(
@@ -138,7 +117,7 @@ void main() {
             dot(s, vec3(0.195, 0.075, 0.73))
         );
         c = vec4(pow(clamp(s, 0.0, 1.0), vec3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2)), 1.0);
-    } else if (u_mode == 4) {
+    } else if (u_mode == 2) {
         vec3 s = pow(texture2D(u_tex, uv).rgb, vec3(1.2, 1.2, 1.2));
         s = clamp(s * 0.94, 0.0, 1.0);
         s = vec3(
@@ -147,7 +126,7 @@ void main() {
             dot(s, vec3(0.195, 0.075, 0.73))
         );
         c = vec4(pow(clamp(s, 0.0, 1.0), vec3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2)), 1.0);
-    } else if (u_mode == 5) {
+    } else if (u_mode == 3) {
         const vec3 offsets = vec3(3.141592654, 3.141592654, 3.141592654)
             * vec3(0.5, 0.5 - 2.0 / 3.0, 0.5 - 4.0 / 3.0);
         vec2 omega = vec2(6.283185307, 6.283185307) * u_in;
@@ -155,7 +134,7 @@ void main() {
         float yfactor = (16.0 + sin(angle.y)) / 17.0;
         vec3 xfactors = (4.0 + sin(angle.x + offsets)) / 5.0;
         c = vec4(texture2D(u_tex, uv).rgb * yfactor * xfactors, 1.0);
-    } else if (u_mode == 6) {
+    } else if (u_mode == 4) {
         vec2 pix = uv * u_in;
         vec3 s = texture2D(u_tex, uv).rgb;
         float bright = dot(s, vec3(0.30, 0.59, 0.11));
@@ -434,8 +413,6 @@ pub struct Gpu {
     u_overlay: i32,
     u_mode: i32,
     u_in: i32,
-    u_out: i32,
-    u_flip: i32,
     vbo: u32,
     game_tex: u32,
     game_size: (i32, i32),
@@ -542,8 +519,6 @@ impl Gpu {
             u_overlay: 0,
             u_mode: 0,
             u_in: 0,
-            u_out: 0,
-            u_flip: 0,
             vbo: 0,
             game_tex: 0,
             game_size: (0, 0),
@@ -569,8 +544,6 @@ impl Gpu {
             gpu.u_overlay = uniform(&gpu.gl, program, "u_overlay");
             gpu.u_mode = uniform(&gpu.gl, program, "u_mode");
             gpu.u_in = uniform(&gpu.gl, program, "u_in");
-            gpu.u_out = uniform(&gpu.gl, program, "u_out");
-            gpu.u_flip = uniform(&gpu.gl, program, "u_flip");
             (gpu.gl.gen_buffers)(1, &mut gpu.vbo);
             (gpu.gl.bind_buffer)(GL_ARRAY_BUFFER, gpu.vbo);
             let verts: [f32; 8] = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
@@ -588,14 +561,11 @@ impl Gpu {
             (gpu.gl.uniform_1i)(gpu.u_tex, 0);
             (gpu.gl.uniform_1i)(gpu.u_mode, 0);
             (gpu.gl.uniform_2f)(gpu.u_in, 1.0, 1.0);
-            (gpu.gl.uniform_2f)(gpu.u_out, 1.0, 1.0);
-            (gpu.gl.uniform_1f)(gpu.u_flip, 0.0);
         }
         Ok(gpu)
     }
 
-    /// Select the game-image shader: 0 = nearest, 1 = shimmerless (linear
-    /// sampling with the box-filter sample point), 3-6 = colour and LCD
+    /// Select the game-image shader: 0 = nearest, 1-4 = colour and LCD
     /// effects.
     pub fn set_shader(&mut self, mode: u8) {
         let mode = if self.shader_ok { mode } else { 0 };
@@ -603,7 +573,7 @@ impl Gpu {
             return;
         }
         self.shader = mode;
-        let filter = if mode == 1 { GL_LINEAR } else { GL_NEAREST } as i32;
+        let filter = GL_NEAREST as i32;
         unsafe {
             if self.game_tex != 0 {
                 (self.gl.bind_texture)(GL_TEXTURE_2D, self.game_tex);
@@ -755,11 +725,7 @@ impl Gpu {
     /// Returns the framebuffer name the core must bind.
     pub fn hw_framebuffer(&mut self, width: u32, height: u32) -> Result<u32, String> {
         let (w, h) = (width.max(1) as i32, height.max(1) as i32);
-        let filter = if self.shader == 1 {
-            GL_LINEAR
-        } else {
-            GL_NEAREST
-        } as i32;
+        let filter = GL_NEAREST as i32;
         if let Some(old) = self.hw.take() {
             unsafe { self.free_hw(&old) };
         }
@@ -898,11 +864,7 @@ impl Gpu {
         if frame.is_null() || fw == 0 || fh == 0 {
             return false;
         }
-        let filter = if self.shader == 1 {
-            GL_LINEAR
-        } else {
-            GL_NEAREST
-        } as i32;
+        let filter = GL_NEAREST as i32;
         let (iw, ih) = (fw as i32, fh as i32);
         let data = if fmt == 1 && pitch == iw as usize * 4 {
             frame as *const c_void
@@ -1002,7 +964,6 @@ impl Gpu {
             warmth,
             self.shader as i32,
             (iw as f32, ih as f32),
-            false,
         );
         self.swap()
     }
@@ -1020,7 +981,7 @@ impl Gpu {
         } else {
             (0.0, 0.0, 1.0, 1.0)
         };
-        self.draw_scene(tex, uv, rect, warmth, self.shader as i32, (iw, ih), flip_v);
+        self.draw_scene(tex, uv, rect, warmth, self.shader as i32, (iw, ih));
         self.swap()
     }
 
@@ -1041,7 +1002,6 @@ impl Gpu {
         warmth: u8,
         mode: i32,
         in_size: (f32, f32),
-        flip_v: bool,
     ) {
         let f = warmth as f32 / 100.0;
         let gain = [1.0 + 0.12 * f, 1.0, 1.0 - 0.40 * f];
@@ -1072,8 +1032,6 @@ impl Gpu {
             (self.gl.uniform_4f)(self.u_uv, uv.0, uv.1, uv.2, uv.3);
             (self.gl.uniform_1i)(self.u_mode, mode);
             (self.gl.uniform_2f)(self.u_in, in_size.0, in_size.1);
-            (self.gl.uniform_2f)(self.u_out, rect.2.max(1) as f32, rect.3.max(1) as f32);
-            (self.gl.uniform_1f)(self.u_flip, if flip_v { 1.0 } else { 0.0 });
             (self.gl.active_texture)(GL_TEXTURE0);
             (self.gl.bind_texture)(GL_TEXTURE_2D, tex);
             self.draw();

@@ -25,7 +25,9 @@ pub enum Target {
 
 pub struct KeyboardState {
     pub title: String,
-    pub text: String,
+    text: String,
+    /// Insertion point, in characters.
+    cursor: usize,
     pub target: Target,
     pub row: usize,
     pub col: usize,
@@ -37,11 +39,56 @@ impl KeyboardState {
         Self {
             title: title.to_string(),
             text: String::new(),
+            cursor: 0,
             target,
             row: 0,
             col: 0,
             caps: false,
         }
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn set_text(&mut self, text: impl Into<String>) {
+        self.text = text.into();
+        self.cursor = self.text.chars().count();
+    }
+
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    pub fn cursor_left(&mut self) {
+        self.cursor = self.cursor.saturating_sub(1);
+    }
+
+    pub fn cursor_right(&mut self) {
+        self.cursor = (self.cursor + 1).min(self.text.chars().count());
+    }
+
+    fn byte_at(&self, char_idx: usize) -> usize {
+        self.text
+            .char_indices()
+            .nth(char_idx)
+            .map(|(i, _)| i)
+            .unwrap_or(self.text.len())
+    }
+
+    fn insert(&mut self, c: char) {
+        let at = self.byte_at(self.cursor);
+        self.text.insert(at, c);
+        self.cursor += 1;
+    }
+
+    fn backspace(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        self.cursor -= 1;
+        let at = self.byte_at(self.cursor);
+        self.text.remove(at);
     }
 
     fn row_len(&self, row: usize) -> usize {
@@ -94,17 +141,19 @@ impl KeyboardState {
                 None
             }
             "SPACE" => {
-                self.text.push(' ');
+                self.insert(' ');
                 None
             }
             "DEL" => {
-                self.text.pop();
+                self.backspace();
                 None
             }
             "CANCEL" => Some(false),
             "DONE" => Some(true),
             c => {
-                self.text.push_str(c);
+                if let Some(ch) = c.chars().next() {
+                    self.insert(ch);
+                }
                 None
             }
         }
@@ -127,22 +176,23 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &KeyboardState, t: f32) {
     );
     fonts.draw_center(cv, w / 2, 40, &st.title, 14.0, pal().title);
 
-    // The buffer, with the cursor as a block.
+    // The buffer, with the insertion point kept in view.
     let bw = w - 120;
     cv.fill_rect(60, 60, bw as u32, 34, pal().bg2);
     cv.rect_outline(60, 60, bw as u32, 34, pal().border);
-    let shown: String = st
-        .text
-        .chars()
-        .rev()
-        .take(44)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect();
-    let tw = fonts.text_width(&shown, 13.0);
+    let chars: Vec<char> = st.text().chars().collect();
+    let total = chars.len();
+    let cursor = st.cursor().min(total);
+    let window = 44usize;
+    let start = cursor
+        .saturating_sub(window / 2)
+        .min(total.saturating_sub(window));
+    let end = (start + window).min(total);
+    let shown: String = chars[start..end].iter().collect();
+    let before: String = chars[start..cursor].iter().collect();
     fonts.draw(cv, 70, 84, &shown, 13.0, pal().text);
-    fonts.draw(cv, 70 + tw + 2, 84, "_", 13.0, pal().signal);
+    let cx = 70 + fonts.text_width(&before, 13.0);
+    cv.fill_rect(cx, 69, 2, 18, pal().signal);
 
     // The key grid.
     let cell_w = 52;
@@ -241,8 +291,32 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &KeyboardState, t: f32) {
         cv,
         w / 2,
         h - 16,
-        "U/D/L/R PICK   A TYPE   START DONE   B CANCEL",
+        "U/D/L/R PICK   L/R CURSOR   A TYPE   START DONE   B CANCEL",
         9.0,
         pal().text_faint,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edits_at_the_cursor() {
+        let mut kb = KeyboardState::new("TEST", Target::Hostname);
+        kb.set_text("abcd");
+        assert_eq!(kb.cursor(), 4);
+        kb.cursor_left();
+        kb.cursor_left();
+        kb.insert('X');
+        assert_eq!(kb.text(), "abXcd");
+        kb.backspace();
+        assert_eq!(kb.text(), "abcd");
+        assert_eq!(kb.cursor(), 2);
+        kb.cursor_right();
+        kb.cursor_right();
+        assert_eq!(kb.cursor(), 4);
+        kb.cursor_right();
+        assert_eq!(kb.cursor(), 4);
+    }
 }

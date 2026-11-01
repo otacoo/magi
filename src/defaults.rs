@@ -10,7 +10,7 @@ impl Defaults {
     pub const INTERFACE: u8 = 1;
     /// Fetch missing art when a system with wifi up is opened.
     pub const AUTO_ART: bool = false;
-    /// ART TYPE: 0 = boxart, 1 = snap, 2 = title, 3 = logo, 4 = all.
+    /// ART TYPE: 0 = boxart, 1 = snap, 2 = title, 3 = logo.
     pub const ART_TYPE: u8 = 0;
     /// ART BACKGROUND: 0 = none (drop shadow), 1 = card.
     pub const ART_BG: u8 = 0;

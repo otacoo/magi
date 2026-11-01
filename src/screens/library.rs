@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 use std::sync::Arc;
@@ -98,12 +99,7 @@ impl StateFile {
             p.auto_art = v;
         }
         if let Some(v) = self.art_type {
-            // ALL was removed; an old value falls back to boxart.
-            p.art_type = if (v as usize) < crate::art::LABELS.len() {
-                v
-            } else {
-                0
-            };
+            p.art_type = v.min(crate::art::LABELS.len() as u8 - 1);
         }
         if let Some(v) = self.art_bg {
             p.art_bg = v.min(1);
@@ -236,7 +232,7 @@ pub struct LibraryState {
     art_idle_logged: bool,
     volume_pct: Option<u32>,
     /// The last decoded cover, keyed by ROM path and art type.
-    cover: Option<(String, u8, Option<crate::image::Image>)>,
+    cover: Option<(String, u8, Option<Rc<crate::image::Image>>)>,
     /// Per-system art type overrides, by system id.
     art_types: HashMap<String, u8>,
     pub prefs: Prefs,
@@ -945,16 +941,16 @@ impl LibraryState {
     }
 
     /// The selected game's cover: decoded once per path and art type, then
-    /// reused. ALL shows the first file that exists (boxart first).
-    pub fn cover_for(&mut self, game_path: &str, art_type: u8) -> Option<crate::image::Image> {
+    /// reused.
+    pub fn cover_for(&mut self, game_path: &str, art_type: u8) -> Option<Rc<crate::image::Image>> {
         if let Some((key, ty, img)) = &self.cover {
             if key == game_path && *ty == art_type {
                 return img.clone();
             }
         }
-        let img = views::cover_paths(game_path, art_type)
-            .into_iter()
-            .find_map(|path| crate::image::load_png(&path));
+        let img = views::cover_path_for(game_path, art_type)
+            .and_then(|path| crate::image::load_png(&path))
+            .map(Rc::new);
         self.cover = Some((game_path.to_string(), art_type, img.clone()));
         img
     }
@@ -1006,28 +1002,17 @@ impl LibraryState {
             return false;
         };
         let art_type = self.art_type_for(&sys.id);
-        let types: Vec<u8> = if art_type >= 4 {
-            (0..4).collect()
-        } else {
-            vec![art_type]
-        };
         let games: Vec<art::Game> = self
             .current_games()
             .iter()
             .filter_map(|g| {
-                let covers: Vec<(u8, std::path::PathBuf)> = types
-                    .iter()
-                    .filter_map(|t| {
-                        let cover = self.cwd.join(views::cover_path_for(&g.path, *t)?);
-                        (!cover.is_file()).then_some((*t, cover))
-                    })
-                    .collect();
-                (!covers.is_empty()).then(|| art::Game {
+                let cover = self.cwd.join(views::cover_path_for(&g.path, art_type)?);
+                (!cover.is_file()).then(|| art::Game {
                     rom: g.path.clone(),
                     system: system_for_path(&self.catalogue.systems, &g.path)
                         .unwrap_or(&sys)
                         .clone(),
-                    covers,
+                    cover: (art_type, cover),
                 })
             })
             .collect();
@@ -1040,7 +1025,7 @@ impl LibraryState {
         }
         let total = games.len();
         util::log(&format!(
-            "art: {} game{} to fill for {} (types {types:?})",
+            "art: {} game{} to fill for {} (type {art_type})",
             total,
             if total == 1 { "" } else { "s" },
             sys.id
@@ -1303,7 +1288,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
                     fonts,
                     &list,
                     lay.art.unwrap_or_default(),
-                    cover.as_ref(),
+                    cover.as_deref(),
                     st.prefs.art_bg > 0,
                     t,
                 ),

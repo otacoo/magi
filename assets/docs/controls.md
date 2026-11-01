@@ -13,7 +13,7 @@ reference.
 | Shelf | L1 / R1 | Page |
 | Shelf | **A** | Play |
 | Shelf | **X** | Favorite (star) |
-| Shelf | **Y** | Menu: rename or delete a game |
+| Shelf | **Y** | Menu: rename, delete or art type |
 | Shelf | **MENU** | Settings |
 | Shelf | **SELECT** | Controls panel |
 | Shelf | **POWER** tap / hold | Sleep / shutdown |

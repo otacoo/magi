@@ -251,6 +251,10 @@ fn default_option(core: &str, system: &str, key: &str) -> Option<&'static str> {
         // LCD ghosting: 50:50 with the previous frame, for games that
         // flicker sprites to fake transparency (F-Zero, Boktai, ZAS).
         ("mgba", "mgba_interframe_blending") => Some("mix"),
+        // GBA rumble: mGBA only reports it once the game sees a Game Boy
+        // Player. Some games may stutter with it on, so the option stays
+        // visible and a saved choice wins.
+        ("mgba", "mgba_force_gbp") => Some("ON"),
         ("gambatte", "gambatte_mix_frames") => Some("mix"),
         ("gambatte", "gambatte_gbc_color_correction") => Some(if system == "gbc" {
             "GBC only"
@@ -630,7 +634,8 @@ extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
                         .map(|v| CString::new(v.as_str()).unwrap_or_default())
                         .collect();
                     let visible = option_kept(&desc)
-                        && !(ctx.system == "genesis" && genesis_option_hidden(&desc));
+                        && !(ctx.system == "genesis" && genesis_option_hidden(&desc))
+                        && !(ctx.opt_key == "mgba" && mgba_option_hidden(&desc));
                     if key.to_ascii_lowercase().contains("bios") {
                         util::log(&format!("core option {key}={}", values[chosen]));
                     }
@@ -1294,8 +1299,9 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     }
     if system_id == "psx" {
         // PCSX-ReARMed only accepts subclasses; a plain ANALOG (5) falls
-        // through to NONE and disables the pad. Games in DualShock mode
-        // expect a stick, so pads without one get the standard controller.
+        // through to NONE and disables the pad. Only DualShock exposes
+        // rumble, but a pad with no stick must keep the standard type or
+        // the d-pad stops working.
         let device = if analog_pad {
             RETRO_DEVICE_PSE_DUALSHOCK
         } else {
@@ -2764,7 +2770,7 @@ const REWIND_MAX_STATE: usize = 8 << 20;
 /// Only these core options are surfaced in the UI — matched loosely against
 /// the label (cores append things like "(Restart Required)"); everything else
 /// stays at the core's default (the owner's list for the handheld cores).
-const KEEP_OPTIONS: [&str; 41] = [
+const KEEP_OPTIONS: [&str; 39] = [
     // Game Boy / Color (Gambatte)
     "color correction",
     "color correction mode",
@@ -2776,9 +2782,7 @@ const KEEP_OPTIONS: [&str; 41] = [
     "internal palette",
     "region",
     // GBA (mGBA)
-    "game boy model",
-    "game boy palette",
-    "super game boy borders",
+    "game boy player rumble",
     "solar sensor level",
     "use bios",
     "skip bios",
@@ -2828,6 +2832,14 @@ fn visible_options(ctx: &Ctx) -> Vec<usize> {
 fn option_kept(desc: &str) -> bool {
     let d = desc.to_ascii_lowercase();
     KEEP_OPTIONS.iter().any(|k| d.contains(k))
+}
+
+/// mGBA runs only GBA here, so its Game Boy/Color options are hidden.
+fn mgba_option_hidden(desc: &str) -> bool {
+    let d = desc.to_ascii_lowercase();
+    d.contains("game boy model")
+        || d.contains("game boy palette")
+        || d.contains("super game boy border")
 }
 
 /// Genesis Plus GX options that are too detailed for the handheld menu.
@@ -3131,7 +3143,7 @@ fn restore_auto_state(path: &Path, hud: &mut Option<(String, Instant)>) {
     }
 }
 
-/// Prefix for LZ4-compressed state files; raw legacy states lack it.
+/// Prefix for LZ4-compressed state files; states stored raw lack it.
 const STATE_MAGIC: &[u8; 8] = b"MAGIS1\0\0";
 
 fn pack_state(buf: Vec<u8>) -> (Vec<u8>, bool) {
@@ -3844,6 +3856,28 @@ mod option_tests {
     }
 
     #[test]
+    fn mgba_defaults_game_boy_player_rumble_on() {
+        let values: Vec<String> = ["OFF", "ON"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(default_option("mgba", "gba", "mgba_force_gbp"), Some("ON"));
+        assert_eq!(
+            chosen_index("mgba", "gba", "mgba_force_gbp", &values, None),
+            1,
+            "a fresh card enables GBA rumble"
+        );
+        assert_eq!(
+            chosen_index(
+                "mgba",
+                "gba",
+                "mgba_force_gbp",
+                &values,
+                Some(&"OFF".to_string())
+            ),
+            0,
+            "a saved choice still wins"
+        );
+    }
+
+    #[test]
     fn gambatte_defaults_follow_the_console() {
         assert_eq!(
             default_option("gambatte", "gb", "gambatte_gbc_color_correction"),
@@ -4069,7 +4103,7 @@ mod state_slot_tests {
         assert!(packed.starts_with(super::STATE_MAGIC));
         assert_eq!(super::unpack_state(packed).unwrap(), raw);
 
-        let raw = b"legacy raw state".to_vec();
+        let raw = b"small raw state".to_vec();
         let (packed, compressed) = super::pack_state(raw.clone());
         assert!(!compressed);
         assert_eq!(super::unpack_state(packed).unwrap(), raw);
@@ -4092,8 +4126,6 @@ mod overlay_tests {
         assert!(option_kept("Controller Rumble Strength"));
         assert!(option_kept("GB Colorization"));
         assert!(option_kept("Internal Palette"));
-        assert!(option_kept("Game Boy Model (Restart)"));
-        assert!(option_kept("Hardware Preset Game Boy Palettes (Restart)"));
         assert!(option_kept("Console Region (Restart)"));
         assert!(option_kept("Reduce Slowdown (Hack, Unsafe, Restart)"));
         assert!(option_kept("Reduce Flickering (Hack, Unsafe)"));
@@ -4112,10 +4144,27 @@ mod overlay_tests {
         assert!(option_kept("Rumble Effects"));
         assert!(option_kept("Frameskip"));
         assert!(option_kept("Frameskip Type"));
+        assert!(option_kept("Game Boy Player Rumble (Restart)"));
         assert!(!option_kept("Texture Scaling"));
-        assert!(!option_kept("Game Boy Player Rumble (Restart)"));
+        assert!(!option_kept("Game Boy Model (Restart)"));
+        assert!(!option_kept("Hardware Preset Game Boy Palettes (Restart)"));
+        assert!(!option_kept("Default Game Boy Palette"));
         assert!(!option_kept("Color"));
         assert!(option_kept("Solar Sensor Level"));
+    }
+
+    #[test]
+    fn mgba_hides_game_boy_options() {
+        assert!(super::mgba_option_hidden("Game Boy Model (Restart)"));
+        assert!(super::mgba_option_hidden("Default Game Boy Palette"));
+        assert!(super::mgba_option_hidden(
+            "Hardware Preset Game Boy Palettes (Restart)"
+        ));
+        assert!(super::mgba_option_hidden(
+            "Use Super Game Boy Borders (Restart)"
+        ));
+        assert!(!super::mgba_option_hidden("Solar Sensor Level"));
+        assert!(!super::mgba_option_hidden("Borders"));
     }
 
     #[test]

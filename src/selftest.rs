@@ -215,7 +215,7 @@ pub fn run() -> Result<()> {
         "HOSTNAME",
         crate::screens::keyboard::Target::Hostname,
     );
-    kb.text = "magi".into();
+    kb.set_text("magi");
     kb.row = 4;
     kb.col = 0;
     crate::screens::keyboard::draw(&mut cv, &mut fonts, &kb, 0.6);

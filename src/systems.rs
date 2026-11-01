@@ -63,13 +63,7 @@ impl Catalogue {
                 continue;
             };
             match serde_json::from_str::<SystemsFile>(&text) {
-                Ok(mut f) if !f.systems.is_empty() => {
-                    // Older cards still list the retired Neo Geo CD system.
-                    f.systems.retain(|s| s.id != "neocd");
-                    if f.systems.is_empty() {
-                        crate::util::log(&format!("{rel} has only retired systems; trying next"));
-                        continue;
-                    }
+                Ok(f) if !f.systems.is_empty() => {
                     crate::util::log(&format!("{} systems from {source}", f.systems.len()));
                     return Self {
                         systems: f.systems,
@@ -156,25 +150,6 @@ mod tests {
             assert!(s.iter().any(|d| d.id == id), "missing {id}");
         }
         assert!(s.iter().all(|d| !d.exts.is_empty()));
-    }
-
-    #[test]
-    fn retired_neocd_is_dropped_from_older_cards() {
-        let dir = std::env::temp_dir().join(format!("magi-systems-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("Config")).unwrap();
-        std::fs::write(
-            dir.join("Config/systems.json"),
-            r#"{"schema":1,"systems":[
-                {"id":"gb","name":"GAME BOY","exts":["gb"],"core":"gambatte","folder":"GB"},
-                {"id":"neocd","name":"NEO GEO CD","exts":["cue"],"core":"neocd","folder":"NEOCD"}
-            ]}"#,
-        )
-        .unwrap();
-        let cat = Catalogue::load(&dir);
-        assert!(cat.systems.iter().any(|s| s.id == "gb"));
-        assert!(!cat.systems.iter().any(|s| s.id == "neocd"));
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

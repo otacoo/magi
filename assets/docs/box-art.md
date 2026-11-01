@@ -36,9 +36,8 @@ existing `covers/ps1/...` still matches; MAGI writes the canonical case. A
 
 ## Art types
 
-`ART TYPE` selects the file shown in the panel. `ALL` tries boxart, snap,
-title and logo in that order and shows the first valid file. For one system,
-**Y → CORE → CORE ART** overrides the global art type.
+`ART TYPE` selects the file shown in the panel: boxart, snap, title or
+logo. For one system, **Y → CORE → CORE ART** overrides the global art type.
 
 ## How a download is matched
 
@@ -65,7 +64,7 @@ Everything lives under **SETTINGS → SHELF**:
 |---|---|
 | **INTERFACE** | SIMPLE (text rows) or ART (cover panel). |
 | **AUTO ART** | Fetch missing covers when a system is opened in ART with Wi-Fi up. Off leaves the card untouched. |
-| **ART TYPE** | Boxart, snap, title, logo or ALL. ALL downloads all four and the panel shows the first that exists, boxart first. |
+| **ART TYPE** | Boxart, snap, title or logo. |
 | **ART BACKGROUND** | NONE floats the cover on a drop shadow; CARD keeps the bordered plate. |
 | **DOWNLOAD ART** | Fetch the current system now. Progress and the spinner appear in the bottom bar; **B** stops it. |
 

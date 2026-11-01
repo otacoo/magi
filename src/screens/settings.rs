@@ -79,7 +79,7 @@ pub struct Prefs {
     pub interface: u8,
     /// Fetch missing art when a system with wifi up is opened.
     pub auto_art: bool,
-    /// ART TYPE: 0 = boxart, 1 = snap, 2 = title, 3 = logo, 4 = all.
+    /// ART TYPE: 0 = boxart, 1 = snap, 2 = title, 3 = logo.
     pub art_type: u8,
     /// ART BACKGROUND: 0 = none (drop shadow), 1 = card.
     pub art_bg: u8,
@@ -387,13 +387,10 @@ impl SettingsState {
                 true,
             )),
             "AUTO ART" => Some((format!("< {} >", onoff(self.prefs.auto_art)), true)),
-            "ART TYPE" => Some((
-                format!(
-                    "< {} >",
-                    crate::art::LABELS[self.prefs.art_type.min(4) as usize]
-                ),
-                true,
-            )),
+            "ART TYPE" => {
+                let i = self.prefs.art_type.min(crate::art::LABELS.len() as u8 - 1) as usize;
+                Some((format!("< {} >", crate::art::LABELS[i]), true))
+            }
             "ART BACKGROUND" => Some((
                 format!("< {} >", ART_BG_LABELS[self.prefs.art_bg.min(1) as usize]),
                 true,

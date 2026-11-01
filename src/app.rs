@@ -255,10 +255,12 @@ impl Ui {
                 Action::Confirm if m.tab == 0 && m.sel == 0 => {
                     let mut kb =
                         KeyboardState::new("RENAME GAME", keyboard::Target::Rename(m.path.clone()));
-                    kb.text = std::path::Path::new(&m.path)
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_default();
+                    kb.set_text(
+                        std::path::Path::new(&m.path)
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                    );
                     self.kb = Some(kb);
                     self.kb_origin = Screen::Library;
                     self.screen = Screen::Keyboard;
@@ -525,16 +527,17 @@ impl Ui {
 
     fn kb_commit(&mut self) {
         let Some(kb) = self.kb.take() else { return };
+        let text = kb.text().to_string();
         match kb.target {
             keyboard::Target::WifiPass(ssid) => {
-                util::wifi_connect(&ssid, Some(&kb.text));
+                util::wifi_connect(&ssid, Some(&text));
                 self.joining = Some((ssid, Instant::now()));
                 self.screen = Screen::NetWifi;
             }
             keyboard::Target::Hostname => {
-                let ok = util::set_hostname(&kb.text);
+                let ok = util::set_hostname(&text);
                 if ok {
-                    util::save_string_pref("hostname", &kb.text);
+                    util::save_string_pref("hostname", &text);
                 }
                 crate::status::show(if ok {
                     "HOSTNAME SET"
@@ -544,14 +547,14 @@ impl Ui {
                 self.screen = Screen::Network;
             }
             keyboard::Target::Rename(path) => {
-                match self.library.rename_game(&path, &kb.text) {
+                match self.library.rename_game(&path, &text) {
                     Ok(()) => crate::status::show("RENAMED"),
                     Err(msg) => crate::status::show(&msg),
                 }
                 self.screen = Screen::Library;
             }
             keyboard::Target::NtpServer => {
-                let ok = util::set_ntp_server(&kb.text);
+                let ok = util::set_ntp_server(&text);
                 crate::status::show(if ok {
                     "NTP SERVER SET"
                 } else {
@@ -611,6 +614,14 @@ impl Ui {
             _ => None,
         } {
             self.adjust_display(bright, delta);
+            return;
+        }
+        if let Some(delta) = match a {
+            Action::VolumeUp => Some(5),
+            Action::VolumeDown => Some(-5),
+            _ => None,
+        } {
+            self.set_volume(delta);
             return;
         }
         if a == Action::LidClosed {
@@ -732,8 +743,6 @@ impl Ui {
                     Action::Back => self.library.stop_art(),
                     Action::Menu => self.open_settings(),
                     Action::Screenshot => self.pending_screenshot = true,
-                    Action::VolumeUp => self.set_volume(5),
-                    Action::VolumeDown => self.set_volume(-5),
                     _ => {}
                 }
             }
@@ -856,7 +865,7 @@ impl Ui {
                     _ => {
                         // HOSTNAME: edit, pre-filled with the current name.
                         let mut kb = KeyboardState::new("HOSTNAME", keyboard::Target::Hostname);
-                        kb.text = util::hostname_get().unwrap_or_default();
+                        kb.set_text(util::hostname_get().unwrap_or_default());
                         self.kb = Some(kb);
                         self.kb_origin = self.screen;
                         self.screen = Screen::Keyboard;
@@ -966,7 +975,7 @@ impl Ui {
                         util::save_radio_state("ntp_on", target);
                     } else {
                         let mut kb = KeyboardState::new("NTP SERVER", keyboard::Target::NtpServer);
-                        kb.text = util::ntp_server_pref();
+                        kb.set_text(util::ntp_server_pref());
                         self.kb = Some(kb);
                         self.kb_origin = self.screen;
                         self.screen = Screen::Keyboard;
@@ -981,6 +990,8 @@ impl Ui {
                 Action::Down => self.kb_move(|k| k.down()),
                 Action::Left => self.kb_move(|k| k.left()),
                 Action::Right => self.kb_move(|k| k.right()),
+                Action::L1 | Action::L2 => self.kb_move(|k| k.cursor_left()),
+                Action::R1 | Action::R2 => self.kb_move(|k| k.cursor_right()),
                 Action::Confirm => self.kb_activate(),
                 Action::Start => self.kb_commit(),
                 Action::Back | Action::Menu => {
@@ -1181,7 +1192,7 @@ impl Ui {
             Screen::Library => {
                 let t = self.started.elapsed().as_secs_f32();
                 library::draw(&mut self.cv, &mut self.fonts, &mut self.library, t);
-                if let Some(m) = self.game_menu.clone() {
+                if let Some(m) = &self.game_menu {
                     let art_type = self
                         .library
                         .current_id()

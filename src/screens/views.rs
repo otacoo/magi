@@ -79,17 +79,6 @@ pub fn cover_path_for(game_path: &str, art_type: u8) -> Option<PathBuf> {
     )
 }
 
-/// The covers to try for a system's art type, in order; ALL is boxart first.
-pub fn cover_paths(game_path: &str, art_type: u8) -> Vec<PathBuf> {
-    if art_type >= 4 {
-        (0..4)
-            .filter_map(|t| cover_path_for(game_path, t))
-            .collect()
-    } else {
-        cover_path_for(game_path, art_type).into_iter().collect()
-    }
-}
-
 /// Where each part of the shelf sits. SIMPLE keeps the system rail on the
 /// left; ART moves the systems into a strip along the top, which frees the
 /// full width for the list and the cover.
@@ -578,21 +567,20 @@ mod tests {
     #[test]
     fn art_types_have_their_own_files() {
         assert_eq!(
+            cover_path_for("Games/GB/Tetris.gb", 0).as_deref(),
+            Some(Path::new("Covers/GB/Tetris.png"))
+        );
+        assert_eq!(
             cover_path_for("Games/GB/Tetris.gb", 1).as_deref(),
             Some(Path::new("Covers/GB/Tetris.snap.png"))
         );
         assert_eq!(
-            cover_path_for("Games/GB/Tetris.gb", 3).as_deref(),
-            Some(Path::new("Covers/GB/Tetris.logo.png"))
+            cover_path_for("Games/GB/Tetris.gb", 2).as_deref(),
+            Some(Path::new("Covers/GB/Tetris.title.png"))
         );
         assert_eq!(
-            cover_paths("Games/GB/Tetris.gb", 4),
-            vec![
-                Path::new("Covers/GB/Tetris.png").to_path_buf(),
-                Path::new("Covers/GB/Tetris.snap.png").to_path_buf(),
-                Path::new("Covers/GB/Tetris.title.png").to_path_buf(),
-                Path::new("Covers/GB/Tetris.logo.png").to_path_buf(),
-            ]
+            cover_path_for("Games/GB/Tetris.gb", 3).as_deref(),
+            Some(Path::new("Covers/GB/Tetris.logo.png"))
         );
     }
 }

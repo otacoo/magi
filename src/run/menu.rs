@@ -122,13 +122,7 @@ fn read_state_card(path: &Path, label: String, now: SystemTime) -> StateCard {
         .map(format_state_age)
         .unwrap_or_default();
     let thumb = if exists {
-        let thumb = crate::image::load_image(&state_thumb_path(path)).map(|mut img| {
-            // Older thumbnails came from RGB565 frames and carried alpha 0.
-            for p in &mut img.px {
-                *p |= 0xFF00_0000;
-            }
-            img
-        });
+        let thumb = crate::image::load_image(&state_thumb_path(path));
         if thumb.is_none() {
             util::log(&format!(
                 "state thumb: missing {}",
@@ -735,23 +729,5 @@ mod state_tests {
         assert!(!card.exists);
         assert!(card.thumb.is_none());
         assert!(card.age.is_empty());
-    }
-
-    #[test]
-    fn old_transparent_thumbs_become_opaque() {
-        let dir = std::env::temp_dir().join("magi-state-tests");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("old.state");
-        std::fs::write(&path, b"state").unwrap();
-        let px = vec![0x00FF_0000u32; 4];
-        let bytes = crate::image::encode_png(2, 2, &px).unwrap();
-        let thumb = super::super::state_thumb_path(&path);
-        std::fs::write(&thumb, bytes).unwrap();
-        let card = read_state_card(&path, "SLOT 1".into(), SystemTime::now());
-        let img = card.thumb.expect("thumb");
-        assert!(img.px.iter().all(|p| p >> 24 == 0xFF));
-        assert_eq!(img.px[0] & 0x00FF_FFFF, 0x00FF_0000);
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_file(&thumb);
     }
 }
