@@ -244,14 +244,32 @@ fn parse_option(raw: &str) -> (String, Vec<String>) {
     (desc.to_string(), values)
 }
 
-/// Core defaults that differ from the core's first value (its own default).
-/// A saved choice always wins.
-fn default_option(core: &str, key: &str) -> Option<&'static str> {
+/// Core defaults MAGI pins instead of the core's own default. A saved choice
+/// always wins.
+fn default_option(core: &str, system: &str, key: &str) -> Option<&'static str> {
     match (core, key) {
         // LCD ghosting: 50:50 with the previous frame, for games that
         // flicker sprites to fake transparency (F-Zero, Boktai, ZAS).
         ("mgba", "mgba_interframe_blending") => Some("mix"),
         ("gambatte", "gambatte_mix_frames") => Some("mix"),
+        ("gambatte", "gambatte_gbc_color_correction") => Some(if system == "gbc" {
+            "GBC only"
+        } else {
+            "disabled"
+        }),
+        ("gambatte", "gambatte_gbc_color_correction_mode") => Some("accurate"),
+        ("gambatte", "gambatte_gbc_frontlight_position") => Some("central"),
+        ("gambatte", "gambatte_dark_filter_level") => {
+            Some(if system == "gbc" { "5" } else { "20" })
+        }
+        ("gambatte", "gambatte_gb_hwmode") => Some("Auto"),
+        ("gambatte", "gambatte_rumble_level") => Some("8"),
+        ("gambatte", "gambatte_gb_colorization") => Some(if system == "gbc" {
+            "disabled"
+        } else {
+            "internal"
+        }),
+        ("gambatte", "gambatte_gb_internal_palette") => Some("GB - DMG"),
         // Beetle PCE defaults to the Japanese System Card 3. Follow the
         // BIOS that is actually on the card when it is a different one.
         ("mednafen_pce", "pce_cdbios") => pce_bios_default(),
@@ -287,7 +305,13 @@ fn pce_bios_default_in(bios: &Path) -> Option<&'static str> {
 
 /// The stored label wins when the core still offers it, then our per-core
 /// default, else the core's own default (index 0).
-fn chosen_index(core: &str, key: &str, values: &[String], saved: Option<&String>) -> usize {
+fn chosen_index(
+    core: &str,
+    system: &str,
+    key: &str,
+    values: &[String],
+    saved: Option<&String>,
+) -> usize {
     // Netplay owns the link mode at runtime. Never restore a saved server or
     // client mode, or a game would open a socket before the player asks.
     if core == "gambatte" && key == "gambatte_gb_link_mode" {
@@ -298,7 +322,7 @@ fn chosen_index(core: &str, key: &str, values: &[String], saved: Option<&String>
     if let Some(i) = saved.and_then(|s| values.iter().position(|v| v == s)) {
         return i;
     }
-    if let Some(d) = default_option(core, key) {
+    if let Some(d) = default_option(core, system, key) {
         if let Some(i) = values.iter().position(|v| v.eq_ignore_ascii_case(d)) {
             return i;
         }
@@ -582,8 +606,13 @@ extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
                 let (desc, values) = parse_option(&raw);
                 total += 1;
                 if !values.is_empty() {
-                    let chosen =
-                        chosen_index(&ctx.opt_key, &key, &values, ctx.saved_opts.get(&key));
+                    let chosen = chosen_index(
+                        &ctx.opt_key,
+                        &ctx.system,
+                        &key,
+                        &values,
+                        ctx.saved_opts.get(&key),
+                    );
                     let c_values = values
                         .iter()
                         .map(|v| CString::new(v.as_str()).unwrap_or_default())
@@ -2723,13 +2752,16 @@ const REWIND_MAX_STATE: usize = 8 << 20;
 /// Only these core options are surfaced in the UI — matched loosely against
 /// the label (cores append things like "(Restart Required)"); everything else
 /// stays at the core's default (the owner's list for the handheld cores).
-const KEEP_OPTIONS: [&str; 39] = [
+const KEEP_OPTIONS: [&str; 41] = [
+    // Game Boy / Color (Gambatte)
     "color correction",
     "color correction mode",
     "dark filter level (%)",
     "interframe blending",
     "emulated hardware",
     "rumble strength",
+    "gb colorization",
+    "internal palette",
     "region",
     // GBA (mGBA)
     "game boy model",
@@ -3784,7 +3816,7 @@ fn rgb1555(v: u32) -> u32 {
 
 #[cfg(test)]
 mod option_tests {
-    use super::{ensure_gba_bios, parse_option, pce_bios_default_in};
+    use super::{chosen_index, default_option, ensure_gba_bios, parse_option, pce_bios_default_in};
 
     #[test]
     fn parses_legacy_value_strings() {
@@ -3797,6 +3829,83 @@ mod option_tests {
         let (desc, values) = parse_option("NoSeparator");
         assert_eq!(desc, "NoSeparator");
         assert!(values.is_empty());
+    }
+
+    #[test]
+    fn gambatte_defaults_follow_the_console() {
+        assert_eq!(
+            default_option("gambatte", "gb", "gambatte_gbc_color_correction"),
+            Some("disabled")
+        );
+        assert_eq!(
+            default_option("gambatte", "gbc", "gambatte_gbc_color_correction"),
+            Some("GBC only")
+        );
+        assert_eq!(
+            default_option("gambatte", "gb", "gambatte_dark_filter_level"),
+            Some("20")
+        );
+        assert_eq!(
+            default_option("gambatte", "gbc", "gambatte_dark_filter_level"),
+            Some("5")
+        );
+        assert_eq!(
+            default_option("gambatte", "gb", "gambatte_gb_colorization"),
+            Some("internal")
+        );
+        assert_eq!(
+            default_option("gambatte", "gbc", "gambatte_gb_colorization"),
+            Some("disabled")
+        );
+        assert_eq!(
+            default_option("gambatte", "gb", "gambatte_gb_internal_palette"),
+            Some("GB - DMG")
+        );
+        assert_eq!(
+            default_option("gambatte", "gb", "gambatte_mix_frames"),
+            Some("mix")
+        );
+        assert_eq!(
+            default_option("gambatte", "gb", "gambatte_gbc_color_correction_mode"),
+            Some("accurate")
+        );
+        assert_eq!(
+            default_option("gambatte", "gb", "gambatte_gbc_frontlight_position"),
+            Some("central")
+        );
+        assert_eq!(
+            default_option("gambatte", "gb", "gambatte_gb_hwmode"),
+            Some("Auto")
+        );
+        assert_eq!(
+            default_option("gambatte", "gb", "gambatte_rumble_level"),
+            Some("8")
+        );
+
+        let cc = ["GBC only", "always", "disabled"].map(String::from);
+        assert_eq!(
+            chosen_index("gambatte", "gb", "gambatte_gbc_color_correction", &cc, None),
+            2
+        );
+        assert_eq!(
+            chosen_index(
+                "gambatte",
+                "gbc",
+                "gambatte_gbc_color_correction",
+                &cc,
+                None
+            ),
+            0
+        );
+        let dark = ["0", "5", "10", "15", "20"].map(String::from);
+        assert_eq!(
+            chosen_index("gambatte", "gb", "gambatte_dark_filter_level", &dark, None),
+            4
+        );
+        assert_eq!(
+            chosen_index("gambatte", "gbc", "gambatte_dark_filter_level", &dark, None),
+            1
+        );
     }
 
     #[test]
@@ -3946,6 +4055,8 @@ mod overlay_tests {
         assert!(option_kept("Interframe Blending"));
         assert!(option_kept("Emulated Hardware (Restart Required)"));
         assert!(option_kept("Controller Rumble Strength"));
+        assert!(option_kept("GB Colorization"));
+        assert!(option_kept("Internal Palette"));
         assert!(option_kept("Game Boy Model (Restart)"));
         assert!(option_kept("Hardware Preset Game Boy Palettes (Restart)"));
         assert!(option_kept("Console Region (Restart)"));
