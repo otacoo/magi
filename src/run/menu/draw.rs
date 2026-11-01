@@ -17,7 +17,7 @@ use super::super::{
     ctx, disc_count, disc_index, visible_options, CoreOption, Ctx, DiskControl, GameGeometry,
     GameInfo, GameMenu, MenuPage, NetplayPage, OverlayLayers, StateCard, CTX, STATE_SLOTS,
 };
-use super::{menu_sections, netplay_status_line, option_rows, MenuSection};
+use super::{menu_sections, netplay_status_line, option_rows_for_height, MenuSection};
 
 pub(crate) fn draw_menu(cv: &mut Canvas, fonts: &mut Fonts, menu: &GameMenu, rom: &str, t: f32) {
     let (w, h) = (cv.w, cv.h);
@@ -406,7 +406,8 @@ fn draw_core_pane(
         );
         return;
     }
-    let rows = option_rows();
+    let rows = option_rows_for_height(h);
+    super::OPTION_PANE_H.store(h, Ordering::Relaxed);
     let list: Vec<(String, String)> = ids
         .iter()
         .skip(menu.opt_top)
@@ -422,6 +423,10 @@ fn draw_core_pane(
         .saturating_sub(menu.opt_top)
         .min(list.len().saturating_sub(1));
     let row_h = p(26.0);
+    let total = ids.len();
+    let visible = rows.min(total);
+    let has_scroll = total > visible;
+    let row_w = if has_scroll { w - p(10.0) } else { w };
     draw_rows(
         cv,
         fonts,
@@ -430,15 +435,13 @@ fn draw_core_pane(
         menu.focus_pane,
         x,
         y,
-        w,
+        row_w,
         row_h,
         menu.opt_since.elapsed().as_secs_f32(),
         t,
     );
-    let total = ids.len();
-    let visible = rows.min(total);
-    if total > visible {
-        let track_x = x + w - p(4.0);
+    if has_scroll {
+        let track_x = x + w - p(3.0);
         let track_h = (row_h * visible as i32 - p(4.0)).max(1) as u32;
         let thumb_h = ((track_h as usize * visible / total).max(p(14.0) as usize))
             .min(track_h as usize) as u32;
@@ -448,7 +451,6 @@ fn draw_core_pane(
         cv.fill_rect(track_x, y, 2, track_h, pal().scrollbar_track);
         cv.fill_rect(track_x, thumb_y, 2, thumb_h, pal().scrollbar);
     }
-    let _ = h;
 }
 
 fn draw_video_pane(

@@ -1,5 +1,6 @@
 //! The in-game pause menu: state, navigation and drawing.
 
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use super::*;
@@ -36,13 +37,23 @@ impl MenuSection {
     }
 }
 
+/// The option pane height from the last draw, so input and drawing agree on
+/// how many rows fit without probing the device.
+pub(super) static OPTION_PANE_H: AtomicI32 = AtomicI32::new(0);
+
 /// Rows that fit in the option pane at the current text scale.
 fn option_rows() -> usize {
-    match crate::theme::ui_scale() {
-        s if s >= 1.4 => 6,
-        s if s >= 1.2 => 8,
-        _ => 10,
+    let h = OPTION_PANE_H.load(Ordering::Relaxed);
+    if h <= 0 {
+        return 8;
     }
+    option_rows_for_height(h)
+}
+
+fn option_rows_for_height(h: i32) -> usize {
+    let s = crate::theme::ui_scale();
+    let p = |v: f32| (v * s).round() as i32;
+    (((h - p(4.0)) / p(26.0).max(1)).max(1)) as usize
 }
 
 fn menu_sections() -> Vec<MenuSection> {
