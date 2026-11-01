@@ -98,25 +98,34 @@ pub fn encode_png(w: u32, h: u32, px: &[u32]) -> std::io::Result<Vec<u8>> {
 /// the decoder).
 pub fn load_png(path: &Path) -> Option<Image> {
     let data = std::fs::read(path).ok()?;
+    decode_png_at(&data, &path.display().to_string())
+}
+
+/// Decode PNG bytes into 0xAARRGGBB pixels.
+pub fn decode_png(data: &[u8]) -> Option<Image> {
+    decode_png_at(data, "PNG")
+}
+
+fn decode_png_at(data: &[u8], label: &str) -> Option<Image> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(data));
     decoder.set_transformations(png::Transformations::ALPHA | png::Transformations::EXPAND);
     let mut reader = match decoder.read_info() {
         Ok(r) => r,
         Err(e) => {
-            crate::util::log(&format!("image: cannot read {}: {e}", path.display()));
+            crate::util::log(&format!("image: cannot read {label}: {e}"));
             return None;
         }
     };
     let (iw, ih) = (reader.info().width as usize, reader.info().height as usize);
     if iw.checked_mul(ih)? > MAX_IMAGE_PIXELS {
-        crate::util::log(&format!("image: too large: {}", path.display()));
+        crate::util::log(&format!("image: too large: {label}"));
         return None;
     }
     let mut buf = vec![0u8; reader.output_buffer_size()];
     let info = match reader.next_frame(&mut buf) {
         Ok(i) => i,
         Err(e) => {
-            crate::util::log(&format!("image: cannot decode {}: {e}", path.display()));
+            crate::util::log(&format!("image: cannot decode {label}: {e}"));
             return None;
         }
     };
@@ -171,6 +180,46 @@ impl Image {
             for x in 0..w as usize {
                 let sx = (x * iw / w as usize).min(iw - 1);
                 px[y * w as usize + x] = self.px[sy * iw + sx];
+            }
+        }
+        Image { w, h, px }
+    }
+
+    /// Area-average scale down to the given size; nearest-neighbour when
+    /// either axis grows.
+    pub fn resized(&self, w: u32, h: u32) -> Image {
+        if w == self.w && h == self.h {
+            return self.clone();
+        }
+        if w >= self.w || h >= self.h {
+            return self.scaled(w, h);
+        }
+        let (iw, ih) = (self.w as usize, self.h as usize);
+        let mut px = vec![0u32; (w * h) as usize];
+        for y in 0..h as usize {
+            let y0 = y * ih / h as usize;
+            let y1 = ((y + 1) * ih).div_ceil(h as usize).min(ih).max(y0 + 1);
+            for x in 0..w as usize {
+                let x0 = x * iw / w as usize;
+                let x1 = ((x + 1) * iw).div_ceil(w as usize).min(iw).max(x0 + 1);
+                let (mut r, mut g, mut b, mut a) = (0u64, 0u64, 0u64, 0u64);
+                let mut n = 0u64;
+                for sy in y0..y1 {
+                    for sx in x0..x1 {
+                        let p = self.px[sy * iw + sx];
+                        let alpha = ((p >> 24) & 0xff) as u64;
+                        a += alpha;
+                        r += (((p >> 16) & 0xff) as u64) * alpha;
+                        g += (((p >> 8) & 0xff) as u64) * alpha;
+                        b += ((p & 0xff) as u64) * alpha;
+                        n += 1;
+                    }
+                }
+                let alpha = (a / n) as u32;
+                let r = r.checked_div(a).unwrap_or(0) as u32;
+                let g = g.checked_div(a).unwrap_or(0) as u32;
+                let b = b.checked_div(a).unwrap_or(0) as u32;
+                px[y * w as usize + x] = (alpha << 24) | (r << 16) | (g << 8) | b;
             }
         }
         Image { w, h, px }
@@ -309,6 +358,18 @@ mod tests {
         assert_eq!(&img.px[..3], &px[..3]);
         assert_eq!(img.px[3] >> 24, 0x80);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn resized_averages_the_source_pixels() {
+        let img = Image {
+            w: 2,
+            h: 2,
+            px: vec![0xFFFF_0000, 0xFF00_FF00, 0xFF00_00FF, 0xFFFF_FFFF],
+        };
+        let out = img.resized(1, 1);
+        assert_eq!((out.w, out.h), (1, 1));
+        assert_eq!(out.px[0], 0xFF7F_7F7F);
     }
 
     #[test]

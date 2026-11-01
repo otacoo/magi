@@ -578,7 +578,7 @@ dialog.libretro::backdrop { background: rgba(0,0,0,.78); }
   </div>
   <div id="searchStatus" class="hint"></div>
   <div id="searchResults" class="searchresults"></div>
-  <div class="searchhint">ART COMES FROM LIBRETRO-THUMBNAILS. THE FILE IS SAVED UNDER YOUR ROM STEM.</div>
+  <div class="searchhint">ART COMES FROM LIBRETRO-THUMBNAILS. THE FILE IS RESIZED AND SAVED UNDER YOUR ROM STEM.</div>
 </dialog>
 
 <input id="filePicker" class="sr" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" aria-hidden="true">
@@ -1483,8 +1483,8 @@ function renderDetail() {
     ? `<button type="button" class="btn small danger" data-action="delete-rom">DELETE ROM</button>`
     : "";
   const modeHint = card && !card.canWrite
-    ? `<div class="hint warn">READ ONLY: the PNG downloads with the expected name; copy it to the card.</div>`
-    : `<div class="hint">PNG only. JPG, WebP, GIF and BMP are converted locally before writing.</div>`;
+    ? `<div class="hint warn">READ ONLY: the optimized PNG downloads with the expected name; copy it to the card.</div>`
+    : `<div class="hint">PNG only. JPG, WebP, GIF and BMP are converted locally; covers are resized to fit 640x480.</div>`;
   const shared = game.shared ? `<div class="hint warn">This cover path is shared by another game with the same stem.</div>` : "";
   const conflict = game.conflicts[selectedArt] ? `<div class="hint bad">More than one file matches this cover path.</div>` : "";
 
@@ -1696,19 +1696,22 @@ function loadImage(src) {
   });
 }
 
+const ART_MAX_W = 640;
+const ART_MAX_H = 480;
+const ART_MAX_BYTES = 1536 * 1024;
+
+function artTargetSize(w, h) {
+  const scale = Math.min(1, ART_MAX_W / w, ART_MAX_H / h);
+  return [
+    Math.max(1, Math.round(w * scale)),
+    Math.max(1, Math.round(h * scale)),
+  ];
+}
+
 async function toPng(file) {
+  let headerOk = false;
   if (file.type === "image/png") {
-    let headerOk = false;
     try { headerOk = pngInfo(await readHead(file, 24)).valid; } catch (_) { headerOk = false; }
-    if (headerOk) {
-      const probe = URL.createObjectURL(file);
-      try {
-        await loadImage(probe);
-        return file;
-      } finally {
-        URL.revokeObjectURL(probe);
-      }
-    }
   }
   const url = URL.createObjectURL(file);
   try {
@@ -1716,12 +1719,18 @@ async function toPng(file) {
     const w = img.naturalWidth || img.width;
     const h = img.naturalHeight || img.height;
     if (!w || !h) throw new Error("zero-size image");
+    const [tw, th] = artTargetSize(w, h);
+    if (headerOk && file.size <= ART_MAX_BYTES && tw === w && th === h) {
+      return file;
+    }
     const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
+    canvas.width = tw;
+    canvas.height = th;
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("canvas unavailable");
-    ctx.drawImage(img, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(img, 0, 0, tw, th);
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
     if (!blob) throw new Error("PNG conversion failed");
     return blob;

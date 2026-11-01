@@ -459,11 +459,51 @@ fn fetch(collection: &str, folder: &str, name: &str) -> Result<Option<Vec<u8>>, 
     }
 }
 
+const ART_MAX_W: u32 = 640;
+const ART_MAX_H: u32 = 480;
+const ART_MAX_BYTES: usize = 1536 * 1024;
+
+fn png_size(png: &[u8]) -> Option<(u32, u32)> {
+    let reader = png::Decoder::new(std::io::Cursor::new(png))
+        .read_info()
+        .ok()?;
+    Some((reader.info().width, reader.info().height))
+}
+
+/// Shrink a downloaded cover to the shelf's texture budget. `None` keeps the
+/// original file.
+fn optimize_art(png: &[u8]) -> Option<Vec<u8>> {
+    let (w, h) = png_size(png)?;
+    if w <= ART_MAX_W && h <= ART_MAX_H && png.len() <= ART_MAX_BYTES {
+        return None;
+    }
+    let img = crate::image::decode_png(png)?;
+    let scale = (ART_MAX_W as f32 / img.w as f32)
+        .min(ART_MAX_H as f32 / img.h as f32)
+        .min(1.0);
+    let tw = ((img.w as f32 * scale).round() as u32).max(1);
+    let th = ((img.h as f32 * scale).round() as u32).max(1);
+    let out = if (tw, th) == (img.w, img.h) {
+        crate::image::encode_png(img.w, img.h, &img.px).ok()?
+    } else {
+        let scaled = img.resized(tw, th);
+        crate::util::log(&format!("art: {}x{} -> {}x{}", img.w, img.h, tw, th));
+        crate::image::encode_png(scaled.w, scaled.h, &scaled.px).ok()?
+    };
+    if out.len() <= ART_MAX_BYTES || out.len() < png.len() {
+        Some(out)
+    } else {
+        None
+    }
+}
+
 fn save(path: &Path, png: &[u8]) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    if let Err(e) = crate::util::write_file_atomic(path, png) {
+    let optimized = optimize_art(png);
+    let data = optimized.as_deref().unwrap_or(png);
+    if let Err(e) = crate::util::write_file_atomic(path, data) {
         crate::util::log(&format!("art: cannot save {}: {e}", path.display()));
     }
 }
@@ -687,6 +727,24 @@ mod tests {
             Some("Game (Disc 1)")
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn downloaded_art_is_capped_to_the_screen() {
+        let (w, h) = (800u32, 600u32);
+        let mut px = vec![0u32; (w * h) as usize];
+        for (i, p) in px.iter_mut().enumerate() {
+            *p = 0xFF00_0000 | (i as u32 & 0xFFFF);
+        }
+        let png = crate::image::encode_png(w, h, &px).unwrap();
+        let out = optimize_art(&png).expect("large art is resized");
+        assert!(out.len() <= ART_MAX_BYTES);
+        let got = crate::image::decode_png(&out).unwrap();
+        assert_eq!((got.w, got.h), (ART_MAX_W, ART_MAX_H));
+
+        let small_px = vec![0xFF11_2233u32; 320 * 240];
+        let small = crate::image::encode_png(320, 240, &small_px).unwrap();
+        assert!(optimize_art(&small).is_none());
     }
 
     #[test]
