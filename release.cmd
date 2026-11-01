@@ -187,7 +187,11 @@ if exist "assets\boot\gehirn.png" (
     "%ADB%" push "assets\boot\gehirn.png" "%SD%/System/magi/assets/boot/gehirn.png.new"
     if errorlevel 1 exit /b 1
 )
-"%ADB%" shell "mv -f %SD%/System/bootlogo-640x480.bmp.new %SD%/System/bootlogo-640x480.bmp; mv -f %SD%/System/bootlogo-720x480.bmp.new %SD%/System/bootlogo-720x480.bmp; mv -f %SD%/System/magi/assets/boot/gehirn.png.new %SD%/System/magi/assets/boot/gehirn.png; sync"
+if exist "assets\boot\naoko.wav" (
+    "%ADB%" push "assets\boot\naoko.wav" "%SD%/System/magi/assets/boot/naoko.wav.new"
+    if errorlevel 1 exit /b 1
+)
+"%ADB%" shell "mv -f %SD%/System/bootlogo-640x480.bmp.new %SD%/System/bootlogo-640x480.bmp; mv -f %SD%/System/bootlogo-720x480.bmp.new %SD%/System/bootlogo-720x480.bmp; mv -f %SD%/System/magi/assets/boot/gehirn.png.new %SD%/System/magi/assets/boot/gehirn.png; mv -f %SD%/System/magi/assets/boot/naoko.wav.new %SD%/System/magi/assets/boot/naoko.wav; sync"
 if errorlevel 1 exit /b 1
 exit /b 0
 

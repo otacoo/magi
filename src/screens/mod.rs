@@ -3,6 +3,7 @@ pub mod card;
 pub mod info;
 pub mod keyboard;
 pub mod library;
+pub mod naoko;
 pub mod net;
 pub mod settings;
 pub mod shots;

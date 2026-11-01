@@ -16,7 +16,7 @@ use crate::present::Presenter;
 use crate::screens::keyboard::{self, KeyboardState};
 use crate::screens::library::LibraryState;
 use crate::screens::settings::{self, ClockEdit, SettingsState};
-use crate::screens::{boot, card, info, library, net, shots};
+use crate::screens::{boot, card, info, library, naoko, net, shots};
 use crate::util;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -72,6 +72,7 @@ struct Ui {
     info_sel: usize,
     info_lines: Vec<(String, String)>,
     info_refresh: Instant,
+    naoko: Option<naoko::Naoko>,
     brightness: u32,
     warmth: u32,
     bar_hud: Option<(crate::theme::BarIcon, f32, Instant)>,
@@ -127,6 +128,7 @@ impl Ui {
             info_sel: 0,
             info_lines: Vec::new(),
             info_refresh: Instant::now(),
+            naoko: None,
             brightness: util::STOCK_BRIGHTNESS,
             warmth: 0,
             bar_hud: None,
@@ -169,6 +171,7 @@ impl Ui {
     /// panel rate and wakes at 60 Hz. A static shelf wakes at 4 Hz instead.
     fn animating(&self) -> bool {
         self.screen == Screen::Boot
+            || self.naoko.is_some()
             || self.bar_hud.is_some()
             || self.shutdown_t0.is_some()
             || self.shutdown_sent
@@ -336,6 +339,23 @@ impl Ui {
         self.info_kind = kind;
         self.info_sel = 0;
         self.refresh_info();
+        let naoko = if kind == InfoKind::About {
+            naoko::Naoko::roll()
+        } else {
+            None
+        };
+        if naoko.is_some() {
+            util::log("about: naoko");
+            #[cfg(target_os = "linux")]
+            for p in ["System/magi/assets/boot/naoko.wav", "assets/boot/naoko.wav"] {
+                let path = std::path::Path::new(p);
+                if path.exists() {
+                    crate::audio::spawn_wav(path, self.library.volume_percent() as u8);
+                    break;
+                }
+            }
+        }
+        self.naoko = naoko;
         self.screen = Screen::Info(kind);
     }
 
@@ -641,6 +661,12 @@ impl Ui {
                 }
                 _ => {}
             }
+            return;
+        }
+        if self.naoko.is_some() {
+            self.naoko = None;
+            #[cfg(target_os = "linux")]
+            crate::audio::stop_boot_audio();
             return;
         }
         match self.screen {
@@ -1050,6 +1076,11 @@ impl Ui {
 
     fn update(&mut self) {
         let now = Instant::now();
+        if self.naoko.as_ref().is_some_and(|e| e.finished()) {
+            self.naoko = None;
+            #[cfg(target_os = "linux")]
+            crate::audio::stop_boot_audio();
+        }
         // The card is sampled once at startup; a game can also leave it
         // read-only, so launch() checks again when the child returns.
         if !self.card_alerted && self.screen != Screen::Boot {
@@ -1258,6 +1289,9 @@ impl Ui {
                     );
                 }
             }
+        }
+        if let Some(naoko) = &self.naoko {
+            naoko.draw(&mut self.cv, &mut self.fonts);
         }
         if self.card_repairing {
             card::draw(
