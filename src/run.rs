@@ -270,6 +270,18 @@ fn default_option(core: &str, system: &str, key: &str) -> Option<&'static str> {
             "internal"
         }),
         ("gambatte", "gambatte_gb_internal_palette") => Some("GB - DMG"),
+        // PS1 (PCSX-ReARMed)
+        ("pcsx_rearmed", "pcsx_rearmed_show_bios_bootlogo") => Some("disabled"),
+        ("pcsx_rearmed", "pcsx_rearmed_dithering") => Some("disabled"),
+        ("pcsx_rearmed", "pcsx_rearmed_frameskip_type") => Some("auto_threshold"),
+        ("pcsx_rearmed", "pcsx_rearmed_frameskip_threshold") => Some("15"),
+        ("pcsx_rearmed", "pcsx_rearmed_frameskip_interval") => Some("3"),
+        ("pcsx_rearmed", "pcsx_rearmed_neon_enhancement_enable") => Some("disabled"),
+        ("pcsx_rearmed", "pcsx_rearmed_neon_enhancement_tex_adj_v2") => Some("enabled"),
+        ("pcsx_rearmed", "pcsx_rearmed_neon_enhancement_no_main") => Some("enabled"),
+        ("pcsx_rearmed", "pcsx_rearmed_spu_reverb") => Some("enabled"),
+        ("pcsx_rearmed", "pcsx_rearmed_spu_interpolation") => Some("simple"),
+        ("pcsx_rearmed", "pcsx_rearmed_vibration") => Some("enabled"),
         // Beetle PCE defaults to the Japanese System Card 3. Follow the
         // BIOS that is actually on the card when it is a different one.
         ("mednafen_pce", "pce_cdbios") => pce_bios_default(),
@@ -1313,7 +1325,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     // scales the samples.
     let mut gain_pct: u8 = load_runtime_volume();
     let (ff_steps, ff_sound) = load_runtime_prefs();
-    let mut disp = load_display_prefs();
+    let mut disp = load_display_prefs(system_id);
     #[cfg(target_os = "linux")]
     if let Some(gpu) = gpu.as_mut() {
         gpu.set_shader(disp.shader.as_u8());
@@ -1765,7 +1777,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                     && (e.code == ev::BTN_NORTH || (e.code == ev::BTN_SELECT && !game_l2_r2));
                 if scale_key {
                     disp.scale = disp.scale.next();
-                    save_display_prefs(&disp);
+                    save_display_prefs(system_id, &disp);
                     hud = Some((disp.scale.label().into(), Instant::now()));
                     continue;
                 }
@@ -1922,7 +1934,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
             disp.fps_counter = menu.fps;
             disp.sysinfo = menu.sysinfo;
             disp.shader = menu.shader;
-            save_display_prefs(&disp);
+            save_display_prefs(system_id, &disp);
             overlay_art = load_composite(&overlay_names, cw, ch);
             bezel_area = load_bezel_area(&overlay_names, cw, ch);
             overlays = overlay_art.as_deref().map(premultiplied);
@@ -1964,7 +1976,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                 }
                 adj_state = Some(st);
             } else {
-                save_display_prefs(&disp);
+                save_display_prefs(system_id, &disp);
                 prefs_save_at = None;
             }
         }
@@ -2600,7 +2612,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
             if Instant::now() >= t {
                 prefs_save_at = None;
                 save_runtime_volume(gain_pct);
-                save_display_prefs(&disp);
+                save_display_prefs(system_id, &disp);
             }
         }
 
@@ -2678,7 +2690,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         drop(hw_overlay.take());
         drop(hw_game.take());
     }
-    save_display_prefs(&disp);
+    save_display_prefs(system_id, &disp);
     ctx().set_rumble(false);
     save_runtime_volume(gain_pct);
     // Hand the mixer back to the user's level: the ports and the shelf play
@@ -3906,6 +3918,29 @@ mod option_tests {
             chosen_index("gambatte", "gbc", "gambatte_dark_filter_level", &dark, None),
             1
         );
+    }
+
+    #[test]
+    fn psx_defaults_follow_the_handheld_setting() {
+        for (key, value) in [
+            ("pcsx_rearmed_show_bios_bootlogo", "disabled"),
+            ("pcsx_rearmed_dithering", "disabled"),
+            ("pcsx_rearmed_frameskip_type", "auto_threshold"),
+            ("pcsx_rearmed_frameskip_threshold", "15"),
+            ("pcsx_rearmed_frameskip_interval", "3"),
+            ("pcsx_rearmed_neon_enhancement_enable", "disabled"),
+            ("pcsx_rearmed_neon_enhancement_tex_adj_v2", "enabled"),
+            ("pcsx_rearmed_neon_enhancement_no_main", "enabled"),
+            ("pcsx_rearmed_spu_reverb", "enabled"),
+            ("pcsx_rearmed_spu_interpolation", "simple"),
+            ("pcsx_rearmed_vibration", "enabled"),
+        ] {
+            assert_eq!(
+                default_option("pcsx_rearmed", "psx", key),
+                Some(value),
+                "{key}"
+            );
+        }
     }
 
     #[test]

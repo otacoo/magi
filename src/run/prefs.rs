@@ -239,7 +239,23 @@ pub(super) struct DisplayPrefs {
     pub(super) sysinfo: bool,
 }
 
-pub(super) fn load_display_prefs() -> DisplayPrefs {
+fn load_scale(v: &serde_json::Value, system: &str) -> ScaleMode {
+    let per_system = v
+        .get("scales")
+        .and_then(|s| s.get(system))
+        .and_then(|x| x.as_u64());
+    let global = v.get("scale_mode").and_then(|x| x.as_u64());
+    let chosen = per_system.or(if system == "psx" { None } else { global });
+    chosen
+        .map(|x| ScaleMode::from_u8(x as u8))
+        .unwrap_or(if system == "psx" {
+            ScaleMode::Stretch
+        } else {
+            ScaleMode::Fit
+        })
+}
+
+pub(super) fn load_display_prefs(system: &str) -> DisplayPrefs {
     let v: serde_json::Value = std::fs::read_to_string(runtime_config_path())
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
@@ -268,7 +284,7 @@ pub(super) fn load_display_prefs() -> DisplayPrefs {
             .get("glow")
             .and_then(|x| x.as_bool())
             .unwrap_or(Defaults::GLOW),
-        scale: ScaleMode::from_u8(v.get("scale_mode").and_then(|x| x.as_u64()).unwrap_or(0) as u8),
+        scale: load_scale(&v, system),
         shader: ShaderMode::from_u8(v.get("shader").and_then(|x| x.as_u64()).unwrap_or(0) as u8),
         brightness,
         warmth: v
@@ -305,14 +321,20 @@ pub(super) fn load_display_prefs() -> DisplayPrefs {
     }
 }
 
-pub(super) fn save_display_prefs(p: &DisplayPrefs) {
+pub(super) fn save_display_prefs(system: &str, p: &DisplayPrefs) {
     let path = Path::new(runtime_config_path());
     let mut v: serde_json::Value = std::fs::read_to_string(path)
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .filter(|v: &serde_json::Value| v.is_object())
         .unwrap_or_else(|| serde_json::json!({}));
-    v["scale_mode"] = serde_json::json!(p.scale.as_u8());
+    if !v.get("scales").is_some_and(|s| s.is_object()) {
+        v["scales"] = serde_json::json!({});
+    }
+    v["scales"][system] = serde_json::json!(p.scale.as_u8());
+    if system != "psx" {
+        v["scale_mode"] = serde_json::json!(p.scale.as_u8());
+    }
     v["shader"] = serde_json::json!(p.shader.as_u8());
     v["rumble"] = serde_json::json!(p.rumble);
     v["brightness"] = serde_json::json!(p.brightness);
@@ -341,7 +363,21 @@ pub(super) struct AdjState {
 
 #[cfg(test)]
 mod tests {
-    use super::ShaderMode;
+    use super::{load_scale, ScaleMode, ShaderMode};
+
+    #[test]
+    fn psx_scale_defaults_to_stretch() {
+        let empty = serde_json::json!({});
+        assert_eq!(load_scale(&empty, "psx"), ScaleMode::Stretch);
+        assert_eq!(load_scale(&empty, "gb"), ScaleMode::Fit);
+
+        let global = serde_json::json!({"scale_mode": 1});
+        assert_eq!(load_scale(&global, "gb"), ScaleMode::Integer);
+        assert_eq!(load_scale(&global, "psx"), ScaleMode::Stretch);
+
+        let explicit = serde_json::json!({"scale_mode": 1, "scales": {"psx": 0}});
+        assert_eq!(load_scale(&explicit, "psx"), ScaleMode::Fit);
+    }
 
     #[test]
     fn shader_modes_round_trip_and_keep_old_values() {
