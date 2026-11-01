@@ -154,7 +154,40 @@ pub static UNIT01: Theme = Theme {
     },
 };
 
-pub static BUILTIN: [&Theme; 2] = [&NERV, &UNIT01];
+/// EVA-02: red chassis, unit-green signals.
+pub static UNIT02: Theme = Theme {
+    name: "UNIT-02",
+    palette: Palette {
+        bg0: Color::rgb(6, 3, 3),
+        bg1: Color::rgb(14, 7, 7),
+        bg2: Color::rgb(22, 12, 10),
+        bg3: Color::rgb(34, 18, 14),
+        title: Color::rgb(255, 92, 48),
+        text: Color::rgb(255, 156, 112),
+        text_dim: Color::rgb(214, 112, 78),
+        text_faint: Color::rgb(148, 76, 50),
+        accent: Color::rgb(255, 92, 48),
+        border: Color::rgb(148, 76, 50),
+        glow: Color::rgb(108, 255, 77),
+        alert: Color::rgb(255, 42, 26),
+        clock: Color::rgb(108, 255, 77),
+        battery: Color::rgb(108, 255, 77),
+        battery_shell: Color::rgb(148, 76, 50),
+        scrollbar: Color::rgb(255, 156, 112),
+        scrollbar_track: Color::rgb(22, 12, 10),
+        signal: Color::rgb(108, 255, 77),
+        link: Color::rgb(90, 150, 255),
+        heat: [
+            Color::rgb(0x2a, 0x5c, 0xff),
+            Color::rgb(0x00, 0xc8, 0x96),
+            Color::rgb(0x7a, 0xd6, 0x3a),
+            Color::rgb(0xff, 0xb0, 0x00),
+            Color::rgb(0xff, 0x2a, 0x1a),
+        ],
+    },
+};
+
+pub static BUILTIN: [&Theme; 3] = [&NERV, &UNIT01, &UNIT02];
 
 /// Built-in themes first, then user themes from `Themes/*.ini` (file-name
 /// order). Initialised once, before the first `set_theme_index` call.

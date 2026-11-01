@@ -322,7 +322,11 @@ impl GameMenu {
             } else if self.overlay_sel == 1 {
                 self.sysinfo = !self.sysinfo;
             } else if self.overlay_sel == 2 {
-                self.shader = self.shader.next();
+                self.shader = if left {
+                    self.shader.prev()
+                } else {
+                    self.shader.next()
+                };
             } else {
                 let layer = self.overlay_sel - 3;
                 let n = ctx().overlay_layers[layer].len() as i32 + 1;

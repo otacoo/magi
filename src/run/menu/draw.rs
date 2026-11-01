@@ -421,6 +421,7 @@ fn draw_core_pane(
         .opt_sel
         .saturating_sub(menu.opt_top)
         .min(list.len().saturating_sub(1));
+    let row_h = p(26.0);
     draw_rows(
         cv,
         fonts,
@@ -430,10 +431,23 @@ fn draw_core_pane(
         x,
         y,
         w,
-        p(26.0),
+        row_h,
         menu.opt_since.elapsed().as_secs_f32(),
         t,
     );
+    let total = ids.len();
+    let visible = rows.min(total);
+    if total > visible {
+        let track_x = x + w - p(4.0);
+        let track_h = (row_h * visible as i32 - p(4.0)).max(1) as u32;
+        let thumb_h = ((track_h as usize * visible / total).max(p(14.0) as usize))
+            .min(track_h as usize) as u32;
+        let span = total - visible;
+        let travel = track_h as usize - thumb_h as usize;
+        let thumb_y = y + (travel * menu.opt_top.min(span) / span) as i32;
+        cv.fill_rect(track_x, y, 2, track_h, pal().scrollbar_track);
+        cv.fill_rect(track_x, thumb_y, 2, thumb_h, pal().scrollbar);
+    }
     let _ = h;
 }
 

@@ -113,7 +113,7 @@ MAGI will recreate missing folders at boot.
 |---|---|
 | [Box art](assets/docs/box-art.md) | Covers, the ART interface and downloads. |
 | [Card tool](https://otacoo.github.io/magi/card_tool.html) | Browser cover checks, libretro art search and card file management. |
-| [Themes](assets/docs/themes.md) | NERV, UNIT-01 and user `.ini` themes. |
+| [Themes](assets/docs/themes.md) | NERV, UNIT-01, UNIT-02 and user `.ini` themes. |
 | [Multi-disc PlayStation](assets/docs/multi-disc.md) | `.m3u` playlists and disc swap. |
 | [Netplay](assets/docs/netplay.md) | Game Boy link play over hotspot or Wi-Fi. |
 | [Controls](assets/docs/controls.md) | Every button, on the shelf and in game. |

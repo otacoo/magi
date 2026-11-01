@@ -154,6 +154,17 @@ impl ShaderMode {
         }
     }
 
+    pub(super) fn prev(self) -> Self {
+        match self {
+            ShaderMode::Off => ShaderMode::Dot,
+            ShaderMode::Shimmerless => ShaderMode::Off,
+            ShaderMode::GbaColor => ShaderMode::Shimmerless,
+            ShaderMode::GbcColor => ShaderMode::GbaColor,
+            ShaderMode::Lcd3x => ShaderMode::GbcColor,
+            ShaderMode::Dot => ShaderMode::Lcd3x,
+        }
+    }
+
     pub(super) fn label(self) -> &'static str {
         match self {
             ShaderMode::Off => "OFF",
@@ -348,5 +359,20 @@ mod tests {
         assert_eq!(ShaderMode::from_u8(3), ShaderMode::GbaColor);
         assert_eq!(ShaderMode::from_u8(6), ShaderMode::Dot);
         assert_eq!(ShaderMode::from_u8(7), ShaderMode::Off);
+    }
+
+    #[test]
+    fn shader_modes_step_both_ways() {
+        let mut mode = ShaderMode::Off;
+        for _ in 0..6 {
+            mode = mode.next();
+        }
+        assert_eq!(mode, ShaderMode::Off);
+        for _ in 0..6 {
+            mode = mode.prev();
+        }
+        assert_eq!(mode, ShaderMode::Off);
+        assert_eq!(ShaderMode::Shimmerless.prev(), ShaderMode::Off);
+        assert_eq!(ShaderMode::Off.prev(), ShaderMode::Dot);
     }
 }

@@ -123,8 +123,9 @@ pub fn layout(view: View, w: i32, h: i32, top: i32, bottom: i32, scale: f32) -> 
         View::Art => {
             let strip_h = p(26.0);
             let strip_y = top + 1;
-            let header_y = strip_y + strip_h + p(24.0);
-            let subtitle_y = header_y + p(17.0);
+            // No system heading in ART: the path line sits right under the
+            // strip so the game list gets the extra height.
+            let subtitle_y = strip_y + strip_h + p(20.0);
             let list_top = subtitle_y + p(14.0);
             // The cover frame starts right under the strip, leaving the same
             // margin at the top as above the bottom bar.
@@ -136,7 +137,7 @@ pub fn layout(view: View, w: i32, h: i32, top: i32, bottom: i32, scale: f32) -> 
             let art_x = w - p(14.0) - art_w;
             Layout {
                 systems: (0, strip_y, w, strip_h),
-                header_y,
+                header_y: subtitle_y,
                 subtitle_y,
                 list_top,
                 list_x: p(18.0),

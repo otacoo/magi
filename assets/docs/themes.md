@@ -1,9 +1,10 @@
 # Themes
 
-MAGI ships two colour themes:
+MAGI ships three colour themes:
 
 - **NERV** — orange on black, the classic MAGI look (the default).
 - **UNIT-01** — purple chassis with unit-green signals.
+- **UNIT-02** — red chassis with unit-green signals.
 
 Pick one under **SETTINGS → THEME → COLOUR THEME**.
 

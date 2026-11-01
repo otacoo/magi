@@ -1165,7 +1165,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
     // The radio icons, right next to the clock.
     let mut icons_x = clock_x - p(8.0);
     if st.headphones {
-        crate::theme::headphone_icon(cv, icons_x - p(14.0), p(9.0), pal().link);
+        crate::theme::headphone_icon(cv, icons_x - p(14.0), p(9.0), pal().accent);
         icons_x -= p(16.0);
     }
     if st.bt_on {
@@ -1211,8 +1211,11 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
     if let Some(sys) = st.current().cloned() {
         let total = st.current_games().len();
         let sel = st.sel_game();
-        let (title, title_sz) = fit_title(fonts, &sys.name, 20.0, 12.0, pane_right - p(14.0) - px0);
-        fonts.draw(cv, px0, lay.header_y, &title, title_sz, pal().title);
+        if view == views::View::Simple {
+            let (title, title_sz) =
+                fit_title(fonts, &sys.name, 20.0, 12.0, pane_right - p(14.0) - px0);
+            fonts.draw(cv, px0, lay.header_y, &title, title_sz, pal().title);
+        }
 
         let pos_txt = format!("{}/{}", sel + 1, total);
         let count_w = if total > 0 {
@@ -1236,7 +1239,13 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
             fonts.draw(cv, px0, lay.subtitle_y, "SCANNING...", 10.0, pal().text_dim);
         } else {
             let sub = if sys.id == FAV_ID {
-                format!("{total} FAVORITE{}", if total == 1 { "" } else { "S" })
+                if view == views::View::Art {
+                    "FAVORITES".to_string()
+                } else {
+                    format!("{total} FAVORITE{}", if total == 1 { "" } else { "S" })
+                }
+            } else if view == views::View::Art {
+                format!("Games/{}/", sys.folder())
             } else {
                 format!("Games/{}/   {total} GAMES", sys.folder())
             };
