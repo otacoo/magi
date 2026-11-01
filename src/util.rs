@@ -106,9 +106,9 @@ pub fn usb_online() -> Option<bool> {
     None
 }
 
-/// The AXP717/2202 "charger enable" bit: register 0x18, bit 1 (R/W per
-/// the datasheet; the vendor driver already clears it at 100%). sysfs
-/// and the regmap debugfs are read-only, so this speaks i2c directly.
+/// The AXP717/2202 "battery charge enable" bit: register 0x19, bit 1.
+/// The charger-done path leaves it set and turns off BATFET instead, so a
+/// full battery does not tell us the driver cleared it.
 #[cfg(target_os = "linux")]
 fn axp_charger_bits() -> Option<u8> {
     #[repr(C)]
@@ -118,11 +118,11 @@ fn axp_charger_bits() -> Option<u8> {
         size: u32,
         data: *mut u8,
     }
-    const I2C_SLAVE: libc::c_ulong = 0x0703;
+    const I2C_SLAVE_FORCE: libc::c_ulong = 0x0706;
     const I2C_SMBUS: libc::c_ulong = 0x0720;
     const I2C_SMBUS_BYTE_DATA: u32 = 2;
     const AXP_ADDR: libc::c_ulong = 0x34;
-    const CHG_ENABLE_REG: u8 = 0x18;
+    const CHG_ENABLE_REG: u8 = 0x19;
 
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -131,7 +131,8 @@ fn axp_charger_bits() -> Option<u8> {
         .ok()?;
     use std::os::unix::io::AsRawFd;
     let fd = file.as_raw_fd();
-    if unsafe { libc::ioctl(fd, I2C_SLAVE, AXP_ADDR) } < 0 {
+    // The axp20x driver owns this address; plain I2C_SLAVE returns EBUSY.
+    if unsafe { libc::ioctl(fd, I2C_SLAVE_FORCE, AXP_ADDR) } < 0 {
         return None;
     }
     let mut val: u8 = 0;
@@ -147,8 +148,8 @@ fn axp_charger_bits() -> Option<u8> {
     Some(val)
 }
 
-/// Read-modify-write the charger enable bit; leaves every other bit of
-/// register 0x18 alone. Returns true when the write went through.
+/// Read-modify-write the battery charge enable bit; leaves every other bit
+/// of register 0x19 alone. Returns true when the write went through.
 #[cfg(target_os = "linux")]
 pub fn axp_set_charger(on: bool) -> bool {
     #[repr(C)]
@@ -158,11 +159,11 @@ pub fn axp_set_charger(on: bool) -> bool {
         size: u32,
         data: *mut u8,
     }
-    const I2C_SLAVE: libc::c_ulong = 0x0703;
+    const I2C_SLAVE_FORCE: libc::c_ulong = 0x0706;
     const I2C_SMBUS: libc::c_ulong = 0x0720;
     const I2C_SMBUS_BYTE_DATA: u32 = 2;
     const AXP_ADDR: libc::c_ulong = 0x34;
-    const CHG_ENABLE_REG: u8 = 0x18;
+    const CHG_ENABLE_REG: u8 = 0x19;
 
     let Some(cur) = axp_charger_bits() else {
         return false;
@@ -184,7 +185,7 @@ pub fn axp_set_charger(on: bool) -> bool {
     };
     use std::os::unix::io::AsRawFd;
     let fd = file.as_raw_fd();
-    if unsafe { libc::ioctl(fd, I2C_SLAVE, AXP_ADDR) } < 0 {
+    if unsafe { libc::ioctl(fd, I2C_SLAVE_FORCE, AXP_ADDR) } < 0 {
         log("battery: i2c slave select failed");
         return false;
     }
@@ -201,7 +202,7 @@ pub fn axp_set_charger(on: bool) -> bool {
     }
     let readback = axp_charger_bits();
     log(&format!(
-        "battery: charger {} (reg18 readback {readback:02x?})",
+        "battery: charger {} (reg19 readback {readback:02x?})",
         if on { "enabled" } else { "disabled" }
     ));
     true
