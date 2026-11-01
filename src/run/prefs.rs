@@ -136,6 +136,7 @@ impl ScaleMode {
 pub(super) enum ShaderMode {
     Off,
     Shimmerless,
+    AuthenticGbc,
     GbaColor,
     GbcColor,
     Lcd3x,
@@ -146,7 +147,8 @@ impl ShaderMode {
     pub(super) fn next(self) -> Self {
         match self {
             ShaderMode::Off => ShaderMode::Shimmerless,
-            ShaderMode::Shimmerless => ShaderMode::GbaColor,
+            ShaderMode::Shimmerless => ShaderMode::AuthenticGbc,
+            ShaderMode::AuthenticGbc => ShaderMode::GbaColor,
             ShaderMode::GbaColor => ShaderMode::GbcColor,
             ShaderMode::GbcColor => ShaderMode::Lcd3x,
             ShaderMode::Lcd3x => ShaderMode::Dot,
@@ -158,6 +160,7 @@ impl ShaderMode {
         match self {
             ShaderMode::Off => "OFF",
             ShaderMode::Shimmerless => "SHIMMERLESS",
+            ShaderMode::AuthenticGbc => "AUTHENTIC GBC",
             ShaderMode::GbaColor => "GBA COLOR",
             ShaderMode::GbcColor => "GBC COLOR",
             ShaderMode::Lcd3x => "LCD3X",
@@ -169,6 +172,7 @@ impl ShaderMode {
         match self {
             ShaderMode::Off => 0,
             ShaderMode::Shimmerless => 1,
+            ShaderMode::AuthenticGbc => 2,
             ShaderMode::GbaColor => 3,
             ShaderMode::GbcColor => 4,
             ShaderMode::Lcd3x => 5,
@@ -179,6 +183,7 @@ impl ShaderMode {
     pub(super) fn from_u8(v: u8) -> Self {
         match v {
             1 => ShaderMode::Shimmerless,
+            2 => ShaderMode::AuthenticGbc,
             3 => ShaderMode::GbaColor,
             4 => ShaderMode::GbcColor,
             5 => ShaderMode::Lcd3x,
@@ -326,4 +331,27 @@ pub(super) struct AdjState {
     pub(super) kind: AdjKind,
     pub(super) dir: i32,
     pub(super) next: Instant,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ShaderMode;
+
+    #[test]
+    fn shader_modes_round_trip_and_keep_old_values() {
+        for mode in [
+            ShaderMode::Off,
+            ShaderMode::Shimmerless,
+            ShaderMode::AuthenticGbc,
+            ShaderMode::GbaColor,
+            ShaderMode::GbcColor,
+            ShaderMode::Lcd3x,
+            ShaderMode::Dot,
+        ] {
+            assert_eq!(ShaderMode::from_u8(mode.as_u8()), mode);
+        }
+        assert_eq!(ShaderMode::from_u8(3), ShaderMode::GbaColor);
+        assert_eq!(ShaderMode::from_u8(6), ShaderMode::Dot);
+        assert_eq!(ShaderMode::from_u8(7), ShaderMode::Off);
+    }
 }

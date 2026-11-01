@@ -25,3 +25,12 @@ https://github.com/libretro/glsl-shaders/tree/master/handheld:
 
 They are ported into the single-pass MAGI screen shader in
 `src/present/gles.rs`.
+
+## Authentic GBC
+
+- Author: fishku
+- Source: https://github.com/libretro/glsl-shaders/tree/master/handheld/shaders/authentic_gbc
+- License: CC0 1.0 Universal (public domain dedication)
+
+The built-in `AUTHENTIC GBC` screen shader in `src/present/gles.rs` is a
+single-pass port of `authentic_gbc_single_pass.glsl` (v2.2).

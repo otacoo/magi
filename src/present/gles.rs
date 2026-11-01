@@ -92,8 +92,9 @@ void main() {
 "#;
 
 // Mode 1 is zadpos's sharp-shimmerless box-filter point (public domain).
-// Modes 3-6 are the public-domain handheld shaders from
-// libretro/glsl-shaders (Color Mangler, lcd3x, dot); see THIRD_PARTY_NOTICES.md.
+// Mode 2 is fishku's Authentic GBC (CC0), ported from the single-pass preset.
+// Modes 3-6 are the public-domain handheld shaders from libretro/glsl-shaders
+// (Color Mangler, lcd3x, dot); see THIRD_PARTY_NOTICES.md.
 const FRAG: &str = r#"
 #ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
@@ -110,11 +111,51 @@ uniform vec2 u_out;
 uniform float u_flip;
 varying vec2 v_uv;
 varying vec2 v_pos;
+
+float intersect_blurred_rect_area(vec4 px_square, vec4 rect, float blur) {
+    vec4 range = (rect.zw - rect.xy).xyxy;
+    vec4 linear = clamp(px_square - rect.xyxy, vec4(0.0), range);
+    if (blur < 1.0e-6) {
+        return (linear.z - linear.x) * (linear.w - linear.y);
+    }
+    vec4 center = (0.5 * (rect.xy + rect.zw)).xyxy;
+    vec4 dist_to_center = abs(px_square - center);
+    vec4 blur_vec = vec4(blur);
+    vec4 x_n =
+        max(0.5 * (max(range, blur_vec) + blur_vec) - dist_to_center, vec4(0.0)) / blur_vec;
+    const vec3 c = vec3(-0.3635, 0.727, 0.1365);
+    vec4 x_n2 = x_n * x_n;
+    vec4 poly = (c.xxxx * x_n2 + c.yyyy * x_n + c.zzzz) * x_n2 * min(range, blur_vec);
+    vec4 transition = mix(poly, range - poly, step(center, px_square));
+    vec4 res = mix(linear, transition, step(0.5 * (range - blur_vec), dist_to_center));
+    return (res.z - res.x) * (res.w - res.y);
+}
+
+float subpx_coverage(vec4 px_square, vec2 subpx_orig, vec4 rect1, vec4 rect2, float blur) {
+    return intersect_blurred_rect_area(px_square, subpx_orig.xyxy + rect1, blur)
+        + intersect_blurred_rect_area(px_square, subpx_orig.xyxy + rect2, blur);
+}
+
+vec3 pixel_color(vec2 tx_orig, vec2 subpx_offset, vec2 tx_to_px, vec2 tx_orig_offs,
+                 vec4 rect1, vec4 rect2, float blur) {
+    return vec3(
+        subpx_coverage(vec4(-subpx_offset - 0.5, -subpx_offset + 0.5),
+                       tx_orig + vec2(tx_orig_offs.x - tx_to_px.x / 3.0, tx_orig_offs.y),
+                       rect1, rect2, blur),
+        subpx_coverage(vec4(vec2(-0.5), vec2(0.5)),
+                       tx_orig + tx_orig_offs, rect1, rect2, blur),
+        subpx_coverage(vec4(subpx_offset - 0.5, subpx_offset + 0.5),
+                       tx_orig + vec2(tx_orig_offs.x + tx_to_px.x / 3.0, tx_orig_offs.y),
+                       rect1, rect2, blur));
+}
+
+vec2 source_uv(vec2 uv, float flip) {
+    return vec2(uv.x, mix(uv.y, 1.0 - uv.y, flip));
+}
+
 void main() {
     vec2 uv = v_uv;
     vec4 c;
-    // 1 shimmerless, 3 GBA colour, 4 GBC colour,
-    // 5 LCD3x, 6 dot matrix.
     if (u_mode == 1) {
         vec2 pixel = v_pos * u_out;
         vec2 scale = u_out / u_in;
@@ -130,6 +171,42 @@ void main() {
             uv.y = 1.0 - uv.y;
         }
         c = texture2D(u_tex, uv);
+    } else if (u_mode == 2) {
+        const float brig = 0.6;
+        const float blur_amt = 0.3;
+        vec2 tx_to_px = u_out / u_in;
+        vec2 tx_to_uv = 1.0 / u_in;
+        vec2 subpx_size = tx_to_px * mix(vec2(0.296, 0.910), vec2(0.75, 0.93), brig);
+        vec2 notch_size = tx_to_px * mix(vec2(0.115, 0.166), vec2(0.29, 0.17), brig);
+        vec4 rect1 = vec4(vec2(0.0), subpx_size - vec2(0.0, notch_size.y));
+        vec4 rect2 = vec4(notch_size.x, subpx_size.y - notch_size.y, subpx_size);
+        vec2 orig_offs = (tx_to_px - subpx_size) * 0.5;
+        float eff_blur = blur_amt * min(tx_to_px.x, tx_to_px.y) * 0.5;
+        vec2 tx_coord = v_pos * u_in;
+        vec2 tc_i = floor(tx_coord);
+        vec2 tc_f = tx_coord - tc_i;
+        vec2 tc_off = step(vec2(0.5), tc_f) * 2.0 - 1.0;
+        vec2 off0 = vec2(0.0);
+        vec2 off1 = vec2(tc_off.x, 0.0);
+        vec2 off2 = vec2(0.0, tc_off.y);
+        vec2 off3 = tc_off;
+        vec3 s0 = pow(texture2D(u_tex, source_uv((tc_i + off0 + 0.5) * tx_to_uv, u_flip)).rgb,
+                      vec3(2.2));
+        vec3 s1 = pow(texture2D(u_tex, source_uv((tc_i + off1 + 0.5) * tx_to_uv, u_flip)).rgb,
+                      vec3(2.2));
+        vec3 s2 = pow(texture2D(u_tex, source_uv((tc_i + off2 + 0.5) * tx_to_uv, u_flip)).rgb,
+                      vec3(2.2));
+        vec3 s3 = pow(texture2D(u_tex, source_uv((tc_i + off3 + 0.5) * tx_to_uv, u_flip)).rgb,
+                      vec3(2.2));
+        vec3 res = pixel_color((off0 - tc_f) * tx_to_px, vec2(0.0), tx_to_px, orig_offs,
+                               rect1, rect2, eff_blur) * s0
+                 + pixel_color((off1 - tc_f) * tx_to_px, vec2(0.0), tx_to_px, orig_offs,
+                               rect1, rect2, eff_blur) * s1
+                 + pixel_color((off2 - tc_f) * tx_to_px, vec2(0.0), tx_to_px, orig_offs,
+                               rect1, rect2, eff_blur) * s2
+                 + pixel_color((off3 - tc_f) * tx_to_px, vec2(0.0), tx_to_px, orig_offs,
+                               rect1, rect2, eff_blur) * s3;
+        c = vec4(pow(res, vec3(1.0 / 2.2)), 1.0);
     } else if (u_mode == 3) {
         vec3 s = pow(texture2D(u_tex, uv).rgb, vec3(3.2, 3.2, 3.2));
         s = clamp(s * 0.94, 0.0, 1.0);
@@ -179,7 +256,7 @@ void main() {
 }
 "#;
 
-// Fallback for drivers that reject the shimmerless branch: the original
+// Fallback for drivers that reject the shader branches: the original
 // composite shader, with the shader uniforms simply absent (-1 locations).
 const FRAG_PLAIN: &str = r#"
 precision mediump float;
@@ -596,7 +673,8 @@ impl Gpu {
     }
 
     /// Select the game-image shader: 0 = nearest, 1 = shimmerless (linear
-    /// sampling with the box-filter sample point).
+    /// sampling with the box-filter sample point), 2 = Authentic GBC, 3-6 =
+    /// colour and LCD effects.
     pub fn set_shader(&mut self, mode: u8) {
         let mode = if self.shader_ok { mode } else { 0 };
         if self.shader == mode {
