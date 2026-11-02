@@ -1541,6 +1541,8 @@ pub(crate) fn draw_menu_preview(
         rom: "Metal Gear Solid (Europe) (En,Fr,De,Es).gbc".into(),
         netplay: None,
         netplay_linked: false,
+        reflective: false,
+        gb_color_backup: None,
         #[cfg(target_os = "linux")]
         hw_render: None,
     };

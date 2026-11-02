@@ -91,6 +91,9 @@ void main() {
 
 // Modes 1-4 are the public-domain handheld shaders from libretro/glsl-shaders
 // (Color Mangler, lcd3x, dot); see THIRD_PARTY_NOTICES.md.
+// Mode 5 is MAGI's own LCD-accurate approximation: GB dots are ink over a
+// lit panel, gaps take their neighbour's ink, and the dots cast a shadow.
+// Colour screens keep their sampled colour and get a square grid.
 const FRAG: &str = r#"
 #ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
@@ -102,8 +105,23 @@ uniform vec3 u_gain;
 uniform float u_alpha;
 uniform float u_overlay;
 uniform int u_mode;
+uniform int u_sys;
 uniform vec2 u_in;
+uniform vec2 u_out;
 varying vec2 v_uv;
+
+float shade_at(vec2 at) {
+    return dot(texture2D(u_tex, clamp(at, vec2(0.0), vec2(1.0))).rgb,
+        vec3(1.0 / 3.0));
+}
+
+float gb_ink(float g) {
+    return min(1.153846 * (1.0 - g) + 0.05, 1.0);
+}
+
+float gb_ink_at(vec2 at) {
+    return gb_ink(shade_at(at));
+}
 
 void main() {
     vec2 uv = v_uv;
@@ -150,6 +168,42 @@ void main() {
             + s * exp(-2.4 * length(fract(pix) - vec2(0.5, 1.5)) * bloom)
             + s * exp(-2.4 * length(fract(pix) - vec2(1.5, 1.5)) * bloom);
         c = vec4(mix(1.2 * mid, sum, 0.65), 1.0);
+    } else if (u_mode == 5) {
+        vec2 q = uv * u_in;
+        vec2 texel = 1.0 / u_in;
+        vec2 scale = u_out / max(u_in, vec2(1.0));
+        vec2 gap_px = clamp(vec2(1.0) / max(scale, vec2(1.0)), 0.0, 0.5);
+        vec2 on_gap = step(fract(q), gap_px);
+        vec3 rgb;
+        if (u_sys == 1) {
+            // A Game Boy dot is a share of ink over the lit panel. A gap
+            // takes ink from its left or top neighbour; where gaps cross,
+            // only the panel shows. The dots cast down and to the left.
+            float a = gb_ink(shade_at(uv));
+            float left = q.x > 1.0 ? gb_ink_at(uv - vec2(texel.x, 0.0)) : 0.0;
+            float up = q.y > 1.0 ? gb_ink_at(uv - vec2(0.0, texel.y)) : 0.0;
+            float gap_x = 0.38 * (a + left);
+            float gap_y = 0.38 * (a + up);
+            float dot_a = on_gap.x > 0.5
+                ? (on_gap.y > 0.5 ? 0.0 : gap_x)
+                : (on_gap.y > 0.5 ? gap_y : a);
+            vec2 from = uv + vec2(0.5, -0.5) * texel;
+            float sh = gb_ink_at(from - 0.5 * texel)
+                + gb_ink_at(from + 0.5 * texel)
+                + gb_ink_at(from + vec2(0.5, -0.5) * texel)
+                + gb_ink_at(from + vec2(-0.5, 0.5) * texel);
+            sh *= 0.25 * 0.30 * (1.0 - 0.75 * dot_a);
+            vec3 ink = vec3(0.0, 0.353, 0.667);
+            vec3 panel = vec3(0.631, 0.631, 0.0);
+            rgb = ink * dot_a * (1.0 - 0.7 * dot_a * dot_a)
+                + panel * (1.0 - sh) * (0.80 - 0.63 * dot_a);
+        } else {
+            rgb = texture2D(u_tex, (floor(q) + vec2(0.5)) / u_in).rgb;
+            float grid = max(on_gap.x, on_gap.y)
+                * smoothstep(1.2, 2.0, min(scale.x, scale.y));
+            rgb = mix(rgb, vec3(0.02, 0.05, 0.035), grid * 0.75);
+        }
+        c = vec4(rgb, 1.0);
     } else {
         c = texture2D(u_tex, uv);
     }
@@ -412,12 +466,15 @@ pub struct Gpu {
     u_alpha: i32,
     u_overlay: i32,
     u_mode: i32,
+    u_sys: i32,
     u_in: i32,
+    u_out: i32,
     vbo: u32,
     game_tex: u32,
     game_size: (i32, i32),
     shader: u8,
     shader_ok: bool,
+    sys: i32,
     overlay_tex: u32,
     overlay_size: (i32, i32),
     has_overlay: bool,
@@ -518,12 +575,15 @@ impl Gpu {
             u_alpha: 0,
             u_overlay: 0,
             u_mode: 0,
+            u_sys: 0,
             u_in: 0,
+            u_out: 0,
             vbo: 0,
             game_tex: 0,
             game_size: (0, 0),
             shader: 0,
             shader_ok,
+            sys: 0,
             overlay_tex: 0,
             overlay_size: (0, 0),
             has_overlay: false,
@@ -543,7 +603,9 @@ impl Gpu {
             gpu.u_alpha = uniform(&gpu.gl, program, "u_alpha");
             gpu.u_overlay = uniform(&gpu.gl, program, "u_overlay");
             gpu.u_mode = uniform(&gpu.gl, program, "u_mode");
+            gpu.u_sys = uniform(&gpu.gl, program, "u_sys");
             gpu.u_in = uniform(&gpu.gl, program, "u_in");
+            gpu.u_out = uniform(&gpu.gl, program, "u_out");
             (gpu.gl.gen_buffers)(1, &mut gpu.vbo);
             (gpu.gl.bind_buffer)(GL_ARRAY_BUFFER, gpu.vbo);
             let verts: [f32; 8] = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
@@ -560,13 +622,27 @@ impl Gpu {
             (gpu.gl.use_program)(gpu.program);
             (gpu.gl.uniform_1i)(gpu.u_tex, 0);
             (gpu.gl.uniform_1i)(gpu.u_mode, 0);
+            (gpu.gl.uniform_1i)(gpu.u_sys, 0);
             (gpu.gl.uniform_2f)(gpu.u_in, 1.0, 1.0);
+            (gpu.gl.uniform_2f)(gpu.u_out, 1.0, 1.0);
         }
         Ok(gpu)
     }
 
+    /// Tell the LCD-accurate shader which panel to imitate.
+    pub fn set_system(&mut self, system: &str) {
+        let code = match system {
+            "gb" => 1,
+            "gbc" => 2,
+            "gba" => 3,
+            _ => 0,
+        };
+        self.sys = code;
+        unsafe { (self.gl.uniform_1i)(self.u_sys, code) };
+    }
+
     /// Select the game-image shader: 0 = nearest, 1-4 = colour and LCD
-    /// effects.
+    /// effects, 5 = LCD accurate.
     pub fn set_shader(&mut self, mode: u8) {
         let mode = if self.shader_ok { mode } else { 0 };
         if self.shader == mode {
@@ -915,7 +991,6 @@ impl Gpu {
             }
             self.frame_buf.as_ptr() as *const c_void
         };
-
         if self.game_tex == 0 || self.game_size != (iw, ih) {
             if self.game_tex != 0 {
                 unsafe { (self.gl.delete_textures)(1, &self.game_tex) };
@@ -1005,6 +1080,13 @@ impl Gpu {
     ) {
         let f = warmth as f32 / 100.0;
         let gain = [1.0 + 0.12 * f, 1.0, 1.0 - 0.40 * f];
+        // The DMG panel outside the picture, a touch darker than the light
+        // pixel composite so it sits on the same shade as the game.
+        let bg = if mode == 5 && self.sys == 1 {
+            [0.485 * gain[0], 0.502 * gain[1], 0.031 * gain[2]]
+        } else {
+            [0.0, 0.0, 0.0]
+        };
         unsafe {
             // The core may leave its own FBO and 3D state behind.
             (self.gl.bind_framebuffer)(GL_FRAMEBUFFER, 0);
@@ -1014,7 +1096,7 @@ impl Gpu {
             (self.gl.disable)(GL_STENCIL_TEST);
             (self.gl.disable)(GL_SCISSOR_TEST);
             (self.gl.color_mask)(1, 1, 1, 1);
-            (self.gl.clear_color)(0.0, 0.0, 0.0, 1.0);
+            (self.gl.clear_color)(bg[0], bg[1], bg[2], 1.0);
             (self.gl.clear)(GL_COLOR_BUFFER_BIT);
             (self.gl.disable)(GL_BLEND);
             (self.gl.use_program)(self.program);
@@ -1032,6 +1114,7 @@ impl Gpu {
             (self.gl.uniform_4f)(self.u_uv, uv.0, uv.1, uv.2, uv.3);
             (self.gl.uniform_1i)(self.u_mode, mode);
             (self.gl.uniform_2f)(self.u_in, in_size.0, in_size.1);
+            (self.gl.uniform_2f)(self.u_out, rect.2.max(1) as f32, rect.3.max(1) as f32);
             (self.gl.active_texture)(GL_TEXTURE0);
             (self.gl.bind_texture)(GL_TEXTURE_2D, tex);
             self.draw();

@@ -263,9 +263,7 @@ fn default_option(core: &str, system: &str, key: &str) -> Option<&'static str> {
         }),
         ("gambatte", "gambatte_gbc_color_correction_mode") => Some("accurate"),
         ("gambatte", "gambatte_gbc_frontlight_position") => Some("central"),
-        ("gambatte", "gambatte_dark_filter_level") => {
-            Some(if system == "gbc" { "5" } else { "20" })
-        }
+        ("gambatte", "gambatte_dark_filter_level") => Some("0"),
         ("gambatte", "gambatte_gb_hwmode") => Some("Auto"),
         ("gambatte", "gambatte_rumble_level") => Some("8"),
         ("gambatte", "gambatte_gb_colorization") => {
@@ -325,11 +323,20 @@ fn chosen_index(
     key: &str,
     values: &[String],
     saved: Option<&String>,
+    reflective: bool,
 ) -> usize {
     // Netplay owns the link mode at runtime. Never restore a saved server or
     // client mode, or a game would open a socket before the player asks.
     if core == "gambatte" && key == "gambatte_gb_link_mode" {
         if let Some(i) = values.iter().position(|v| v == "Not Connected") {
+            return i;
+        }
+    }
+    if core == "gambatte" && key == "gambatte_gb_colorization" && reflective {
+        if let Some(i) = values
+            .iter()
+            .position(|v| v.eq_ignore_ascii_case("disabled"))
+        {
             return i;
         }
     }
@@ -348,8 +355,18 @@ fn options_path() -> &'static str {
     "Config/core-options.json"
 }
 
+fn options_key(core: &str, system: &str) -> String {
+    if core == "gambatte" {
+        format!("gambatte:{system}")
+    } else {
+        core.to_string()
+    }
+}
+
 /// Per-core saved choices: `{ "<core>": { "<option key>": "<label>" } }`.
-fn load_saved_options(core: &str) -> std::collections::HashMap<String, String> {
+/// Gambatte is split per system because GB and GBC share the core but not
+/// their palettes.
+fn load_saved_options(core: &str, system: &str) -> std::collections::HashMap<String, String> {
     let mut map = std::collections::HashMap::new();
     let Ok(text) = std::fs::read_to_string(options_path()) else {
         return map;
@@ -357,7 +374,8 @@ fn load_saved_options(core: &str) -> std::collections::HashMap<String, String> {
     let Ok(root) = serde_json::from_str::<serde_json::Value>(&text) else {
         return map;
     };
-    if let Some(obj) = root.get(core).and_then(|v| v.as_object()) {
+    let key = options_key(core, system);
+    if let Some(obj) = root.get(&key).and_then(|v| v.as_object()) {
         for (k, v) in obj {
             if let Some(s) = v.as_str() {
                 map.insert(k.clone(), s.to_string());
@@ -375,14 +393,23 @@ fn save_core_options(ctx: &Ctx) {
         .filter(|v: &serde_json::Value| v.is_object())
         .unwrap_or_else(|| serde_json::json!({}));
     let mut core = serde_json::Map::new();
+    let key = options_key(&ctx.opt_key, &ctx.system);
+    let previous = root.get(&key).cloned();
     for o in &ctx.options {
+        if ctx.reflective && o.key == "gambatte_gb_colorization" {
+            if let Some(v) = previous.as_ref().and_then(|c| c.get(&o.key)) {
+                core.insert(o.key.clone(), v.clone());
+            }
+            continue;
+        }
         core.insert(o.key.clone(), serde_json::json!(o.values[o.chosen]));
     }
-    root[&ctx.opt_key] = serde_json::Value::Object(core);
+    root[&key] = serde_json::Value::Object(core);
     if let Ok(text) = serde_json::to_string_pretty(&root) {
         let _ = std::fs::create_dir_all("Config");
-        if let Err(e) = util::write_file_atomic(path, text.as_bytes()) {
-            util::log(&format!("core options: cannot save: {e}"));
+        match util::write_file_atomic(path, text.as_bytes()) {
+            Ok(()) => util::log(&format!("core options: saved {key}")),
+            Err(e) => util::log(&format!("core options: cannot save: {e}")),
         }
     }
 }
@@ -420,6 +447,10 @@ struct Ctx {
     rom: String,
     netplay: Option<netplay::Session>,
     netplay_linked: bool,
+    /// GB is drawn by the LCD-accurate palette, so the core must stay greyscale.
+    reflective: bool,
+    /// The user's GB colourisation, restored when LCD ACCURATE is switched off.
+    gb_color_backup: Option<String>,
     /// Set when the core accepted a libretro hardware GLES context.
     #[cfg(target_os = "linux")]
     hw_render: Option<HwRender>,
@@ -626,12 +657,17 @@ extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
                         &key,
                         &values,
                         ctx.saved_opts.get(&key),
+                        ctx.reflective,
                     );
                     let c_values = values
                         .iter()
                         .map(|v| CString::new(v.as_str()).unwrap_or_default())
                         .collect();
+                    let forced_grey = ctx.reflective
+                        && (key == "gambatte_gb_colorization"
+                            || key == "gambatte_dark_filter_level");
                     let visible = option_kept(&desc)
+                        && !forced_grey
                         && !(ctx.system == "genesis" && genesis_option_hidden(&desc))
                         && !(ctx.opt_key == "mgba" && mgba_option_hidden(&desc));
                     if key.to_ascii_lowercase().contains("bios") {
@@ -964,6 +1000,13 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     util::log(&format!(
         "launch: system={system_id} core={core_name} rom={rom}"
     ));
+    // Read the shader before the core registers its options, so the
+    // LCD-accurate GB choice can force the grey palette from the first frame.
+    let mut disp = load_display_prefs(system_id);
+    if disp.shader == ShaderMode::LcdAccurate {
+        disp.scale = ScaleMode::Integer;
+    }
+    let reflective = system_id == "gb" && disp.shader == ShaderMode::LcdAccurate;
     #[cfg(target_os = "linux")]
     util::hdmi_init();
     #[cfg(target_os = "linux")]
@@ -1109,7 +1152,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         options: Vec::new(),
         opt_key: core_name.to_string(),
         opt_dirty: false,
-        saved_opts: load_saved_options(core_name),
+        saved_opts: load_saved_options(core_name, system_id),
         overlay_layers: std::array::from_fn(|_| Vec::new()),
         overlay_dirty: false,
         moto: None,
@@ -1120,6 +1163,8 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         rom: rom.to_string(),
         netplay: None,
         netplay_linked: false,
+        reflective,
+        gb_color_backup: None,
         #[cfg(target_os = "linux")]
         hw_render: None,
     });
@@ -1219,6 +1264,14 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     };
     if !unsafe { load_game(&game) } {
         bail!("core refused to load {rom}");
+    }
+    if ctx().reflective {
+        let color = ctx()
+            .saved_opts
+            .get("gambatte_gb_colorization")
+            .cloned()
+            .unwrap_or_else(|| "auto".into());
+        ctx().gb_color_backup = Some(color);
     }
     let discs = disc_count();
     if discs > 1 {
@@ -1329,9 +1382,9 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     // scales the samples.
     let mut gain_pct: u8 = load_runtime_volume();
     let (ff_steps, ff_sound) = load_runtime_prefs();
-    let mut disp = load_display_prefs(system_id);
     #[cfg(target_os = "linux")]
     if let Some(gpu) = gpu.as_mut() {
+        gpu.set_system(system_id);
         gpu.set_shader(disp.shader.as_u8());
     }
     ctx().rumble_ok = disp.rumble;
@@ -1938,6 +1991,12 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
             disp.fps_counter = menu.fps;
             disp.sysinfo = menu.sysinfo;
             disp.shader = menu.shader;
+            if disp.shader == ShaderMode::LcdAccurate {
+                disp.scale = ScaleMode::Integer;
+            }
+            let reflective = system_id == "gb" && disp.shader == ShaderMode::LcdAccurate;
+            set_lcd_accurate_gb(reflective);
+            ctx().reflective = reflective;
             save_display_prefs(system_id, &disp);
             overlay_art = load_composite(&overlay_names, cw, ch);
             bezel_area = load_bezel_area(&overlay_names, cw, ch);
@@ -2712,6 +2771,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         }
         HW_FBO.store(0, Ordering::Relaxed);
     }
+    save_core_options(ctx());
     unsafe {
         unload_game();
         retro_deinit();
@@ -3334,6 +3394,38 @@ fn set_core_option(ctx: &mut Ctx, key: &str, value: &str) -> bool {
     true
 }
 
+fn core_option_value(ctx: &Ctx, key: &str) -> Option<String> {
+    ctx.options
+        .iter()
+        .find(|o| o.key == key)
+        .map(|o| o.values[o.chosen].clone())
+}
+
+fn set_option_visible(ctx: &mut Ctx, key: &str, visible: bool) {
+    if let Some(o) = ctx.options.iter_mut().find(|o| o.key == key) {
+        o.visible = visible;
+    }
+}
+
+/// The LCD-accurate GB palette needs the core's unfiltered grey. The user's
+/// colourisation comes back when another shader is picked.
+fn set_lcd_accurate_gb(on: bool) {
+    let ctx = ctx();
+    if ctx.opt_key != "gambatte" || ctx.system != "gb" {
+        return;
+    }
+    if on {
+        if ctx.gb_color_backup.is_none() {
+            ctx.gb_color_backup = core_option_value(ctx, "gambatte_gb_colorization");
+        }
+        set_core_option(ctx, "gambatte_gb_colorization", "disabled");
+    } else if let Some(value) = ctx.gb_color_backup.take() {
+        set_core_option(ctx, "gambatte_gb_colorization", &value);
+    }
+    set_option_visible(ctx, "gambatte_gb_colorization", !on);
+    set_option_visible(ctx, "gambatte_dark_filter_level", !on);
+}
+
 /// Point gambatte's netlink client at the local proxy.
 fn set_gambatte_link(on: bool) -> bool {
     let ctx = ctx();
@@ -3858,7 +3950,7 @@ mod option_tests {
         let values: Vec<String> = ["OFF", "ON"].iter().map(|s| s.to_string()).collect();
         assert_eq!(default_option("mgba", "gba", "mgba_force_gbp"), Some("ON"));
         assert_eq!(
-            chosen_index("mgba", "gba", "mgba_force_gbp", &values, None),
+            chosen_index("mgba", "gba", "mgba_force_gbp", &values, None, false),
             1,
             "a fresh card enables GBA rumble"
         );
@@ -3868,10 +3960,51 @@ mod option_tests {
                 "gba",
                 "mgba_force_gbp",
                 &values,
-                Some(&"OFF".to_string())
+                Some(&"OFF".to_string()),
+                false
             ),
             0,
             "a saved choice still wins"
+        );
+    }
+
+    #[test]
+    fn gambatte_options_are_per_system() {
+        assert_eq!(super::options_key("gambatte", "gb"), "gambatte:gb");
+        assert_eq!(super::options_key("gambatte", "gbc"), "gambatte:gbc");
+        assert_eq!(super::options_key("mgba", "gba"), "mgba");
+    }
+
+    #[test]
+    fn lcd_accurate_gb_forces_greyscale() {
+        let values: Vec<String> = ["disabled", "auto", "internal"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let saved = Some("auto".to_string());
+        assert_eq!(
+            chosen_index(
+                "gambatte",
+                "gb",
+                "gambatte_gb_colorization",
+                &values,
+                saved.as_ref(),
+                true
+            ),
+            0,
+            "the LCD-accurate palette needs grey input"
+        );
+        assert_eq!(
+            chosen_index(
+                "gambatte",
+                "gb",
+                "gambatte_gb_colorization",
+                &values,
+                saved.as_ref(),
+                false
+            ),
+            1,
+            "the saved colourisation is kept otherwise"
         );
     }
 
@@ -3887,11 +4020,11 @@ mod option_tests {
         );
         assert_eq!(
             default_option("gambatte", "gb", "gambatte_dark_filter_level"),
-            Some("20")
+            Some("0")
         );
         assert_eq!(
             default_option("gambatte", "gbc", "gambatte_dark_filter_level"),
-            Some("5")
+            Some("0")
         );
         assert_eq!(
             default_option("gambatte", "gb", "gambatte_gb_colorization"),
@@ -3928,7 +4061,14 @@ mod option_tests {
 
         let cc = ["GBC only", "always", "disabled"].map(String::from);
         assert_eq!(
-            chosen_index("gambatte", "gb", "gambatte_gbc_color_correction", &cc, None),
+            chosen_index(
+                "gambatte",
+                "gb",
+                "gambatte_gbc_color_correction",
+                &cc,
+                None,
+                false
+            ),
             2
         );
         assert_eq!(
@@ -3937,18 +4077,33 @@ mod option_tests {
                 "gbc",
                 "gambatte_gbc_color_correction",
                 &cc,
-                None
+                None,
+                false
             ),
             0
         );
         let dark = ["0", "5", "10", "15", "20"].map(String::from);
         assert_eq!(
-            chosen_index("gambatte", "gb", "gambatte_dark_filter_level", &dark, None),
-            4
+            chosen_index(
+                "gambatte",
+                "gb",
+                "gambatte_dark_filter_level",
+                &dark,
+                None,
+                false
+            ),
+            0
         );
         assert_eq!(
-            chosen_index("gambatte", "gbc", "gambatte_dark_filter_level", &dark, None),
-            1
+            chosen_index(
+                "gambatte",
+                "gbc",
+                "gambatte_dark_filter_level",
+                &dark,
+                None,
+                false
+            ),
+            0
         );
     }
 

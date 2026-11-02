@@ -139,6 +139,7 @@ pub(super) enum ShaderMode {
     GbcColor,
     Lcd3x,
     Dot,
+    LcdAccurate,
 }
 
 impl ShaderMode {
@@ -148,17 +149,19 @@ impl ShaderMode {
             ShaderMode::GbaColor => ShaderMode::GbcColor,
             ShaderMode::GbcColor => ShaderMode::Lcd3x,
             ShaderMode::Lcd3x => ShaderMode::Dot,
-            ShaderMode::Dot => ShaderMode::Off,
+            ShaderMode::Dot => ShaderMode::LcdAccurate,
+            ShaderMode::LcdAccurate => ShaderMode::Off,
         }
     }
 
     pub(super) fn prev(self) -> Self {
         match self {
-            ShaderMode::Off => ShaderMode::Dot,
+            ShaderMode::Off => ShaderMode::LcdAccurate,
             ShaderMode::GbaColor => ShaderMode::Off,
             ShaderMode::GbcColor => ShaderMode::GbaColor,
             ShaderMode::Lcd3x => ShaderMode::GbcColor,
             ShaderMode::Dot => ShaderMode::Lcd3x,
+            ShaderMode::LcdAccurate => ShaderMode::Dot,
         }
     }
 
@@ -169,6 +172,7 @@ impl ShaderMode {
             ShaderMode::GbcColor => "GBC COLOR",
             ShaderMode::Lcd3x => "LCD3X",
             ShaderMode::Dot => "DOT",
+            ShaderMode::LcdAccurate => "LCD ACCURATE",
         }
     }
 
@@ -179,6 +183,7 @@ impl ShaderMode {
             ShaderMode::GbcColor => 2,
             ShaderMode::Lcd3x => 3,
             ShaderMode::Dot => 4,
+            ShaderMode::LcdAccurate => 5,
         }
     }
 
@@ -188,6 +193,7 @@ impl ShaderMode {
             2 => ShaderMode::GbcColor,
             3 => ShaderMode::Lcd3x,
             4 => ShaderMode::Dot,
+            5 => ShaderMode::LcdAccurate,
             _ => ShaderMode::Off,
         }
     }
@@ -381,24 +387,26 @@ mod tests {
             ShaderMode::GbcColor,
             ShaderMode::Lcd3x,
             ShaderMode::Dot,
+            ShaderMode::LcdAccurate,
         ] {
             assert_eq!(ShaderMode::from_u8(mode.as_u8()), mode);
         }
-        assert_eq!(ShaderMode::from_u8(5), ShaderMode::Off);
+        assert_eq!(ShaderMode::from_u8(6), ShaderMode::Off);
     }
 
     #[test]
     fn shader_modes_step_both_ways() {
         let mut mode = ShaderMode::Off;
-        for _ in 0..5 {
+        for _ in 0..6 {
             mode = mode.next();
         }
         assert_eq!(mode, ShaderMode::Off);
-        for _ in 0..5 {
+        for _ in 0..6 {
             mode = mode.prev();
         }
         assert_eq!(mode, ShaderMode::Off);
         assert_eq!(ShaderMode::GbaColor.prev(), ShaderMode::Off);
-        assert_eq!(ShaderMode::Off.prev(), ShaderMode::Dot);
+        assert_eq!(ShaderMode::LcdAccurate.prev(), ShaderMode::Dot);
+        assert_eq!(ShaderMode::Off.prev(), ShaderMode::LcdAccurate);
     }
 }
