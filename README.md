@@ -25,7 +25,7 @@
 ## Status 
 
 > [!NOTE] 
-> **v1.2.0** is stable and targets BaseOS 1.5.x. All the same devices as baseOS should be supported.\
+> **v1.2.1** is stable and targets BaseOS 1.5.x. All the same devices as baseOS should be supported.\
 > Netplay (beta) and devices other than 35XXSP are still untested.
 
 

@@ -2,6 +2,12 @@
 
 All notable changes to MAGI are documented here.
 
+## [1.2.1] - 2026-11-02
+
+### Changes
+
+- ONE PAYLOAD (9925e3d)
+
 ## [1.2.0] - 2026-11-02
 
 ### Changes
