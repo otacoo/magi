@@ -268,11 +268,9 @@ fn default_option(core: &str, system: &str, key: &str) -> Option<&'static str> {
         }
         ("gambatte", "gambatte_gb_hwmode") => Some("Auto"),
         ("gambatte", "gambatte_rumble_level") => Some("8"),
-        ("gambatte", "gambatte_gb_colorization") => Some(if system == "gbc" {
-            "disabled"
-        } else {
-            "internal"
-        }),
+        ("gambatte", "gambatte_gb_colorization") => {
+            Some(if system == "gbc" { "disabled" } else { "auto" })
+        }
         ("gambatte", "gambatte_gb_internal_palette") => Some("GB - DMG"),
         // PS1 (PCSX-ReARMed)
         ("pcsx_rearmed", "pcsx_rearmed_show_bios_bootlogo") => Some("disabled"),
@@ -3897,7 +3895,7 @@ mod option_tests {
         );
         assert_eq!(
             default_option("gambatte", "gb", "gambatte_gb_colorization"),
-            Some("internal")
+            Some("auto")
         );
         assert_eq!(
             default_option("gambatte", "gbc", "gambatte_gb_colorization"),

@@ -817,7 +817,7 @@ fn overlay_pick(files: &OverlayLayers, idx: usize, layer: usize) -> String {
     }
     files[layer]
         .get(idx - 1)
-        .and_then(|s| Path::new(s).file_stem().and_then(|x| x.to_str()))
+        .and_then(|s| Path::new(s).file_name().and_then(|x| x.to_str()))
         .unwrap_or("NONE")
         .to_string()
 }
@@ -850,11 +850,11 @@ pub(crate) fn draw_overlay_menu(
     let (w, h) = (cv.w, cv.h);
     let s = crate::theme::ui_scale();
     let p = |v: f32| (v * s).round() as i32;
-    let ww = p(400.0).min(w - p(24.0));
+    let ww = p(320.0).min(w - p(24.0));
     let hh = p(92.0) + 5 * p(32.0) + p(24.0);
     let x0 = w / 2 - ww / 2;
     let y0 = h / 2 - hh / 2;
-    cv.fill_rect_a(x0, y0, ww as u32, hh as u32, pal().bg0, 220);
+    cv.fill_rect_a(x0, y0, ww as u32, hh as u32, pal().bg0, 195);
     crate::theme::glow_border(
         cv,
         x0,
@@ -922,6 +922,10 @@ pub(crate) fn draw_overlay_menu(
                         .and_then(|l| l.get(k - 1))
                         .map(|s| s.as_str())
                         .unwrap_or("");
+                    let name = Path::new(name)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(name);
                     fonts.elide(name, 12.0, max_w)
                 }
             },

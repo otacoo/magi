@@ -11,3 +11,6 @@ full-screen art is scaled to 720x480, while bezel side art is widened and the
 screen window keeps its original pixel size. They are a starting point for
 per-panel remakes. The GBA has no default 720 bezel because 720x480 is exactly
 3x its 240x160 screen.
+
+The `(no-grid)` variants are copies with the screen window cleared, so the
+pixel grid does not cover the game.
