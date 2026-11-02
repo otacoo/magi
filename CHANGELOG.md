@@ -6,12 +6,30 @@ All notable changes to MAGI are documented here.
 
 ### Changes
 
+- Much improved **ART** shelf mode
+   - Better tabs
+   - Better in-game menus
+   - Better animations
+   - Better boot sequences and audio
+- Improved shaders and overlays
+   - Added a new LCD ACCURATE shader to better mimic GB and GBC screens
+      - Only available for GB/GBC/NGP/NGPC
+      - When set, it will hide certain core options and set screen to SCALE INTEGER automatically
+   - Added **GAME BOY Light** overlay from [drkhrse's Miyoo Bezels](https://github.com/drkhrse/drkhrse_miyoo_bezels)
+   - Added *no grid* versions of certain overlays
+- **Headphones** will no longer pop on game start/end and will show an icon in the header while in use
+- Charge Limit actually works now and stops charge to the set percentage
+- Added a new theme colour: UNIT-02
+- Improved defaults and available options for all cores
+- Keyboard insert cursor can now be moved with L/R buttons
+- Added a **CHECK FOR UPDATES** menu to update MAGI over the Internet
+- Added mitigations and a way to repair the SD card when it becomes **READ ONLY**, see [SD card repair](assets/docs/storage.md)
+- Removed ALL option for art
+- Removed the last step from the BRIGHTNESS overlay that fully darken the screen
+- Dropped support for NEOCD and PSP
+
+### Commits
 - ONE PAYLOAD (9925e3d)
-
-## [1.2.0] - 2026-11-02
-
-### Changes
-
 - INTERLINKED (ba85d32)
 - COLOR ACCURATE (8af5425)
 - LCD (a0c18db)
@@ -30,13 +48,14 @@ All notable changes to MAGI are documented here.
 - WORDS (8e4dcda)
 - DROP PSP (20f8291)
 - TWEAKS (20f0c28)
-- PSP (d77dd12)
+- ~~PSP (d77dd12)~~
 - DROP NEOCD (de79218)
 - HEADPHONES (69cb65e)
 - SOUND ONLY (8cd9e88)
 - READ ONLY (ab5f4ea)
 - TAB TECH (18e3240)
 - STATIC TOOLING (458b8b2)
+
 
 ## [1.1.0] - 2026-10-28
 
