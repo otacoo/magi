@@ -7,4 +7,5 @@ pub mod naoko;
 pub mod net;
 pub mod settings;
 pub mod shots;
+pub mod update;
 pub mod views;

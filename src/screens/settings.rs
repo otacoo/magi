@@ -42,15 +42,23 @@ pub const THEME_ROWS: [&str; 6] = [
     "ANIM BACKGROUND",
     "GLOW FX",
 ];
-pub const SYSTEM_ROWS: [&str; 6] = [
+pub const SYSTEM_ROWS: [&str; 7] = [
     "LED",
     "SCREENSHOT",
     "SCREENSHOTS",
     "HDMI AUTO",
     "CLOCK",
+    "CHECK FOR UPDATES",
     "ABOUT",
 ];
-const SYSTEM_ROWS_NO_SHOTS: [&str; 5] = ["LED", "SCREENSHOT", "HDMI AUTO", "CLOCK", "ABOUT"];
+const SYSTEM_ROWS_NO_SHOTS: [&str; 6] = [
+    "LED",
+    "SCREENSHOT",
+    "HDMI AUTO",
+    "CLOCK",
+    "CHECK FOR UPDATES",
+    "ABOUT",
+];
 
 pub const POWER_ROWS: [&str; 6] = [
     "LID SLEEP",
@@ -447,7 +455,7 @@ impl SettingsState {
             "CHARGE LIMIT" => Some((format!("< {} >", pct_label(self.prefs.charge_limit)), true)),
             "CLOCK" => Some((clock.to_string(), false)),
             "THEME" | "SHELF" | "SYSTEM" | "NETWORK" | "ABOUT" | "POWER MANAGEMENT"
-            | "DOWNLOAD ART" | "SCREENSHOTS" => Some((">".into(), false)),
+            | "DOWNLOAD ART" | "SCREENSHOTS" | "CHECK FOR UPDATES" => Some((">".into(), false)),
             _ => None,
         }
     }

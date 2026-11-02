@@ -198,7 +198,10 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           for panel in 640 720; do
             (cd "dist/$panel" && zip -qr "../../magi-payload-$panel-$version.zip" .)
+            cp "magi-payload-$panel-$version.zip" "magi-payload-$panel.zip"
           done
+          sha256sum magi-payload-640.zip magi-payload-720.zip > SHA256SUMS
+          printf '%s\n' "$version" > version.txt
 
       - name: Extract release notes
         run: |
@@ -211,10 +214,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" magi-payload-*.zip --clobber
+            gh release upload "$GITHUB_REF_NAME" magi-payload-*.zip version.txt SHA256SUMS --clobber
           else
             gh release create "$GITHUB_REF_NAME" \
               --title "MAGI ${GITHUB_REF_NAME#v}" \
               --notes-file release-notes.md \
-              magi-payload-*.zip
+              magi-payload-*.zip version.txt SHA256SUMS
           fi

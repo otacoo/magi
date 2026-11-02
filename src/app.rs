@@ -16,7 +16,8 @@ use crate::present::Presenter;
 use crate::screens::keyboard::{self, KeyboardState};
 use crate::screens::library::LibraryState;
 use crate::screens::settings::{self, ClockEdit, SettingsState};
-use crate::screens::{boot, card, info, library, naoko, net, shots};
+use crate::screens::{boot, card, info, library, naoko, net, shots, update as update_screen};
+use crate::update;
 use crate::util;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -33,6 +34,7 @@ enum Screen {
     NetNtp,
     Shots,
     Keyboard,
+    Update,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -73,6 +75,7 @@ struct Ui {
     info_lines: Vec<(String, String)>,
     info_refresh: Instant,
     naoko: Option<naoko::Naoko>,
+    update: Option<update::Update>,
     brightness: u32,
     warmth: u32,
     bar_hud: Option<(crate::theme::BarIcon, f32, Instant)>,
@@ -129,6 +132,7 @@ impl Ui {
             info_lines: Vec::new(),
             info_refresh: Instant::now(),
             naoko: None,
+            update: None,
             brightness: util::STOCK_BRIGHTNESS,
             warmth: 0,
             bar_hud: None,
@@ -171,6 +175,7 @@ impl Ui {
     /// panel rate and wakes at 60 Hz. A static shelf wakes at 4 Hz instead.
     fn animating(&self) -> bool {
         self.screen == Screen::Boot
+            || self.screen == Screen::Update
             || self.naoko.is_some()
             || self.bar_hud.is_some()
             || self.shutdown_t0.is_some()
@@ -335,6 +340,24 @@ impl Ui {
             .min(self.settings.rows().len().saturating_sub(1));
         self.library.set_prefs(self.settings.to_prefs());
         self.library.flush();
+    }
+
+    fn open_update(&mut self) {
+        if !util::wifi_up() {
+            crate::status::show("TURN WI-FI ON");
+            return;
+        }
+        if util::card_read_only() {
+            self.card_read_only = true;
+            return;
+        }
+        if util::battery_percent().is_some_and(|p| p < 20) {
+            crate::status::show("CHARGE TO 20%");
+            return;
+        }
+        let panel = if self.cv.w >= 700 { "720" } else { "640" };
+        self.update = Some(update::Update::start(panel, env!("CARGO_PKG_VERSION")));
+        self.screen = Screen::Update;
     }
 
     fn open_info(&mut self, kind: InfoKind) {
@@ -792,6 +815,7 @@ impl Ui {
                     }
                     "SCREENSHOTS" => self.open_shots(),
                     "NETWORK" => self.open_network(),
+                    "CHECK FOR UPDATES" => self.open_update(),
                     "ABOUT" => self.open_info(InfoKind::About),
                     _ => self.leave_settings(),
                 },
@@ -810,6 +834,31 @@ impl Ui {
                 Action::Back | Action::Start | Action::Menu | Action::Confirm => {
                     // Info screens open from settings; go back there.
                     self.screen = Screen::Settings;
+                }
+                Action::Screenshot => self.pending_screenshot = true,
+                _ => {}
+            },
+            Screen::Update => match a {
+                Action::Confirm => {
+                    if let Some(u) = &self.update {
+                        match u.phase {
+                            update::Phase::Ready => {
+                                crate::util::log("update: restarting");
+                                util::spawn_detached("reboot");
+                            }
+                            phase if !phase.active() => {
+                                self.update = None;
+                                self.screen = Screen::Settings;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Action::Back | Action::Start | Action::Menu => {
+                    if self.update.as_ref().is_some_and(|u| !u.phase.active()) {
+                        self.update = None;
+                        self.screen = Screen::Settings;
+                    }
                 }
                 Action::Screenshot => self.pending_screenshot = true,
                 _ => {}
@@ -1087,6 +1136,9 @@ impl Ui {
 
     fn update(&mut self) {
         let now = Instant::now();
+        if let Some(update) = &mut self.update {
+            update.poll();
+        }
         if self.naoko.as_ref().is_some_and(|e| e.finished()) {
             self.naoko = None;
             #[cfg(target_os = "linux")]
@@ -1236,6 +1288,16 @@ impl Ui {
                 0,
                 self.started.elapsed().as_secs_f32(),
             ),
+            Screen::Update => {
+                if let Some(update) = &self.update {
+                    update_screen::draw(
+                        &mut self.cv,
+                        &mut self.fonts,
+                        update,
+                        self.started.elapsed().as_secs_f32(),
+                    );
+                }
+            }
             Screen::Shots => shots::draw(
                 &mut self.cv,
                 &mut self.fonts,

@@ -241,6 +241,33 @@ pub fn run() -> Result<()> {
         bail!("keyboard action row shows no cursor");
     }
 
+    // OTA update screen, mid-download.
+    crate::screens::update::draw_state(
+        &mut cv,
+        &mut fonts,
+        crate::update::Phase::Downloading,
+        "1.2.0",
+        "4.2 / 9.8 MB",
+        0.43,
+        0.8,
+    );
+    let s = stats(&cv);
+    write_ppm(&out.join("update.ppm"), &cv)?;
+    println!(
+        "update:  warm={} signal={} nonbg={} ({:.1}%)",
+        s.warm,
+        s.signal,
+        s.nonbg,
+        pct(&cv, &s)
+    );
+    if s.warm < 150 || s.nonbg < 2000 {
+        bail!(
+            "update screen looks wrong (warm {}, nonbg {})",
+            s.warm,
+            s.nonbg
+        );
+    }
+
     // The Y menu, CORE tab: per-system art type.
     library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
     library::draw_game_menu(&mut cv, &mut fonts, "SUPER MARIO 64", 1, 0, false, 4, 0.4);

@@ -42,6 +42,7 @@ mod selftest;
 mod status;
 mod systems;
 mod theme;
+mod update;
 mod util;
 
 use anyhow::Result;
