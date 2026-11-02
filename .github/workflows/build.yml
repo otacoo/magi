@@ -197,8 +197,7 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           for panel in 640 720; do
-            (cd "dist/$panel" && zip -qr "../../magi-payload-$panel-$version.zip" .)
-            cp "magi-payload-$panel-$version.zip" "magi-payload-$panel.zip"
+            (cd "dist/$panel" && zip -qr "../../magi-payload-$panel.zip" .)
           done
           sha256sum magi-payload-640.zip magi-payload-720.zip > SHA256SUMS
           printf '%s\n' "$version" > version.txt

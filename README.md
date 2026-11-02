@@ -44,8 +44,8 @@ MAGI does not ship ROMs, BIOS files, game data or any N64 ports.
 
 | Screen  | Payload                                 |
 |---------|-----------------------------------------|
-| 640x480 | `magi-payload-640-<version>.zip`        |
-| 720x480 | `magi-payload-720-<version>.zip`        |
+| 640x480 | `magi-payload-640.zip`        |
+| 720x480 | `magi-payload-720.zip`        |
 
 2. Extract it and copy **the contents** to the root of the card. Do not copy the enclosing folder.
 3. Put *unzipped* games in their matching `Games/<CONSOLE>/` folder.
