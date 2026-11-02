@@ -447,6 +447,8 @@ struct Ctx {
     rom: String,
     netplay: Option<netplay::Session>,
     netplay_linked: bool,
+    /// The LCD ACCURATE shader is selected.
+    lcd_accurate: bool,
     /// GB is drawn by the LCD-accurate palette, so the core must stay greyscale.
     reflective: bool,
     /// The user's GB colourisation, restored when LCD ACCURATE is switched off.
@@ -663,11 +665,13 @@ extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
                         .iter()
                         .map(|v| CString::new(v.as_str()).unwrap_or_default())
                         .collect();
-                    let forced_grey = ctx.reflective
+                    let hidden_palette = ctx.lcd_accurate
+                        && ctx.opt_key == "gambatte"
                         && (key == "gambatte_gb_colorization"
-                            || key == "gambatte_dark_filter_level");
+                            || key == "gambatte_gb_internal_palette"
+                            || (ctx.system == "gb" && key == "gambatte_dark_filter_level"));
                     let visible = option_kept(&desc)
-                        && !forced_grey
+                        && !hidden_palette
                         && !(ctx.system == "genesis" && genesis_option_hidden(&desc))
                         && !(ctx.opt_key == "mgba" && mgba_option_hidden(&desc));
                     if key.to_ascii_lowercase().contains("bios") {
@@ -1003,10 +1007,14 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     // Read the shader before the core registers its options, so the
     // LCD-accurate GB choice can force the grey palette from the first frame.
     let mut disp = load_display_prefs(system_id);
+    if !disp.shader.supported(system_id) {
+        disp.shader = ShaderMode::Off;
+    }
     if disp.shader == ShaderMode::LcdAccurate {
         disp.scale = ScaleMode::Integer;
     }
-    let reflective = system_id == "gb" && disp.shader == ShaderMode::LcdAccurate;
+    let lcd_accurate = disp.shader == ShaderMode::LcdAccurate;
+    let reflective = system_id == "gb" && lcd_accurate;
     #[cfg(target_os = "linux")]
     util::hdmi_init();
     #[cfg(target_os = "linux")]
@@ -1163,6 +1171,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         rom: rom.to_string(),
         netplay: None,
         netplay_linked: false,
+        lcd_accurate,
         reflective,
         gb_color_backup: None,
         #[cfg(target_os = "linux")]
@@ -1994,8 +2003,10 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
             if disp.shader == ShaderMode::LcdAccurate {
                 disp.scale = ScaleMode::Integer;
             }
-            let reflective = system_id == "gb" && disp.shader == ShaderMode::LcdAccurate;
-            set_lcd_accurate_gb(reflective);
+            let lcd_accurate = disp.shader == ShaderMode::LcdAccurate;
+            let reflective = system_id == "gb" && lcd_accurate;
+            ctx().lcd_accurate = lcd_accurate;
+            set_lcd_accurate(lcd_accurate);
             ctx().reflective = reflective;
             save_display_prefs(system_id, &disp);
             overlay_art = load_composite(&overlay_names, cw, ch);
@@ -3409,21 +3420,25 @@ fn set_option_visible(ctx: &mut Ctx, key: &str, visible: bool) {
 
 /// The LCD-accurate GB palette needs the core's unfiltered grey. The user's
 /// colourisation comes back when another shader is picked.
-fn set_lcd_accurate_gb(on: bool) {
+fn set_lcd_accurate(on: bool) {
     let ctx = ctx();
-    if ctx.opt_key != "gambatte" || ctx.system != "gb" {
+    if ctx.opt_key != "gambatte" {
         return;
     }
-    if on {
-        if ctx.gb_color_backup.is_none() {
-            ctx.gb_color_backup = core_option_value(ctx, "gambatte_gb_colorization");
+    if ctx.system == "gb" {
+        if on {
+            if ctx.gb_color_backup.is_none() {
+                ctx.gb_color_backup = core_option_value(ctx, "gambatte_gb_colorization");
+            }
+            set_core_option(ctx, "gambatte_gb_colorization", "disabled");
+        } else if let Some(value) = ctx.gb_color_backup.take() {
+            set_core_option(ctx, "gambatte_gb_colorization", &value);
         }
-        set_core_option(ctx, "gambatte_gb_colorization", "disabled");
-    } else if let Some(value) = ctx.gb_color_backup.take() {
-        set_core_option(ctx, "gambatte_gb_colorization", &value);
+        set_option_visible(ctx, "gambatte_dark_filter_level", !on);
     }
-    set_option_visible(ctx, "gambatte_gb_colorization", !on);
-    set_option_visible(ctx, "gambatte_dark_filter_level", !on);
+    let hide = on && (ctx.system == "gb" || ctx.system == "gbc");
+    set_option_visible(ctx, "gambatte_gb_colorization", !hide);
+    set_option_visible(ctx, "gambatte_gb_internal_palette", !hide);
 }
 
 /// Point gambatte's netlink client at the local proxy.

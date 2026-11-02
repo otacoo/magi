@@ -162,18 +162,18 @@ pub static UNIT02: Theme = Theme {
         bg1: Color::rgb(14, 7, 7),
         bg2: Color::rgb(22, 12, 10),
         bg3: Color::rgb(34, 18, 14),
-        title: Color::rgb(255, 92, 48),
-        text: Color::rgb(255, 156, 112),
-        text_dim: Color::rgb(214, 112, 78),
-        text_faint: Color::rgb(148, 76, 50),
-        accent: Color::rgb(255, 92, 48),
-        border: Color::rgb(148, 76, 50),
+        title: Color::rgb(255, 60, 40),
+        text: Color::rgb(255, 148, 108),
+        text_dim: Color::rgb(222, 96, 68),
+        text_faint: Color::rgb(156, 64, 44),
+        accent: Color::rgb(255, 60, 40),
+        border: Color::rgb(170, 60, 44),
         glow: Color::rgb(108, 255, 77),
         alert: Color::rgb(255, 42, 26),
         clock: Color::rgb(108, 255, 77),
         battery: Color::rgb(108, 255, 77),
-        battery_shell: Color::rgb(148, 76, 50),
-        scrollbar: Color::rgb(255, 156, 112),
+        battery_shell: Color::rgb(170, 60, 44),
+        scrollbar: Color::rgb(255, 148, 108),
         scrollbar_track: Color::rgb(22, 12, 10),
         signal: Color::rgb(108, 255, 77),
         link: Color::rgb(90, 150, 255),
@@ -556,7 +556,7 @@ fn grid_pattern(cv: &mut Canvas, x: i32, y: i32, w: u32, h: u32, cell: i32, tint
             let hsh = hash2(px, py);
             let p = pulse01(t, 28.0 + (hsh % 6) as f32 * 6.0, (hsh % 89) as f32 / 89.0);
             if p > 0.93 {
-                cv.fill_rect(px - 1, py - 1, 3, 3, mix(tint, pal().alert, 0.5));
+                cv.fill_rect(px - 1, py - 1, 3, 3, mix(tint, pal().glow, 0.5));
             }
             px += cell;
         }

@@ -1082,8 +1082,12 @@ impl Gpu {
         let gain = [1.0 + 0.12 * f, 1.0, 1.0 - 0.40 * f];
         // The DMG panel outside the picture, a touch darker than the light
         // pixel composite so it sits on the same shade as the game.
-        let bg = if mode == 5 && self.sys == 1 {
-            [0.485 * gain[0], 0.502 * gain[1], 0.031 * gain[2]]
+        let bg = if mode == 5 {
+            match self.sys {
+                1 => [0.485 * gain[0], 0.502 * gain[1], 0.031 * gain[2]],
+                2 => [0.667 * gain[0], 0.710 * gain[1], 0.631 * gain[2]],
+                _ => [0.0, 0.0, 0.0],
+            }
         } else {
             [0.0, 0.0, 0.0]
         };

@@ -165,6 +165,26 @@ impl ShaderMode {
         }
     }
 
+    pub(super) fn supported(self, system: &str) -> bool {
+        self != ShaderMode::LcdAccurate || matches!(system, "gb" | "gbc" | "ngp" | "ngpc")
+    }
+
+    pub(super) fn next_for(self, system: &str) -> Self {
+        let mut mode = self.next();
+        while !mode.supported(system) {
+            mode = mode.next();
+        }
+        mode
+    }
+
+    pub(super) fn prev_for(self, system: &str) -> Self {
+        let mut mode = self.prev();
+        while !mode.supported(system) {
+            mode = mode.prev();
+        }
+        mode
+    }
+
     pub(super) fn label(self) -> &'static str {
         match self {
             ShaderMode::Off => "OFF",
@@ -408,5 +428,17 @@ mod tests {
         assert_eq!(ShaderMode::GbaColor.prev(), ShaderMode::Off);
         assert_eq!(ShaderMode::LcdAccurate.prev(), ShaderMode::Dot);
         assert_eq!(ShaderMode::Off.prev(), ShaderMode::LcdAccurate);
+    }
+
+    #[test]
+    fn lcd_accurate_is_only_for_handhelds() {
+        for system in ["gb", "gbc", "ngp", "ngpc"] {
+            assert!(ShaderMode::LcdAccurate.supported(system), "{system}");
+        }
+        for system in ["gba", "nes", "snes", "genesis", "psx"] {
+            assert!(!ShaderMode::LcdAccurate.supported(system), "{system}");
+        }
+        assert_eq!(ShaderMode::Dot.next_for("gba"), ShaderMode::Off);
+        assert_eq!(ShaderMode::Off.prev_for("gba"), ShaderMode::Dot);
     }
 }
