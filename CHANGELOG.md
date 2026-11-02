@@ -2,6 +2,36 @@
 
 All notable changes to MAGI are documented here.
 
+## [1.2.0] - 2026-11-02
+
+### Changes
+
+- INTERLINKED (ba85d32)
+- COLOR ACCURATE (8af5425)
+- LCD (a0c18db)
+- AKAGI (8006008)
+- KEYS (3df680f)
+- CHARGE LIMIT (a276068)
+- PS1 DEFAULTS (d4d189e)
+- NAOKO (f024d0d)
+- CORE ROWS (2adf45e)
+- UNIT-02 (ef0c58c)
+- GAME BOY (ef95346)
+- BOOT AUDIO (63fef99)
+- ART SIZE (064ec1b)
+- SHADERS (2d5d24a)
+- NAMAE (daf81be)
+- WORDS (8e4dcda)
+- DROP PSP (20f8291)
+- TWEAKS (20f0c28)
+- PSP (d77dd12)
+- DROP NEOCD (de79218)
+- HEADPHONES (69cb65e)
+- SOUND ONLY (8cd9e88)
+- READ ONLY (ab5f4ea)
+- TAB TECH (18e3240)
+- STATIC TOOLING (458b8b2)
+
 ## [1.1.0] - 2026-10-28
 
 ### Changes
