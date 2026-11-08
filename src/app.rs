@@ -42,12 +42,12 @@ enum InfoKind {
     About,
 }
 
-/// The Y-button game actions menu (rename/delete) over the shelf.
+/// The Y-button game menu (INFO / GAME / CORE / CLOSE) over the shelf.
 #[derive(Clone)]
 struct GameMenuUi {
     title: String,
     path: String,
-    /// 0 = GAME, 1 = CORE.
+    /// 0 = INFO, 1 = GAME, 2 = CORE, 3 = CLOSE.
     tab: u8,
     sel: usize,
     confirm: bool,
@@ -223,7 +223,7 @@ impl Ui {
         self.screen = Screen::Shots;
     }
 
-    /// The Y-button game actions menu: RENAME / DELETE (with confirm).
+    /// The Y-button game menu: INFO / GAME / CORE / CLOSE.
     fn game_menu_action(&mut self, a: Action) {
         let Some(mut m) = self.game_menu.take() else {
             return;
@@ -240,42 +240,56 @@ impl Ui {
                 Action::Back | Action::Y | Action::Menu => m.confirm = false,
                 _ => {}
             }
-        } else {
-            match a {
-                Action::L1 => {
-                    m.tab = 0;
-                    m.sel = 0;
-                }
-                Action::R1 => {
-                    m.tab = 1;
-                    m.sel = 0;
-                }
-                Action::Left | Action::Right if m.tab == 1 => {
-                    self.library
-                        .cycle_system_art(if a == Action::Left { -1 } else { 1 });
-                }
-                Action::Up | Action::Down if m.tab == 0 => {
-                    m.sel = (m.sel + 1) % 2;
-                }
-                Action::Confirm if m.tab == 0 && m.sel == 0 => {
-                    let mut kb =
-                        KeyboardState::new("RENAME GAME", keyboard::Target::Rename(m.path.clone()));
-                    kb.set_text(
-                        std::path::Path::new(&m.path)
-                            .file_stem()
-                            .map(|s| s.to_string_lossy().into_owned())
-                            .unwrap_or_default(),
-                    );
-                    self.kb = Some(kb);
-                    self.kb_origin = Screen::Library;
-                    self.screen = Screen::Keyboard;
-                    return;
-                }
-                Action::Confirm if m.tab == 0 => m.confirm = true,
-                Action::Confirm if m.tab == 1 => self.library.cycle_system_art(1),
-                Action::Back | Action::Y | Action::Menu => return,
-                _ => {}
+            self.game_menu = Some(m);
+            return;
+        }
+        match a {
+            Action::L1 => {
+                m.tab = (m.tab + 3) % 4;
+                m.sel = 0;
             }
+            Action::R1 => {
+                m.tab = (m.tab + 1) % 4;
+                m.sel = 0;
+            }
+            Action::Up | Action::Down if m.tab == 1 => {
+                m.sel = if a == Action::Up {
+                    (m.sel + 2) % 3
+                } else {
+                    (m.sel + 1) % 3
+                };
+            }
+            Action::Left | Action::Right if m.tab == 2 => {
+                self.library
+                    .cycle_game_art(&m.path, if a == Action::Left { -1 } else { 1 });
+            }
+            Action::Confirm if m.tab == 1 && m.sel == 0 => {
+                let on = self.library.toggle_play_tracking(&m.path);
+                crate::status::show(if on {
+                    "PLAY TIME TRACKING ON"
+                } else {
+                    "PLAY TIME TRACKING OFF"
+                });
+            }
+            Action::Confirm if m.tab == 1 && m.sel == 1 => {
+                let mut kb =
+                    KeyboardState::new("RENAME GAME", keyboard::Target::Rename(m.path.clone()));
+                kb.set_text(
+                    std::path::Path::new(&m.path)
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                );
+                self.kb = Some(kb);
+                self.kb_origin = Screen::Library;
+                self.screen = Screen::Keyboard;
+                return;
+            }
+            Action::Confirm if m.tab == 1 && m.sel == 2 => m.confirm = true,
+            Action::Confirm if m.tab == 2 => self.library.cycle_game_art(&m.path, 1),
+            Action::Confirm if m.tab == 3 => return,
+            Action::Back | Action::Y | Action::Menu => return,
+            _ => {}
         }
         self.game_menu = Some(m);
     }
@@ -1091,6 +1105,7 @@ impl Ui {
     /// Hand the panel to the run host (BALTHASAR) and wait for it to exit.
     fn launch(&mut self, l: &crate::run::Launch) {
         util::log(&format!("launch {} [{}]: {}", l.system, l.core, l.rom));
+        let started = Instant::now();
         let status = util::spawn_self().and_then(|mut c| {
             if l.system == "n64" {
                 c.args(["n64", "--rom", &l.rom]);
@@ -1101,6 +1116,7 @@ impl Ui {
             }
             c.status()
         });
+        let session = started.elapsed().as_secs();
         // The game host disables the fb layer during scanout and may leave
         // its overlay layer behind; a crash must not keep either.
         #[cfg(target_os = "linux")]
@@ -1108,7 +1124,7 @@ impl Ui {
             crate::disp2::clear_stale_layer();
             crate::disp2::fb_restore();
         }
-        match status {
+        match &status {
             Ok(s) if s.success() => util::log("game exited"),
             Ok(s) => {
                 util::log(&format!("game exited: {s}"));
@@ -1118,6 +1134,9 @@ impl Ui {
                 util::log(&format!("launch failed: {e}"));
                 crate::status::show("LAUNCH FAILED");
             }
+        }
+        if status.is_ok() {
+            self.library.add_play_time(&l.rom, session);
         }
         // Games and ports may have changed volume/display values; pick them
         // up before flushing, or the stale shelf copy would overwrite them.
@@ -1245,19 +1264,25 @@ impl Ui {
                 let t = self.started.elapsed().as_secs_f32();
                 library::draw(&mut self.cv, &mut self.fonts, &mut self.library, t);
                 if let Some(m) = &self.game_menu {
-                    let art_type = self
-                        .library
-                        .current_id()
-                        .map(|id| self.library.art_type_for(&id))
-                        .unwrap_or(0);
+                    let sys = self.library.game_system(&m.path);
+                    let stat = self.library.play_stat(&m.path);
+                    let info = library::GameMenuInfo {
+                        title: &m.title,
+                        system: sys.map(|s| s.name.as_str()).unwrap_or("UNKNOWN"),
+                        core: sys.and_then(|s| s.core.as_deref()).unwrap_or("NONE"),
+                        path: &m.path,
+                        play_secs: stat.secs,
+                        tracking: stat.track,
+                        favorite: self.library.favorites.contains(&m.path),
+                        art_type: sys.map(|s| self.library.art_type_for(&s.id)).unwrap_or(0),
+                    };
                     library::draw_game_menu(
                         &mut self.cv,
                         &mut self.fonts,
-                        &m.title,
+                        &info,
                         m.tab,
                         m.sel,
                         m.confirm,
-                        art_type,
                         t,
                     );
                 }

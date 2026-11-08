@@ -18,7 +18,7 @@ use crate::games::{self, GameEntry};
 use crate::screens::settings::{Prefs, FF_STEPS_MAX, FF_STEPS_MIN, TEXT_SCALES};
 use crate::screens::views;
 use crate::systems::{Catalogue, SystemDef};
-use crate::theme::pal;
+use crate::theme::{pal, Color};
 use crate::util;
 
 const ROW_H: i32 = 26;
@@ -26,6 +26,15 @@ const SAVE_DEBOUNCE: Duration = Duration::from_secs(2);
 
 /// The virtual system gathering favorites from every folder.
 const FAV_ID: &str = "favorites";
+
+/// Per-game play-time tracking: the opt-in flag and the accumulated seconds.
+#[derive(Clone, Copy, Default, Serialize, Deserialize)]
+pub struct PlayStat {
+    #[serde(default)]
+    pub track: bool,
+    #[serde(default)]
+    pub secs: u64,
+}
 
 #[derive(Default, Serialize, Deserialize)]
 struct StateFile {
@@ -85,6 +94,8 @@ struct StateFile {
     rumble: Option<bool>,
     #[serde(default)]
     hdmi_auto: Option<bool>,
+    #[serde(default)]
+    play: HashMap<String, PlayStat>,
 }
 
 impl StateFile {
@@ -235,6 +246,8 @@ pub struct LibraryState {
     cover: Option<(String, u8, Option<Rc<crate::image::Image>>)>,
     /// Per-system art type overrides, by system id.
     art_types: HashMap<String, u8>,
+    /// Per-game play-time tracking, by ROM path.
+    play: HashMap<String, PlayStat>,
     pub prefs: Prefs,
     state_dirty: bool,
     last_save: Instant,
@@ -270,6 +283,11 @@ impl LibraryState {
                 .art_types
                 .into_iter()
                 .filter(|(_, t)| (*t as usize) < art::LABELS.len())
+                .collect(),
+            play: state
+                .play
+                .into_iter()
+                .map(|(p, v)| (games::card_path(&p), v))
                 .collect(),
             fav_games: Vec::new(),
             fav_system: SystemDef {
@@ -532,6 +550,7 @@ impl LibraryState {
             led_on: Some(self.prefs.led_on),
             rumble: Some(self.prefs.rumble),
             hdmi_auto: Some(self.prefs.hdmi_auto),
+            play: self.play.clone(),
         };
         let path = self.cwd.join("Config/magi.json");
         let _ = std::fs::create_dir_all(self.cwd.join("Config"));
@@ -670,7 +689,7 @@ impl LibraryState {
     }
 
     /// The system a game path belongs to, by its `Games/<folder>`.
-    fn game_system(&self, path: &str) -> Option<&SystemDef> {
+    pub fn game_system(&self, path: &str) -> Option<&SystemDef> {
         system_for_path(&self.catalogue.systems, path)
     }
 
@@ -743,6 +762,10 @@ impl LibraryState {
         if self.favorites.remove(path) {
             self.favorites.insert(target.clone());
         }
+        if let Some(stat) = self.play.remove(path) {
+            self.play.insert(target.clone(), stat);
+            self.state_dirty = true;
+        }
         self.rescan_system(&sys.id);
         if let Some(pos) = self.current_games().iter().position(|g| g.path == target) {
             self.set_sel_game(pos);
@@ -789,6 +812,10 @@ impl LibraryState {
         if self.favorites.remove(path) {
             self.favorites.insert(new_rom.clone());
         }
+        if let Some(stat) = self.play.remove(path) {
+            self.play.insert(new_rom.clone(), stat);
+            self.state_dirty = true;
+        }
         self.rescan_system(sys_id);
         if let Some(pos) = self.current_games().iter().position(|g| g.path == new_rom) {
             self.set_sel_game(pos);
@@ -816,6 +843,8 @@ impl LibraryState {
         })?;
         util::log(&format!("deleted {path}"));
         self.favorites.remove(path);
+        self.play.remove(path);
+        self.state_dirty = true;
         self.rescan_system(&sys_id);
         let n = self.current_games().len();
         if n > 0 {
@@ -963,9 +992,9 @@ impl LibraryState {
             .unwrap_or(self.prefs.art_type)
     }
 
-    /// Y -> CORE -> CORE ART: cycle the current system's type.
-    pub fn cycle_system_art(&mut self, delta: i32) {
-        let Some(id) = self.current_id() else {
+    /// Y -> CORE -> CORE ART: cycle the selected game's system type.
+    pub fn cycle_game_art(&mut self, path: &str, delta: i32) {
+        let Some(id) = self.game_system(path).map(|s| s.id.clone()) else {
             return;
         };
         let next =
@@ -973,6 +1002,33 @@ impl LibraryState {
         self.art_types.insert(id, next);
         self.state_dirty = true;
         self.cover = None;
+    }
+
+    /// The play-time entry for a game, if it has one.
+    pub fn play_stat(&self, path: &str) -> PlayStat {
+        self.play.get(path).copied().unwrap_or_default()
+    }
+
+    /// Y -> GAME -> TRACK PLAY TIME: flip the opt-in flag, keeping the total.
+    pub fn toggle_play_tracking(&mut self, path: &str) -> bool {
+        let entry = self.play.entry(path.to_string()).or_default();
+        entry.track = !entry.track;
+        let on = entry.track;
+        self.state_dirty = true;
+        on
+    }
+
+    /// Add a finished session to a game that has tracking enabled.
+    pub fn add_play_time(&mut self, path: &str, secs: u64) {
+        let Some(entry) = self.play.get_mut(path) else {
+            return;
+        };
+        if !entry.track || secs == 0 {
+            return;
+        }
+        entry.secs = entry.secs.saturating_add(secs);
+        self.state_dirty = true;
+        util::log(&format!("play time: {path} +{secs}s = {}s", entry.secs));
     }
 
     /// Fetch the current system's missing art. A running job is left alone.
@@ -1345,130 +1401,473 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
     }
 }
 
-/// The game actions overlay (Y on the shelf): GAME and CORE tabs.
+/// Everything the shelf game menu shows about the selected game.
+pub struct GameMenuInfo<'a> {
+    pub title: &'a str,
+    pub system: &'a str,
+    pub core: &'a str,
+    pub path: &'a str,
+    pub play_secs: u64,
+    pub tracking: bool,
+    pub favorite: bool,
+    pub art_type: u8,
+}
+
+/// Hours:minutes:seconds, with hours free to grow past 99.
+fn play_time_label(secs: u64) -> String {
+    format!("{}:{:02}:{:02}", secs / 3600, (secs / 60) % 60, secs % 60)
+}
+
+fn menu_right_text(
+    cv: &mut Canvas,
+    fonts: &mut Fonts,
+    right: i32,
+    y: i32,
+    text: &str,
+    size: f32,
+    color: Color,
+) {
+    let w = fonts.text_width(text, size);
+    fonts.draw(cv, right - w, y, text, size, color);
+}
+
+fn menu_option_row(
+    cv: &mut Canvas,
+    fonts: &mut Fonts,
+    x: i32,
+    y: i32,
+    w: i32,
+    label: &str,
+    value: Option<(&str, Color)>,
+    selected: bool,
+    alert: bool,
+) {
+    let s = crate::theme::ui_scale();
+    let p = |v: f32| (v * s).round() as i32;
+    if selected {
+        let h = p(24.0).max(18);
+        cv.fill_rect_a(
+            x - p(8.0),
+            y - p(17.0),
+            (w + p(16.0)).max(p(40.0)) as u32,
+            h as u32,
+            pal().bg3,
+            220,
+        );
+        cv.fill_rect(
+            x - p(8.0),
+            y - p(17.0),
+            p(3.0).max(1) as u32,
+            h as u32,
+            if alert { pal().alert } else { pal().accent },
+        );
+    }
+    let label_color = if selected {
+        if alert {
+            pal().alert
+        } else {
+            pal().accent
+        }
+    } else {
+        pal().text_dim
+    };
+    fonts.draw(cv, x, y, label, 11.5, label_color);
+    if let Some((value, color)) = value {
+        let vw = fonts.text_width(value, 11.5);
+        fonts.draw(cv, x + w - vw, y, value, 11.5, color);
+    }
+}
+
+fn menu_kv_rows(
+    cv: &mut Canvas,
+    fonts: &mut Fonts,
+    x: i32,
+    y: i32,
+    w: i32,
+    rows: &[(&str, String)],
+) {
+    let s = crate::theme::ui_scale();
+    let p = |v: f32| (v * s).round() as i32;
+    let row_h = p(26.0);
+    for (i, (key, value)) in rows.iter().enumerate() {
+        let by = y + i as i32 * row_h;
+        fonts.draw(cv, x, by, key, 10.5, pal().text_faint);
+        let value = fonts.elide(value, 11.5, w - p(90.0));
+        let vw = fonts.text_width(&value, 11.5);
+        fonts.draw(cv, x + w - vw, by, &value, 11.5, pal().text);
+    }
+}
+
+fn menu_cta(
+    cv: &mut Canvas,
+    fonts: &mut Fonts,
+    x: i32,
+    y: i32,
+    w: u32,
+    text: &str,
+    t: f32,
+    alert: bool,
+) {
+    let s = crate::theme::ui_scale();
+    let p = |v: f32| (v * s).round() as i32;
+    let h = p(30.0).max(22) as u32;
+    cv.fill_rect(x, y, w, h, pal().bg3);
+    let accent = if alert { pal().alert } else { pal().accent };
+    crate::theme::glow_border(cv, x, y, w, h, accent, pal().glow, t, 0.7);
+    fonts.draw_center(
+        cv,
+        x + w as i32 / 2,
+        y + h as i32 / 2 + p(5.0),
+        text,
+        11.0,
+        accent,
+    );
+}
+
+/// The game menu overlay (Y on the shelf): INFO, GAME, CORE and CLOSE tabs.
 pub fn draw_game_menu(
     cv: &mut Canvas,
     fonts: &mut Fonts,
-    title: &str,
+    info: &GameMenuInfo,
     tab: u8,
     sel: usize,
     confirm: bool,
-    art_type: u8,
     t: f32,
 ) {
     let (w, h) = (cv.w, cv.h);
     let s = crate::theme::ui_scale();
     let p = |v: f32| (v * s).round() as i32;
-    let ww = p(400.0).min(w - p(24.0));
-    let hh = p(216.0);
-    let x0 = w / 2 - ww / 2;
-    let y0 = h / 2 - hh / 2;
-    cv.fill_rect_a(x0, y0, ww as u32, hh as u32, pal().bg0, 236);
+    cv.fill_rect_a(0, 0, w as u32, h as u32, pal().bg0, 250);
+
+    let margin = p(8.0);
+    let panel_w = (w - 2 * margin) as u32;
+    let panel_h = (h - 2 * margin) as u32;
     crate::theme::glow_border(
         cv,
-        x0,
-        y0,
-        ww as u32,
-        hh as u32,
+        margin,
+        margin,
+        panel_w,
+        panel_h,
         pal().border,
         pal().glow,
         t,
         0.0,
     );
 
-    // Two tabs, the active one underlined.
-    let tabs = ["GAME", "CORE"];
+    let left = margin + p(16.0);
+    let right = w - margin - p(16.0);
+    let title_base = margin + p(22.0);
+    fonts.draw_bold(cv, left, title_base, "MAGI // GAME", 15.0, pal().title);
+    let header_w = fonts.text_width("MAGI // GAME", 15.0);
+    let system = fonts.elide(
+        &info.system.to_uppercase(),
+        9.5,
+        right - left - header_w - p(16.0),
+    );
+    menu_right_text(cv, fonts, right, title_base, &system, 9.5, pal().text_dim);
+    let note_w = fonts.text_width("SHELF MENU", 9.0);
+    let name = elide(fonts, info.title, 10.0, right - left - note_w - p(16.0));
+    fonts.draw(
+        cv,
+        left,
+        title_base + p(18.0),
+        &name,
+        10.0,
+        pal().text_faint,
+    );
+    menu_right_text(
+        cv,
+        fonts,
+        right,
+        title_base + p(18.0),
+        "SHELF MENU",
+        9.0,
+        pal().text_faint,
+    );
+
+    let div_y = margin + p(50.0);
+    cv.hline(left, div_y, (right - left) as u32, pal().border);
+    cv.fill_rect(
+        left,
+        div_y,
+        p(42.0).max(1) as u32,
+        p(3.0).max(1) as u32,
+        pal().accent,
+    );
+
+    let body_top = div_y + p(8.0);
+    let foot_y = margin + panel_h as i32 - p(12.0);
+    let body_bottom = foot_y - p(16.0);
+    let body_h = (body_bottom - body_top).max(p(80.0)) as u32;
+
+    let tab_w = p(136.0);
+    let pane_x = left + tab_w;
+    let pane_w = (right - pane_x).max(p(140.0)) as u32;
+
+    let tabs = ["INFO", "GAME", "CORE", "CLOSE"];
+    let n = tabs.len() as i32;
+    let gap = p(4.0);
+    let pitch = ((body_h as i32 - gap * (n - 1).max(0)) / n)
+        .min(p(44.0))
+        .max(p(22.0));
+    let tab_h = (pitch - gap).max(p(18.0));
+    let active = (tab as usize).min(tabs.len() - 1);
+    let tab_y = body_top + active as i32 * pitch;
+
+    cv.fill_rect_a(pane_x, body_top, pane_w, body_h, pal().bg1, 252);
+    cv.hline(pane_x, body_top, pane_w, pal().border);
+    cv.hline(pane_x, body_top + body_h as i32 - 1, pane_w, pal().border);
+    cv.vline(pane_x + pane_w as i32 - 1, body_top, body_h, pal().border);
+    if tab_y > body_top {
+        cv.vline(pane_x, body_top, (tab_y - body_top) as u32, pal().border);
+    }
+    let below = tab_y + tab_h;
+    if below < body_top + body_h as i32 {
+        cv.vline(
+            pane_x,
+            below,
+            (body_top + body_h as i32 - below) as u32,
+            pal().border,
+        );
+    }
+
     for (i, label) in tabs.iter().enumerate() {
-        let x = w / 2 + if i == 0 { -p(56.0) } else { p(56.0) };
-        let active = i as u8 == tab;
-        fonts.draw_center(
+        let y = body_top + i as i32 * pitch;
+        let selected = i == active;
+        if selected {
+            cv.fill_rect_a(left, y, tab_w as u32, tab_h as u32, pal().bg1, 252);
+            cv.fill_rect(left, y, p(4.0).max(1) as u32, tab_h as u32, pal().accent);
+            cv.hline(left, y, tab_w as u32, pal().accent);
+            cv.hline(left, y + tab_h - 1, tab_w as u32, pal().accent);
+            cv.vline(left, y, tab_h as u32, pal().accent);
+        }
+        let base = y + tab_h / 2 + p(6.0);
+        let num = format!("{:02}", i + 1);
+        fonts.draw(
             cv,
-            x,
-            y0 + p(28.0),
-            label,
-            13.0,
-            if active {
+            left + p(12.0),
+            base,
+            &num,
+            8.0,
+            if selected {
                 pal().accent
             } else {
                 pal().text_faint
             },
         );
-        if active {
-            let lw = fonts.text_width(label, 13.0);
-            cv.fill_rect(x - lw / 2, y0 + p(35.0), lw as u32, 2, pal().accent);
-        }
-    }
-
-    let name = elide(fonts, title, 9.0, ww - p(40.0));
-    fonts.draw_center(cv, w / 2, y0 + p(58.0), &name, 9.0, pal().text_faint);
-
-    if confirm {
-        fonts.draw_center(
-            cv,
-            w / 2,
-            y0 + p(110.0),
-            "DELETE THIS FILE?",
-            13.0,
-            pal().alert,
-        );
-        fonts.draw_center(
-            cv,
-            w / 2,
-            y0 + p(136.0),
-            "A YES    B NO",
-            11.0,
-            pal().text_dim,
-        );
-        return;
-    }
-
-    let row_x = x0 + p(34.0);
-    let row_w = ww - p(60.0);
-    let mut row = |i: usize, label: &str, value: Option<&str>| {
-        let y = y0 + p(96.0) + i as i32 * p(30.0);
-        let selected = i == sel;
-        if selected {
-            cv.fill_rect(
-                row_x - p(8.0),
-                y - p(16.0),
-                row_w as u32,
-                p(22.0) as u32,
-                pal().bg3,
-            );
-        }
         fonts.draw(
             cv,
-            row_x,
-            y,
+            left + p(36.0),
+            base,
             label,
-            11.0,
+            12.0,
             if selected {
                 pal().accent
             } else {
                 pal().text_dim
             },
         );
-        if let Some(value) = value {
-            let vw = fonts.text_width(value, 11.0);
-            fonts.draw(cv, x0 + ww - p(30.0) - vw, y, value, 11.0, pal().text);
-        }
-    };
-    if tab == 0 {
-        row(0, "RENAME", None);
-        row(1, "DELETE", None);
-    } else {
-        let value = format!(
-            "< {} >",
-            crate::art::LABELS[(art_type as usize).min(crate::art::LABELS.len() - 1)]
-        );
-        row(0, "CORE ART", Some(&value));
     }
 
-    fonts.draw_center(
+    let content_x = pane_x + p(12.0);
+    let content_top = body_top + p(10.0);
+    let content_bottom = body_top + body_h as i32 - p(10.0);
+    let content_w = (pane_w as i32 - p(24.0)).max(p(80.0));
+    let center_x = content_x + content_w / 2;
+
+    let hint = match active {
+        0 => "L1/R1 TAB   B CLOSE",
+        1 => "U/D PICK   A SELECT   L1/R1 TAB   B CLOSE",
+        2 => "L/R CHANGE   A CHANGE   L1/R1 TAB   B CLOSE",
+        _ => "A CLOSE   B CLOSE",
+    };
+
+    match active {
+        0 => {
+            let file = std::path::Path::new(info.path)
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| info.path.to_string());
+            let play = if info.tracking || info.play_secs > 0 {
+                play_time_label(info.play_secs)
+            } else {
+                "NOT TRACKED".into()
+            };
+            let rows = [
+                ("GAME", info.title.to_uppercase()),
+                ("SYSTEM", info.system.to_uppercase()),
+                ("CORE", info.core.to_uppercase()),
+                ("FILE", file),
+                ("PLAY TIME", play),
+                (
+                    "FAVORITE",
+                    if info.favorite { "YES" } else { "NO" }.to_string(),
+                ),
+            ];
+            menu_kv_rows(
+                cv,
+                fonts,
+                content_x,
+                content_top + p(18.0),
+                content_w,
+                &rows,
+            );
+            let (track, color) = if info.tracking {
+                ("PLAY TIME TRACKING ON", pal().signal)
+            } else {
+                ("PLAY TIME TRACKING OFF", pal().text_faint)
+            };
+            let by = content_bottom - p(36.0);
+            cv.fill_rect(content_x, by, content_w as u32, p(26.0) as u32, pal().bg2);
+            cv.rect_outline(
+                content_x,
+                by,
+                content_w as u32,
+                p(26.0) as u32,
+                pal().border,
+            );
+            fonts.draw_center(cv, center_x, by + p(17.0), track, 9.5, color);
+        }
+        1 if confirm => {
+            let cy = content_top + p(64.0);
+            fonts.draw_center(cv, center_x, cy, "DELETE THIS FILE?", 14.0, pal().alert);
+            let file = fonts.elide(info.path, 10.0, content_w - p(12.0));
+            fonts.draw_center(cv, center_x, cy + p(24.0), &file, 10.0, pal().text_dim);
+            fonts.draw_center(
+                cv,
+                center_x,
+                cy + p(46.0),
+                "THIS CANNOT BE UNDONE",
+                9.0,
+                pal().text_faint,
+            );
+            menu_cta(
+                cv,
+                fonts,
+                content_x,
+                content_bottom - p(38.0),
+                content_w as u32,
+                "A YES          B NO",
+                t,
+                true,
+            );
+        }
+        1 => {
+            let sel = sel.min(2);
+            let y0 = content_top + p(22.0);
+            let pitch = p(34.0);
+            let (track, color) = if info.tracking {
+                ("ON", pal().signal)
+            } else {
+                ("OFF", pal().text_faint)
+            };
+            menu_option_row(
+                cv,
+                fonts,
+                content_x,
+                y0,
+                content_w,
+                "TRACK PLAY TIME",
+                Some((track, color)),
+                sel == 0,
+                false,
+            );
+            menu_option_row(
+                cv,
+                fonts,
+                content_x,
+                y0 + pitch,
+                content_w,
+                "RENAME",
+                Some((">", pal().text_dim)),
+                sel == 1,
+                false,
+            );
+            menu_option_row(
+                cv,
+                fonts,
+                content_x,
+                y0 + pitch * 2,
+                content_w,
+                "DELETE",
+                Some((">", pal().text_dim)),
+                sel == 2,
+                true,
+            );
+            fonts.draw(
+                cv,
+                content_x,
+                y0 + pitch * 3 - p(4.0),
+                "PLAY TIME IS STORED ON THE CARD",
+                9.0,
+                pal().text_faint,
+            );
+        }
+        2 => {
+            let value = format!(
+                "< {} >",
+                crate::art::LABELS[(info.art_type as usize).min(crate::art::LABELS.len() - 1)]
+            );
+            menu_option_row(
+                cv,
+                fonts,
+                content_x,
+                content_top + p(22.0),
+                content_w,
+                "CORE ART",
+                Some((&value, pal().text)),
+                true,
+                false,
+            );
+            fonts.draw(
+                cv,
+                content_x,
+                content_top + p(62.0),
+                "COVER STYLE FOR THIS SYSTEM",
+                9.0,
+                pal().text_faint,
+            );
+        }
+        _ => {
+            fonts.draw_center(
+                cv,
+                center_x,
+                content_top + p(54.0),
+                "CLOSE THE MENU",
+                14.0,
+                pal().text,
+            );
+            fonts.draw_center(
+                cv,
+                center_x,
+                content_top + p(78.0),
+                "RETURN TO THE SHELF",
+                10.0,
+                pal().text_faint,
+            );
+            menu_cta(
+                cv,
+                fonts,
+                content_x,
+                content_bottom - p(38.0),
+                content_w as u32,
+                "A   CLOSE",
+                t,
+                false,
+            );
+        }
+    }
+
+    if !confirm {
+        let hint = fonts.elide(hint, 9.0, right - left);
+        fonts.draw(cv, left, foot_y, &hint, 9.0, pal().text_faint);
+    }
+    menu_right_text(
         cv,
-        w / 2,
-        y0 + hh - p(20.0),
-        "L1/R1 TAB   U/D PICK   L/R CHANGE   A SELECT   B BACK",
+        fonts,
+        right,
+        foot_y,
+        &format!("{}/{}", active + 1, tabs.len()),
         9.0,
         pal().text_faint,
     );
@@ -1512,6 +1911,7 @@ fn draw_controls(cv: &mut Canvas, fonts: &mut Fonts, t: f32) {
         ("L1 / R1", "PAGE"),
         ("A", "PLAY"),
         ("X", "FAVORITE"),
+        ("Y", "GAME MENU"),
         ("MENU", "SETTINGS"),
         ("SELECT", "THIS PANEL"),
         ("SELECT+U/D", "BRIGHTNESS"),
@@ -1631,6 +2031,19 @@ mod state_tests {
         assert_eq!(p.text_scale, 1.5, "clamped to the largest step");
         assert_eq!(p.theme, (crate::theme::themes().len() - 1) as u8);
         assert_eq!(p.background, (crate::theme::bg_styles().len() - 1) as u8);
+    }
+
+    #[test]
+    fn play_time_keeps_flag_and_total() {
+        let stored: StateFile =
+            serde_json::from_str(r#"{"play":{"Games/GB/Tetris.gb":{"track":true,"secs":3725}}}"#)
+                .unwrap();
+        let stat = stored.play.get("Games/GB/Tetris.gb").copied().unwrap();
+        assert!(stat.track);
+        assert_eq!(stat.secs, 3725);
+        assert_eq!(play_time_label(stat.secs), "1:02:05");
+        assert_eq!(play_time_label(0), "0:00:00");
+        assert_eq!(play_time_label(360_000), "100:00:00");
     }
 
     fn sys(id: &str, folder: Option<&str>) -> SystemDef {

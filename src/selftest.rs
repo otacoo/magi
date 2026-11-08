@@ -268,20 +268,39 @@ pub fn run() -> Result<()> {
         );
     }
 
-    // The Y menu, CORE tab: per-system art type.
-    library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
-    library::draw_game_menu(&mut cv, &mut fonts, "SUPER MARIO 64", 1, 0, false, 4, 0.4);
-    let s = stats(&cv);
-    write_ppm(&out.join("game-menu.ppm"), &cv)?;
-    println!(
-        "game menu: warm={} signal={} nonbg={} ({:.1}%)",
-        s.warm,
-        s.signal,
-        s.nonbg,
-        pct(&cv, &s)
-    );
-    if s.warm < 100 {
-        bail!("game menu looks wrong (warm {})", s.warm);
+    // The Y menu: INFO, GAME, CORE and CLOSE tabs on the left.
+    let info = library::GameMenuInfo {
+        title: "SUPER MARIO 64",
+        system: "NINTENDO 64",
+        core: "mupen64plus_next",
+        path: "Games/N64/Super Mario 64.z64",
+        play_secs: 3725,
+        tracking: true,
+        favorite: true,
+        art_type: 1,
+    };
+    for (name, tab, sel, confirm) in [
+        ("game-menu-info", 0, 0, false),
+        ("game-menu", 1, 0, false),
+        ("game-menu-delete", 1, 2, false),
+        ("game-menu-confirm", 1, 2, true),
+        ("game-menu-core", 2, 0, false),
+        ("game-menu-close", 3, 0, false),
+    ] {
+        library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
+        library::draw_game_menu(&mut cv, &mut fonts, &info, tab, sel, confirm, 0.4);
+        let s = stats(&cv);
+        write_ppm(&out.join(format!("{name}.ppm")), &cv)?;
+        println!(
+            "{name}: warm={} signal={} nonbg={} ({:.1}%)",
+            s.warm,
+            s.signal,
+            s.nonbg,
+            pct(&cv, &s)
+        );
+        if s.warm < 100 || s.nonbg < 3000 {
+            bail!("{name} looks wrong (warm {}, nonbg {})", s.warm, s.nonbg);
+        }
     }
 
     // The pause dashboard: state preview, core options, video and disc panes.

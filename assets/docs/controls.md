@@ -13,7 +13,7 @@ reference.
 | Shelf | L1 / R1 | Page |
 | Shelf | **A** | Play |
 | Shelf | **X** | Favorite (star) |
-| Shelf | **Y** | Menu: rename, delete or art type |
+| Shelf | **Y** | Game menu: info, play time, rename, delete or art type |
 | Shelf | **MENU** | Settings |
 | Shelf | **SELECT** | Controls panel |
 | Shelf | **POWER** tap / hold | Sleep / shutdown |
@@ -35,6 +35,11 @@ reference.
 | Anywhere | **SELECT+MENU+R1** | Screenshot (disabled by default in SETTINGS → SYSTEM) |
 | Anywhere | Volume keys | Software volume |
 | Anywhere | Close the lid | Sleep; opening wakes |
+
+**Y** opens the game menu with **INFO**, **GAME**, **CORE** and **CLOSE** tabs;
+**L1/R1** switch tabs, **↑/↓** picks a row and **B** closes. **GAME → TRACK
+PLAY TIME** accumulates this game's play time; the total appears in **INFO**
+as hours:minutes:seconds.
 
 **SAVE STATE** and **LOAD STATE** act on the slot shown in the pane: **A**
 saves or loads it, **←/→** switches slots and **Y** twice deletes it. **CORE**

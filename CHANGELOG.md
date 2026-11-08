@@ -23,6 +23,8 @@ All notable changes to MAGI are documented here.
 - Improved defaults and available options for all cores
 - Keyboard insert cursor can now be moved with L/R buttons
 - Added a **CHECK FOR UPDATES** menu to update MAGI over the Internet
+- Added per-game **play time** tracking in the shelf game menu, shown as hours:minutes:seconds
+- Redesigned the shelf game menu with **INFO**, **GAME**, **CORE** and **CLOSE** tabs
 - Added mitigations and a way to repair the SD card when it becomes **READ ONLY**, see [SD card repair](assets/docs/storage.md)
 - Removed ALL option for art
 - Removed the last step from the BRIGHTNESS overlay that fully darken the screen
