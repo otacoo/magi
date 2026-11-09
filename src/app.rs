@@ -902,6 +902,7 @@ impl Ui {
                         match u.phase {
                             update::Phase::Ready => {
                                 crate::util::log("update: restarting");
+                                self.library.flush();
                                 util::spawn_detached("reboot");
                             }
                             phase if !phase.active() => {

@@ -14,3 +14,5 @@ per-panel remakes. The GBA has no default 720 bezel because 720x480 is exactly
 
 The `(no-grid)` variants are copies with the screen window cleared, so the
 pixel grid does not cover the game.
+
+The POKEMINI no-grid bezels are MAGI additions to the same set.

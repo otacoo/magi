@@ -6,7 +6,8 @@ All notable changes to MAGI are documented here.
 
 ### Changes
 
-- Added **Pokemon Mini** support with the PokeMini core, including its LCD, palette and rumble options
+- Added **Pokemon Mini** support with the PokeMini core, including its LCD, palette and rumble options, plus default bezels
+- Payload pushes keep the card's settings, saves and BIOS files
 - Added per-game **play time** tracking in the shelf game menu, shown as hours:minutes:seconds
 - Redesigned the shelf game menu with **INFO**, **GAME**, **SYSTEM** and **CLOSE** tabs
 - Shelf game menu now uses the same d-pad tab and pane navigation as the in-game menu

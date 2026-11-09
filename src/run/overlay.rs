@@ -421,6 +421,14 @@ fn default_overlays(system: &str, rom: &str, wide: bool) -> [&'static str; 2] {
                 (false, false) => ["", "NGPC/mugwomp93/ngpc-640x480.png"],
             }
         }
+        "pokemini" => [
+            "",
+            if wide {
+                "POKEMINI/poke-720x480(no-grid).png"
+            } else {
+                "POKEMINI/poke-640x480(no-grid).png"
+            },
+        ],
         _ => ["", ""],
     }
 }
@@ -590,5 +598,32 @@ mod image_overlay_tests {
                 "NGPC/mugwomp93/ngpc-720x480.png".to_string()
             ]
         );
+        assert_eq!(
+            overlay_prefs_from(&v, "pokemini", "", false),
+            [
+                String::new(),
+                "POKEMINI/poke-640x480(no-grid).png".to_string()
+            ]
+        );
+        assert_eq!(
+            overlay_prefs_from(&v, "pokemini", "", true),
+            [
+                String::new(),
+                "POKEMINI/poke-720x480(no-grid).png".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn pokemini_bezel_matches_the_six_x_screen() {
+        for (name, panel) in [
+            ("assets/overlays/POKEMINI/poke-640x480(no-grid).png", 640),
+            ("assets/overlays/POKEMINI/poke-720x480(no-grid).png", 720),
+        ] {
+            let img = crate::image::load_png(std::path::Path::new(name)).expect(name);
+            assert_eq!((img.w, img.h), (panel, 480), "{name}");
+            let clear = img.px.iter().filter(|p| (*p >> 24) == 0).count();
+            assert_eq!(clear, 576 * 384, "{name}");
+        }
     }
 }

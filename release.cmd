@@ -22,7 +22,7 @@ echo   2  Run desktop harness
 echo   3  Fetch latest CI payload              (needs gh; or unzip into payload-latest\)
 echo   4  Build device binary in docker         (needs docker)
 echo   5  Deploy binary to console over adb     (atomic swap + reboot)
-echo   6  Push whole payload over adb           (refresh card files)
+echo   6  Push system payload over adb           (keeps card data)
 echo   7  Push a game folder to Games\
 echo   8  Pull logs from console
 echo   9  Pull screenshots from console
@@ -238,15 +238,18 @@ if not defined PAYROOT (
     pause
     goto menu
 )
-echo   refreshing card files from %PAYROOT%\ (games, saves and settings are kept)
+echo   refreshing system files from %PAYROOT%\ (games, saves, settings and BIOS are kept)
 "%ADB%" wait-for-device
+REM Config, BIOS, Saves and Screenshots are user data and are never pushed:
+REM the local payload copy may hold defaults written by the desktop harness.
 "%ADB%" push "%PAYROOT%\System\magi" %SD%/System/
 if errorlevel 1 goto failed
 call :push_bootlogo
 if errorlevel 1 goto failed
-for %%d in (Config BIOS Overlays Saves Screenshots) do (
-    if exist "%PAYROOT%\%%d" "%ADB%" push "%PAYROOT%\%%d" %SD%/
-)
+if exist "%PAYROOT%\Overlays" "%ADB%" push "%PAYROOT%\Overlays" %SD%/
+if errorlevel 1 goto failed
+if exist "%PAYROOT%\Themes\_template.ini" "%ADB%" push "%PAYROOT%\Themes\_template.ini" %SD%/Themes/
+if errorlevel 1 goto failed
 "%ADB%" push "%PAYROOT%\System\frontend" %SD%/System/frontend.new
 if errorlevel 1 goto failed
 "%ADB%" shell "mv -f %SD%/System/frontend.new %SD%/System/frontend && sync"
@@ -268,7 +271,7 @@ if not exist "%GAMEDIR%" (
     pause
     goto menu
 )
-set /p "CONSOLE=console (GB GBC GBA NES SNES GENESIS PS1) [GBA]: "
+set /p "CONSOLE=console (GB GBC GBA NES SNES GENESIS PS1 NGPC PCE POKEMINI N64) [GBA]: "
 if not defined CONSOLE set "CONSOLE=GBA"
 "%ADB%" wait-for-device
 "%ADB%" push "%GAMEDIR%" %SD%/Games/%CONSOLE%/

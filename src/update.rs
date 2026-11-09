@@ -320,6 +320,8 @@ fn staged_version(stage: &Path) -> Result<(), String> {
 
 #[cfg(target_os = "linux")]
 fn install(stage: &Path, tx: &Sender<Msg>) -> Result<(), String> {
+    // System files and the shipped template only: Config, Games, Saves, BIOS,
+    // Screenshots and Logs stay exactly as the user left them.
     let mut files = Vec::new();
     for root in ["System", "Overlays"] {
         walk(&stage.join(root), &mut files);
