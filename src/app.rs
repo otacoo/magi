@@ -50,6 +50,8 @@ struct GameMenuUi {
     /// 0 = INFO, 1 = GAME, 2 = SYSTEM, 3 = CLOSE.
     tab: u8,
     sel: usize,
+    /// True while the pane has the d-pad; false while the tab column does.
+    focus: bool,
     confirm: bool,
 }
 
@@ -243,77 +245,90 @@ impl Ui {
             self.game_menu = Some(m);
             return;
         }
+
+        if m.focus {
+            match a {
+                Action::Up | Action::Down => {
+                    let rows = self.game_menu_rows(&m);
+                    m.sel = if a == Action::Up {
+                        (m.sel + rows - 1) % rows
+                    } else {
+                        (m.sel + 1) % rows
+                    };
+                }
+                Action::Left | Action::Right => {
+                    let delta = if a == Action::Left { -1 } else { 1 };
+                    match (m.tab, m.sel) {
+                        (1, 0) => self.toggle_play_tracking(&m.path),
+                        (2, 0) => self.library.cycle_game_art(&m.path, delta),
+                        (2, 1) => self.toggle_swap_ab(&m.path),
+                        _ => {}
+                    }
+                }
+                Action::Confirm => match (m.tab, m.sel) {
+                    (1, 0) => self.toggle_play_tracking(&m.path),
+                    (1, 1) => {
+                        let mut kb = KeyboardState::new(
+                            "RENAME GAME",
+                            keyboard::Target::Rename(m.path.clone()),
+                        );
+                        kb.set_text(
+                            std::path::Path::new(&m.path)
+                                .file_stem()
+                                .map(|s| s.to_string_lossy().into_owned())
+                                .unwrap_or_default(),
+                        );
+                        self.kb = Some(kb);
+                        self.kb_origin = Screen::Library;
+                        self.screen = Screen::Keyboard;
+                        return;
+                    }
+                    (1, 2) => m.confirm = true,
+                    (2, 0) => self.library.cycle_game_art(&m.path, 1),
+                    (2, 1) => self.toggle_swap_ab(&m.path),
+                    _ => {}
+                },
+                Action::Back => m.focus = false,
+                Action::X | Action::Menu => return,
+                _ => {}
+            }
+            self.game_menu = Some(m);
+            return;
+        }
+
         match a {
-            Action::L1 => {
+            Action::Up => {
                 m.tab = (m.tab + 3) % 4;
                 m.sel = 0;
             }
-            Action::R1 => {
+            Action::Down => {
                 m.tab = (m.tab + 1) % 4;
                 m.sel = 0;
             }
-            Action::Up | Action::Down if m.tab == 1 => {
-                m.sel = if a == Action::Up {
-                    (m.sel + 2) % 3
-                } else {
-                    (m.sel + 1) % 3
-                };
-            }
-            Action::Up | Action::Down if m.tab == 2 => {
-                let rows = if self.library.game_swap_ab(&m.path).is_some() {
-                    2
-                } else {
-                    1
-                };
-                m.sel = if a == Action::Up {
-                    (m.sel + rows - 1) % rows
-                } else {
-                    (m.sel + 1) % rows
-                };
-            }
-            Action::Left | Action::Right if m.tab == 2 => {
-                if m.sel == 1 {
-                    self.toggle_swap_ab(&m.path);
-                } else {
-                    self.library
-                        .cycle_game_art(&m.path, if a == Action::Left { -1 } else { 1 });
-                }
-            }
-            Action::Confirm if m.tab == 1 && m.sel == 0 => {
-                let on = self.library.toggle_play_tracking(&m.path);
-                crate::status::show(if on {
-                    "PLAY TIME TRACKING ON"
-                } else {
-                    "PLAY TIME TRACKING OFF"
-                });
-            }
-            Action::Confirm if m.tab == 1 && m.sel == 1 => {
-                let mut kb =
-                    KeyboardState::new("RENAME GAME", keyboard::Target::Rename(m.path.clone()));
-                kb.set_text(
-                    std::path::Path::new(&m.path)
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
-                );
-                self.kb = Some(kb);
-                self.kb_origin = Screen::Library;
-                self.screen = Screen::Keyboard;
-                return;
-            }
-            Action::Confirm if m.tab == 1 && m.sel == 2 => m.confirm = true,
-            Action::Confirm if m.tab == 2 => {
-                if m.sel == 1 {
-                    self.toggle_swap_ab(&m.path);
-                } else {
-                    self.library.cycle_game_art(&m.path, 1);
-                }
-            }
+            Action::Right if m.tab == 1 || m.tab == 2 => m.focus = true,
+            Action::Confirm if m.tab == 1 || m.tab == 2 => m.focus = true,
             Action::Confirm if m.tab == 3 => return,
             Action::Back | Action::X | Action::Menu => return,
             _ => {}
         }
         self.game_menu = Some(m);
+    }
+
+    fn game_menu_rows(&self, m: &GameMenuUi) -> usize {
+        match m.tab {
+            1 => 3,
+            2 if self.library.game_swap_ab(&m.path).is_some() => 2,
+            _ => 1,
+        }
+    }
+
+    fn toggle_play_tracking(&mut self, path: &str) {
+        let on = self.library.toggle_play_tracking(path);
+        crate::status::show(if on {
+            "PLAY TIME TRACKING ON"
+        } else {
+            "PLAY TIME TRACKING OFF"
+        });
     }
 
     fn toggle_swap_ab(&mut self, path: &str) {
@@ -778,6 +793,7 @@ impl Ui {
                                 path: g.path,
                                 tab: 0,
                                 sel: 0,
+                                focus: false,
                                 confirm: false,
                             });
                         }
@@ -1314,6 +1330,7 @@ impl Ui {
                         &info,
                         m.tab,
                         m.sel,
+                        m.focus,
                         m.confirm,
                         t,
                     );

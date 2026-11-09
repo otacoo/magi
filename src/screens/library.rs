@@ -1569,6 +1569,7 @@ pub fn draw_game_menu(
     info: &GameMenuInfo,
     tab: u8,
     sel: usize,
+    focus: bool,
     confirm: bool,
     t: f32,
 ) {
@@ -1713,11 +1714,18 @@ pub fn draw_game_menu(
     let content_w = (pane_w as i32 - p(24.0)).max(p(80.0));
     let center_x = content_x + content_w / 2;
 
-    let hint = match active {
-        0 => "L1/R1 TAB   B/X CLOSE",
-        1 => "U/D PICK   A SELECT   L1/R1 TAB   B/X CLOSE",
-        2 => "U/D PICK   L/R CHANGE   A CHANGE   L1/R1 TAB   B/X CLOSE",
-        _ => "A CLOSE   B/X CLOSE",
+    let hint = if focus {
+        match active {
+            1 => "U/D PICK   A SELECT   L/R CHANGE   B BACK",
+            2 => "U/D PICK   L/R CHANGE   A CHANGE   B BACK",
+            _ => "B BACK",
+        }
+    } else {
+        match active {
+            0 => "U/D TAB   B CLOSE",
+            1 | 2 => "U/D TAB   A OPEN   B CLOSE",
+            _ => "U/D TAB   A CLOSE   B CLOSE",
+        }
     };
 
     match active {
@@ -1807,7 +1815,7 @@ pub fn draw_game_menu(
                 content_w,
                 "TRACK PLAY TIME",
                 Some((track, color)),
-                sel == 0,
+                focus && sel == 0,
                 false,
             );
             menu_option_row(
@@ -1818,7 +1826,7 @@ pub fn draw_game_menu(
                 content_w,
                 "RENAME",
                 Some((">", pal().text_dim)),
-                sel == 1,
+                focus && sel == 1,
                 false,
             );
             menu_option_row(
@@ -1829,7 +1837,7 @@ pub fn draw_game_menu(
                 content_w,
                 "DELETE",
                 Some((">", pal().text_dim)),
-                sel == 2,
+                focus && sel == 2,
                 true,
             );
             fonts.draw(
@@ -1858,7 +1866,7 @@ pub fn draw_game_menu(
                 content_w,
                 "CORE ART",
                 Some((&value, pal().text)),
-                sel == 0,
+                focus && sel == 0,
                 false,
             );
             if let Some(on) = info.swap_ab {
@@ -1875,11 +1883,11 @@ pub fn draw_game_menu(
                     content_w,
                     "SWAP A/B",
                     Some((label, color)),
-                    sel == 1,
+                    focus && sel == 1,
                     false,
                 );
             }
-            let note = if sel == 1 {
+            let note = if focus && sel == 1 {
                 "SWAPS A AND B FOR THIS SYSTEM"
             } else {
                 "COVER STYLE FOR THIS SYSTEM"

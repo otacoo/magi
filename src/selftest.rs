@@ -280,17 +280,19 @@ pub fn run() -> Result<()> {
         art_type: 1,
         swap_ab: Some(true),
     };
-    for (name, tab, sel, confirm) in [
-        ("game-menu-info", 0, 0, false),
-        ("game-menu", 1, 0, false),
-        ("game-menu-delete", 1, 2, false),
-        ("game-menu-confirm", 1, 2, true),
-        ("game-menu-system", 2, 0, false),
-        ("game-menu-system-swap", 2, 1, false),
-        ("game-menu-close", 3, 0, false),
+    for (name, tab, sel, focus, confirm) in [
+        ("game-menu-info", 0, 0, false, false),
+        ("game-menu", 1, 0, false, false),
+        ("game-menu-focus", 1, 0, true, false),
+        ("game-menu-delete", 1, 2, true, false),
+        ("game-menu-confirm", 1, 2, true, true),
+        ("game-menu-system", 2, 0, false, false),
+        ("game-menu-system-focus", 2, 0, true, false),
+        ("game-menu-system-swap", 2, 1, true, false),
+        ("game-menu-close", 3, 0, false, false),
     ] {
         library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
-        library::draw_game_menu(&mut cv, &mut fonts, &info, tab, sel, confirm, 0.4);
+        library::draw_game_menu(&mut cv, &mut fonts, &info, tab, sel, focus, confirm, 0.4);
         let s = stats(&cv);
         write_ppm(&out.join(format!("{name}.ppm")), &cv)?;
         println!(

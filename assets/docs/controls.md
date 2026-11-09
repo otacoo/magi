@@ -36,11 +36,13 @@ reference.
 | Anywhere | Volume keys | Software volume |
 | Anywhere | Close the lid | Sleep; opening wakes |
 
-**X** opens the game menu with **INFO**, **GAME**, **SYSTEM** and **CLOSE** tabs;
-**L1/R1** switch tabs, **↑/↓** picks a row and **B** or **X** closes. **GAME → TRACK
-PLAY TIME** accumulates this game's play time; the total appears in **INFO**
-as hours:minutes:seconds. **SYSTEM → SWAP A/B** swaps the emulated A and B
-buttons for every game on that system; the frontend's own A/B stay the same.
+**X** opens the game menu with **INFO**, **GAME**, **SYSTEM** and **CLOSE** tabs.
+**↑/↓** picks a tab and **A** or **→** opens its pane; inside, **↑/↓** picks a
+row, **←/→** changes a value and **A** selects. **B** backs out to the tabs and
+closes the menu from there. **GAME → TRACK PLAY TIME** accumulates this game's
+play time; the total appears in **INFO** as hours:minutes:seconds. **SYSTEM →
+SWAP A/B** swaps the emulated A and B buttons for every game on that system;
+the frontend's own A/B stay the same.
 
 **SAVE STATE** and **LOAD STATE** act on the slot shown in the pane: **A**
 saves or loads it, **←/→** switches slots and **Y** twice deletes it. **CORE**
