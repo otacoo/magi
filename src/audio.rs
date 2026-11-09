@@ -247,11 +247,6 @@ impl AlsaOut {
                         if s.load(Ordering::Relaxed) {
                             break;
                         }
-                        let now = Instant::now();
-                        if last_empty.map_or(true, |t| now.duration_since(t).as_secs() >= 2) {
-                            last_empty = Some(now);
-                            util::log("audio: ring empty; holding silence");
-                        }
                         starved += 1;
                         if starved < 8 {
                             // Give the producer ~8 ms to catch up; the device
@@ -261,7 +256,14 @@ impl AlsaOut {
                             continue;
                         }
                         // Still empty: keep the device fed with one silent
-                        // period, then try for real samples again.
+                        // period, then try for real samples again. The device
+                        // buffer usually still has the last real samples, so
+                        // this is not necessarily an audible gap.
+                        let now = Instant::now();
+                        if last_empty.map_or(true, |t| now.duration_since(t).as_secs() >= 10) {
+                            last_empty = Some(now);
+                            util::log("audio: ring starved; holding silence");
+                        }
                         buf.fill(0);
                         starved = 0;
                         if !alsa.write(&buf) {

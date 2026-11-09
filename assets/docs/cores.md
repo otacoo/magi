@@ -11,6 +11,7 @@ core. Use unzipped ROMs.
 | NES / FDS | `NES` | `fceumm` |
 | SNES | `SNES` | `snes9x2005_plus` |
 | Genesis / Mega Drive | `GENESIS` | `genesis_plus_gx` |
+| Dreamcast | `DC` | `flycast` |
 | Neo Geo Pocket / Color | `NGPC` | `mednafen_ngp` |
 | Pokemon Mini | `POKEMINI` | `pokemini` |
 | PlayStation | `PS1` | `pcsx_rearmed` |
@@ -31,12 +32,23 @@ MAGI loads BIOS files automatically from `BIOS/`:
 - **PC Engine CD**: `syscard3.pce` (or `syscard3u.pce` or another System
   Card). HuCards do not use a CD System Card.
 - **Pokemon Mini**: `bios.min` (optional; the free BIOS is used when absent).
+- **Dreamcast**: `BIOS/dc/dc_boot.bin` and `BIOS/dc/dc_flash.bin` (optional;
+  the HLE BIOS is used when absent).
 
 **PokeMini** exposes its video and rumble options in the CORE tab: Video Scale,
 LCD Filter, LCD Mode, LCD Contrast, LCD Brightness, Palette, Piezo Filter,
 Screen Shake Level and Controller Rumble Level. Set a rumble level to `0` to
 turn that effect off. The pad maps **A/B** to A/B, **L1** to Shake, **R1** to C
 and **SELECT** to the console's Power button.
+
+**Flycast** is the current build, used for its safe save-state path and
+better game compatibility. It puts the Dreamcast's triggers on **L1/R1**
+(Digital Triggers is on by default on H700 hardware); **L2/R2** stay with the
+frontend. The analog deadzone rows appear only when a real stick is attached;
+the stick works on devices that have one, and the d-pad keeps working
+everywhere. For games that need a stick, turn on **DPAD AS ANALOG** in the
+shelf's SYSTEM tab. GD-ROM fast loading stays off: the current core's fast
+path does not find the boot file in CHD images.
 
 Core options are edited in the in-game pause menu and persist per core in
 `Config/core-options.json`.

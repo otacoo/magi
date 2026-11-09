@@ -98,6 +98,10 @@ struct StateFile {
     play: HashMap<String, PlayStat>,
     #[serde(default)]
     swap_ab: HashMap<String, bool>,
+    #[serde(default)]
+    swap_l1r1: HashMap<String, bool>,
+    #[serde(default)]
+    analog_dpad: HashMap<String, bool>,
 }
 
 impl StateFile {
@@ -252,6 +256,10 @@ pub struct LibraryState {
     play: HashMap<String, PlayStat>,
     /// Systems whose emulated A/B buttons are swapped, by system id.
     swap_ab: HashMap<String, bool>,
+    /// Systems whose emulated L1/R1 buttons are swapped, by system id.
+    swap_l1r1: HashMap<String, bool>,
+    /// Systems whose d-pad also drives the left analog stick.
+    analog_dpad: HashMap<String, bool>,
     pub prefs: Prefs,
     state_dirty: bool,
     last_save: Instant,
@@ -294,6 +302,8 @@ impl LibraryState {
                 .map(|(p, v)| (games::card_path(&p), v))
                 .collect(),
             swap_ab: state.swap_ab,
+            swap_l1r1: state.swap_l1r1,
+            analog_dpad: state.analog_dpad,
             fav_games: Vec::new(),
             fav_system: SystemDef {
                 id: FAV_ID.into(),
@@ -557,6 +567,8 @@ impl LibraryState {
             hdmi_auto: Some(self.prefs.hdmi_auto),
             play: self.play.clone(),
             swap_ab: self.swap_ab.clone(),
+            swap_l1r1: self.swap_l1r1.clone(),
+            analog_dpad: self.analog_dpad.clone(),
         };
         let path = self.cwd.join("Config/magi.json");
         let _ = std::fs::create_dir_all(self.cwd.join("Config"));
@@ -1045,6 +1057,71 @@ impl LibraryState {
         Some(on)
     }
 
+    /// The system's saved L1/R1 swap. Only Dreamcast exposes it.
+    pub fn game_swap_l1r1(&self, path: &str) -> Option<bool> {
+        let sys = self.game_system(path)?;
+        if sys.id != "dc" {
+            return None;
+        }
+        let core = sys.core.as_deref()?;
+        if core == "native" {
+            return None;
+        }
+        Some(self.swap_l1r1.get(&sys.id).copied().unwrap_or(false))
+    }
+
+    /// X -> SYSTEM -> SWAP L1/R1: flip the selected game's system choice.
+    pub fn toggle_game_swap_l1r1(&mut self, path: &str) -> Option<bool> {
+        let (id, core) = {
+            let sys = self.game_system(path)?;
+            (sys.id.clone(), sys.core.clone()?)
+        };
+        if id != "dc" || core == "native" {
+            return None;
+        }
+        let on = !self.swap_l1r1.get(&id).copied().unwrap_or(false);
+        if on {
+            self.swap_l1r1.insert(id, true);
+        } else {
+            self.swap_l1r1.remove(&id);
+        }
+        self.state_dirty = true;
+        Some(on)
+    }
+
+    /// The system's d-pad-as-left-stick choice. Exposed for Dreamcast and
+    /// PlayStation, the two libretro hosts with analog input.
+    pub fn game_analog_dpad(&self, path: &str) -> Option<bool> {
+        let sys = self.game_system(path)?;
+        if !matches!(sys.id.as_str(), "dc" | "psx") {
+            return None;
+        }
+        let core = sys.core.as_deref()?;
+        if core == "native" {
+            return None;
+        }
+        let default = sys.id == "dc";
+        Some(self.analog_dpad.get(&sys.id).copied().unwrap_or(default))
+    }
+
+    /// X -> SYSTEM -> DPAD AS ANALOG: flip the selected game's system choice.
+    pub fn toggle_game_analog_dpad(&mut self, path: &str) -> Option<bool> {
+        let (id, core) = {
+            let sys = self.game_system(path)?;
+            (sys.id.clone(), sys.core.clone()?)
+        };
+        if !matches!(id.as_str(), "dc" | "psx") || core == "native" {
+            return None;
+        }
+        let default = id == "dc";
+        let on = !self.analog_dpad.get(&id).copied().unwrap_or(default);
+        // Keep the explicit choice: removing the key would restore the
+        // Dreamcast default (on) when the player turned it off.
+        self.analog_dpad.insert(id, on);
+        self.state_dirty = true;
+        Some(on)
+    }
+
     /// X -> GAME -> TRACK PLAY TIME: flip the opt-in flag, keeping the total.
     pub fn toggle_play_tracking(&mut self, path: &str) -> bool {
         let entry = self.play.entry(path.to_string()).or_default();
@@ -1449,6 +1526,10 @@ pub struct GameMenuInfo<'a> {
     pub art_type: u8,
     /// `None` when the system's native core has no libretro button mapping.
     pub swap_ab: Option<bool>,
+    /// Dreamcast only: exchange the L1/R1 triggers.
+    pub swap_l1r1: Option<bool>,
+    /// Dreamcast/PlayStation: drive the left analog stick from the d-pad.
+    pub analog_dpad: Option<bool>,
 }
 
 /// Hours:minutes:seconds, with hours free to grow past 99.
@@ -1850,8 +1931,13 @@ pub fn draw_game_menu(
             );
         }
         2 => {
-            let rows = if info.swap_ab.is_some() { 2 } else { 1 };
+            let rows = 1
+                + usize::from(info.swap_ab.is_some())
+                + usize::from(info.swap_l1r1.is_some())
+                + usize::from(info.analog_dpad.is_some());
             let sel = sel.min(rows - 1);
+            let analog_row =
+                1 + usize::from(info.swap_ab.is_some()) + usize::from(info.swap_l1r1.is_some());
             let y0 = content_top + p(22.0);
             let pitch = p(34.0);
             let value = format!(
@@ -1881,14 +1967,54 @@ pub fn draw_game_menu(
                     content_x,
                     y0 + pitch,
                     content_w,
-                    "SWAP A/B",
+                    "SWAP A ↔ B",
                     Some((label, color)),
                     focus && sel == 1,
                     false,
                 );
             }
-            let note = if focus && sel == 1 {
+            if let Some(on) = info.swap_l1r1 {
+                let (label, color) = if on {
+                    ("ON", pal().signal)
+                } else {
+                    ("OFF", pal().text_faint)
+                };
+                menu_option_row(
+                    cv,
+                    fonts,
+                    content_x,
+                    y0 + pitch * 2,
+                    content_w,
+                    "SWAP L1/R1 ↔ L2/R2",
+                    Some((label, color)),
+                    focus && sel == 2,
+                    false,
+                );
+            }
+            if let Some(on) = info.analog_dpad {
+                let (label, color) = if on {
+                    ("ON", pal().signal)
+                } else {
+                    ("OFF", pal().text_faint)
+                };
+                menu_option_row(
+                    cv,
+                    fonts,
+                    content_x,
+                    y0 + pitch * analog_row as i32,
+                    content_w,
+                    "DPAD AS ANALOG",
+                    Some((label, color)),
+                    focus && sel == analog_row,
+                    false,
+                );
+            }
+            let note = if focus && sel == 1 && info.swap_ab.is_some() {
                 "SWAPS A AND B FOR THIS SYSTEM"
+            } else if focus && sel == 2 && info.swap_l1r1.is_some() {
+                "SWAPS L1 AND R1 FOR THIS SYSTEM"
+            } else if focus && info.analog_dpad.is_some() && sel == analog_row {
+                "MAPS THE DPAD TO THE LEFT ANALOG STICK"
             } else {
                 "COVER STYLE FOR THIS SYSTEM"
             };
@@ -2120,12 +2246,14 @@ mod state_tests {
     }
 
     #[test]
-    fn swap_ab_is_stored_per_system() {
+    fn swap_buttons_are_stored_per_system() {
         let stored: StateFile =
-            serde_json::from_str(r#"{"swap_ab":{"nes":true,"gb":false}}"#).unwrap();
+            serde_json::from_str(r#"{"swap_ab":{"nes":true,"gb":false},"swap_l1r1":{"dc":true}}"#)
+                .unwrap();
         assert_eq!(stored.swap_ab.get("nes"), Some(&true));
         assert_eq!(stored.swap_ab.get("gb"), Some(&false));
         assert_eq!(stored.swap_ab.get("snes"), None);
+        assert_eq!(stored.swap_l1r1.get("dc"), Some(&true));
     }
 
     fn sys(id: &str, folder: Option<&str>) -> SystemDef {

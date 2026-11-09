@@ -97,6 +97,7 @@ fn builtin(id: &str) -> Option<&'static str> {
         "nes" => "Nintendo - Nintendo Entertainment System",
         "snes" => "Nintendo - Super Nintendo Entertainment System",
         "genesis" => "Sega - Mega Drive - Genesis",
+        "dc" => "Sega - Dreamcast",
         "ngp" => "SNK - Neo Geo Pocket",
         "pokemini" => "Nintendo - Pokemon Mini",
         "psx" => "Sony - PlayStation",

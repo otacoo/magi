@@ -279,16 +279,20 @@ pub fn run() -> Result<()> {
         favorite: true,
         art_type: 1,
         swap_ab: Some(true),
+        swap_l1r1: Some(true),
+        analog_dpad: Some(true),
     };
     for (name, tab, sel, focus, confirm) in [
         ("game-menu-info", 0, 0, false, false),
         ("game-menu", 1, 0, false, false),
         ("game-menu-focus", 1, 0, true, false),
         ("game-menu-delete", 1, 2, true, false),
+        ("game-menu-system-analog", 2, 3, true, false),
         ("game-menu-confirm", 1, 2, true, true),
         ("game-menu-system", 2, 0, false, false),
         ("game-menu-system-focus", 2, 0, true, false),
         ("game-menu-system-swap", 2, 1, true, false),
+        ("game-menu-system-swap-l1r1", 2, 2, true, false),
         ("game-menu-close", 3, 0, false, false),
     ] {
         library::draw(&mut cv, &mut fonts, &mut lib, 0.0);

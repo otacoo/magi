@@ -59,7 +59,7 @@ jobs:
           apt-get -o Acquire::Check-Valid-Until=false update
           apt-get install -y --no-install-recommends \
             build-essential make cmake git pkg-config python3 perl nasm yasm \
-            zlib1g-dev:arm64 \
+            zlib1g-dev:arm64 libgles2-mesa-dev:arm64 \
             curl ca-certificates \
             gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu
 

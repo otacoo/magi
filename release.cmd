@@ -271,7 +271,7 @@ if not exist "%GAMEDIR%" (
     pause
     goto menu
 )
-set /p "CONSOLE=console (GB GBC GBA NES SNES GENESIS PS1 NGPC PCE POKEMINI N64) [GBA]: "
+set /p "CONSOLE=console (GB GBC GBA NES SNES GENESIS PS1 DC NGPC PCE POKEMINI N64) [GBA]: "
 if not defined CONSOLE set "CONSOLE=GBA"
 "%ADB%" wait-for-device
 "%ADB%" push "%GAMEDIR%" %SD%/Games/%CONSOLE%/

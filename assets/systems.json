@@ -7,6 +7,7 @@
     { "id": "nes",     "name": "NES",              "exts": ["nes", "fds"],               "core": "fceumm",             "folder": "NES",     "art": "Nintendo - Nintendo Entertainment System" },
     { "id": "snes",    "name": "SNES",             "exts": ["sfc", "smc"],               "core": "snes9x2005_plus",    "folder": "SNES",    "art": "Nintendo - Super Nintendo Entertainment System" },
     { "id": "genesis", "name": "GENESIS",          "exts": ["md", "gen"],                "core": "genesis_plus_gx",    "folder": "GENESIS", "art": "Sega - Mega Drive - Genesis" },
+    { "id": "dc",      "name": "DREAMCAST",        "exts": ["cdi", "gdi", "chd", "cue", "m3u"], "core": "flycast", "folder": "DC", "art": "Sega - Dreamcast" },
     { "id": "ngp",     "name": "NEO GEO POCKET",   "exts": ["ngp", "ngc", "ngpc"],       "core": "mednafen_ngp",       "folder": "NGPC",    "art": "SNK - Neo Geo Pocket" },
     { "id": "pokemini", "name": "POKEMON MINI",    "exts": ["min"],                      "core": "pokemini",           "folder": "POKEMINI", "art": "Nintendo - Pokemon Mini" },
     { "id": "psx",     "name": "PLAYSTATION",      "exts": ["cue", "chd", "pbp", "m3u"], "core": "pcsx_rearmed",       "folder": "PS1",     "art": "Sony - PlayStation" },

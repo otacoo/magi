@@ -32,6 +32,8 @@ const GL_FRAMEBUFFER: u32 = 0x8D40;
 const GL_RENDERBUFFER: u32 = 0x8D41;
 const GL_COLOR_ATTACHMENT0: u32 = 0x8CE0;
 const GL_DEPTH_ATTACHMENT: u32 = 0x8D00;
+const GL_DEPTH_STENCIL_ATTACHMENT: u32 = 0x821A;
+const GL_DEPTH24_STENCIL8: u32 = 0x88F0;
 const GL_FRAMEBUFFER_COMPLETE: u32 = 0x8CD5;
 const GL_DEPTH_COMPONENT16: u32 = 0x81A5;
 const GL_UNSIGNED_BYTE: u32 = 0x1401;
@@ -799,12 +801,43 @@ impl Gpu {
 
     /// Create (or recreate) the FBO a hardware-rendered core draws into.
     /// Returns the framebuffer name the core must bind.
-    pub fn hw_framebuffer(&mut self, width: u32, height: u32) -> Result<u32, String> {
+    pub fn hw_framebuffer(
+        &mut self,
+        width: u32,
+        height: u32,
+        stencil: bool,
+    ) -> Result<u32, String> {
         let (w, h) = (width.max(1) as i32, height.max(1) as i32);
-        let filter = GL_NEAREST as i32;
         if let Some(old) = self.hw.take() {
             unsafe { self.free_hw(&old) };
         }
+        let mut want_stencil = stencil;
+        loop {
+            let result = self.try_hw_framebuffer(w, h, want_stencil);
+            match result {
+                Ok((fbo, tex, depth)) => {
+                    self.hw = Some(HwFbo {
+                        fbo,
+                        tex,
+                        depth,
+                        w,
+                        h,
+                    });
+                    return Ok(fbo);
+                }
+                Err(status) if want_stencil => {
+                    util::log(&format!(
+                        "hw: depth-stencil FBO incomplete (0x{status:x}); retrying depth only"
+                    ));
+                    want_stencil = false;
+                }
+                Err(status) => return Err(format!("FBO incomplete: 0x{status:x}")),
+            }
+        }
+    }
+
+    fn try_hw_framebuffer(&self, w: i32, h: i32, stencil: bool) -> Result<(u32, u32, u32), u32> {
+        let filter = GL_NEAREST as i32;
         let (mut fbo, mut tex, mut depth) = (0, 0, 0);
         unsafe {
             (self.gl.gen_textures)(1, &mut tex);
@@ -835,20 +868,20 @@ impl Gpu {
             );
             (self.gl.gen_renderbuffers)(1, &mut depth);
             (self.gl.bind_renderbuffer)(GL_RENDERBUFFER, depth);
-            (self.gl.renderbuffer_storage)(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, w, h);
-            (self.gl.framebuffer_renderbuffer)(
-                GL_FRAMEBUFFER,
-                GL_DEPTH_ATTACHMENT,
-                GL_RENDERBUFFER,
-                depth,
-            );
+            let (format, attachment) = if stencil {
+                (GL_DEPTH24_STENCIL8, GL_DEPTH_STENCIL_ATTACHMENT)
+            } else {
+                (GL_DEPTH_COMPONENT16, GL_DEPTH_ATTACHMENT)
+            };
+            (self.gl.renderbuffer_storage)(GL_RENDERBUFFER, format, w, h);
+            (self.gl.framebuffer_renderbuffer)(GL_FRAMEBUFFER, attachment, GL_RENDERBUFFER, depth);
             let status = (self.gl.check_framebuffer_status)(GL_FRAMEBUFFER);
             if status != GL_FRAMEBUFFER_COMPLETE {
                 (self.gl.bind_framebuffer)(GL_FRAMEBUFFER, 0);
                 (self.gl.delete_framebuffers)(1, &fbo);
                 (self.gl.delete_renderbuffers)(1, &depth);
                 (self.gl.delete_textures)(1, &tex);
-                return Err(format!("FBO incomplete: 0x{status:x}"));
+                return Err(status);
             }
             // A freshly allocated texture has undefined pixels; clear it so
             // the boot frames show black rather than garbage.
@@ -858,14 +891,7 @@ impl Gpu {
             (self.gl.clear)(GL_COLOR_BUFFER_BIT);
             (self.gl.bind_framebuffer)(GL_FRAMEBUFFER, 0);
         }
-        self.hw = Some(HwFbo {
-            fbo,
-            tex,
-            depth,
-            w,
-            h,
-        });
-        Ok(fbo)
+        Ok((fbo, tex, depth))
     }
 
     /// Resolve a GL symbol for a hardware-rendered core. The symbol may live

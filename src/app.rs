@@ -258,10 +258,17 @@ impl Ui {
                 }
                 Action::Left | Action::Right => {
                     let delta = if a == Action::Left { -1 } else { 1 };
+                    let analog_row = self.game_menu_analog_row(&m.path);
                     match (m.tab, m.sel) {
                         (1, 0) => self.toggle_play_tracking(&m.path),
                         (2, 0) => self.library.cycle_game_art(&m.path, delta),
-                        (2, 1) => self.toggle_swap_ab(&m.path),
+                        (2, 1) if self.library.game_swap_ab(&m.path).is_some() => {
+                            self.toggle_swap_ab(&m.path)
+                        }
+                        (2, 2) if self.library.game_swap_l1r1(&m.path).is_some() => {
+                            self.toggle_swap_l1r1(&m.path)
+                        }
+                        (2, n) if Some(n) == analog_row => self.toggle_analog_dpad(&m.path),
                         _ => {}
                     }
                 }
@@ -285,7 +292,15 @@ impl Ui {
                     }
                     (1, 2) => m.confirm = true,
                     (2, 0) => self.library.cycle_game_art(&m.path, 1),
-                    (2, 1) => self.toggle_swap_ab(&m.path),
+                    (2, 1) if self.library.game_swap_ab(&m.path).is_some() => {
+                        self.toggle_swap_ab(&m.path)
+                    }
+                    (2, 2) if self.library.game_swap_l1r1(&m.path).is_some() => {
+                        self.toggle_swap_l1r1(&m.path)
+                    }
+                    (2, n) if Some(n) == self.game_menu_analog_row(&m.path) => {
+                        self.toggle_analog_dpad(&m.path)
+                    }
                     _ => {}
                 },
                 Action::Back => m.focus = false,
@@ -317,9 +332,20 @@ impl Ui {
     fn game_menu_rows(&self, m: &GameMenuUi) -> usize {
         match m.tab {
             1 => 3,
-            2 if self.library.game_swap_ab(&m.path).is_some() => 2,
+            2 => {
+                1 + usize::from(self.library.game_swap_ab(&m.path).is_some())
+                    + usize::from(self.library.game_swap_l1r1(&m.path).is_some())
+                    + usize::from(self.library.game_analog_dpad(&m.path).is_some())
+            }
             _ => 1,
         }
+    }
+
+    fn game_menu_analog_row(&self, path: &str) -> Option<usize> {
+        self.library.game_analog_dpad(path).map(|_| {
+            1 + usize::from(self.library.game_swap_ab(path).is_some())
+                + usize::from(self.library.game_swap_l1r1(path).is_some())
+        })
     }
 
     fn toggle_play_tracking(&mut self, path: &str) {
@@ -334,6 +360,18 @@ impl Ui {
     fn toggle_swap_ab(&mut self, path: &str) {
         if let Some(on) = self.library.toggle_game_swap_ab(path) {
             crate::status::show(if on { "A/B SWAPPED" } else { "A/B NORMAL" });
+        }
+    }
+
+    fn toggle_swap_l1r1(&mut self, path: &str) {
+        if let Some(on) = self.library.toggle_game_swap_l1r1(path) {
+            crate::status::show(if on { "L1/R1 SWAPPED" } else { "L1/R1 NORMAL" });
+        }
+    }
+
+    fn toggle_analog_dpad(&mut self, path: &str) {
+        if let Some(on) = self.library.toggle_game_analog_dpad(path) {
+            crate::status::show(if on { "DPAD AS ANALOG" } else { "DPAD DIGITAL" });
         }
     }
 
@@ -1324,6 +1362,8 @@ impl Ui {
                         favorite: self.library.favorites.contains(&m.path),
                         art_type: sys.map(|s| self.library.art_type_for(&s.id)).unwrap_or(0),
                         swap_ab: self.library.game_swap_ab(&m.path),
+                        swap_l1r1: self.library.game_swap_l1r1(&m.path),
+                        analog_dpad: self.library.game_analog_dpad(&m.path),
                     };
                     library::draw_game_menu(
                         &mut self.cv,

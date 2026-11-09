@@ -14,8 +14,9 @@ use crate::theme::pal;
 
 use super::super::prefs::ShaderMode;
 use super::super::{
-    ctx, disc_count, disc_index, visible_options, CoreOption, Ctx, DiskControl, GameGeometry,
-    GameInfo, GameMenu, MenuPage, NetplayPage, OverlayLayers, StateCard, CTX, STATE_SLOTS,
+    ctx, disc_count, disc_index, visible_options, AudioPacer, CoreOption, Ctx, DiskControl,
+    GameGeometry, GameInfo, GameMenu, MenuPage, NetplayPage, OverlayLayers, StateCard, CTX,
+    STATE_SLOTS,
 };
 use super::{menu_sections, netplay_status_line, option_rows_for_height, MenuSection};
 
@@ -1505,10 +1506,25 @@ pub(crate) fn draw_menu_preview(
         frame: std::ptr::null(),
         frame_seq: 0,
         pitch: 0,
-        bits: 16,
-        left: (0, 0),
-        right: (0, 0),
-        audio: Vec::new(),
+        bits: std::sync::atomic::AtomicU16::new(16),
+        analog_dpad: std::sync::atomic::AtomicBool::new(false),
+        left: (
+            std::sync::atomic::AtomicI16::new(0),
+            std::sync::atomic::AtomicI16::new(0),
+        ),
+        right: (
+            std::sync::atomic::AtomicI16::new(0),
+            std::sync::atomic::AtomicI16::new(0),
+        ),
+        audio: std::sync::Mutex::new(Vec::new()),
+        audio_rate: std::sync::atomic::AtomicU32::new(44100),
+        fps_milli: std::sync::atomic::AtomicU32::new(0),
+        audio_pacer: std::sync::Mutex::new(AudioPacer {
+            start: std::time::Instant::now(),
+            produced: 0,
+        }),
+        audio_samples: std::sync::atomic::AtomicU64::new(0),
+        audio_sleep_us: std::sync::atomic::AtomicU64::new(0),
         save_dir: CString::new("Saves").unwrap(),
         system_dir: CString::new("Saves").unwrap(),
         shutdown: false,
@@ -1516,6 +1532,7 @@ pub(crate) fn draw_menu_preview(
         ser_size,
         ser,
         unser,
+        state_size: 0,
         options,
         opt_key: "gambatte".into(),
         opt_dirty: false,
@@ -1527,6 +1544,11 @@ pub(crate) fn draw_menu_preview(
         overlay_dirty: false,
         moto: None,
         rumble_on: false,
+        rumble_at: None,
+        rumble_high: false,
+        rumble_peak: 0,
+        rumble_low_at: None,
+        rumble_armed: true,
         rumble_ok: false,
         disk: Some(DiskControl {
             set_eject_state: dc_eject,
@@ -1539,6 +1561,7 @@ pub(crate) fn draw_menu_preview(
         }),
         system: "gb".into(),
         rom: "Metal Gear Solid (Europe) (En,Fr,De,Es).gbc".into(),
+        core_version: "test".into(),
         netplay: None,
         netplay_linked: false,
         lcd_accurate: false,

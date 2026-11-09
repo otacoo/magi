@@ -7,6 +7,17 @@ All notable changes to MAGI are documented here.
 ### Changes
 
 - Added **Pokemon Mini** support with the PokeMini core, including its LCD, palette and rumble options, plus default bezels
+- Added **Sega Dreamcast** support with the Flycast core, including analog-stick detection and digital triggers
+- Dreamcast uses the lighter **Flycast VL** core for better speed
+- Dreamcast renders at native 1x resolution; the Internal Resolution option is gone
+- Dreamcast triggers use **L1/R1**; **L2/R2** stay with the frontend
+- Dreamcast rumble is off by default (enable **Purupuru** in the CORE menu) and now fires short pulses only on spikes, not continuously
+- Added a per-system **SWAP L1/R1** option, used by Dreamcast
+- Added **DPAD AS ANALOG** for Dreamcast and PlayStation games that need a stick; it maps the d-pad to the left analog stick and is on by default for Dreamcast
+- Dreamcast uses the current Flycast core for safer save states and better game compatibility
+- Dreamcast CHD games boot again; GD-ROM fast loading is off on the current core
+- Dreamcast PAL games now run at their real 50 Hz refresh rate instead of fighting the 60 Hz frame clock
+- Fixed a crash when saving a Dreamcast state
 - Payload pushes keep the card's settings, saves and BIOS files
 - Added per-game **play time** tracking in the shelf game menu, shown as hours:minutes:seconds
 - Redesigned the shelf game menu with **INFO**, **GAME**, **SYSTEM** and **CLOSE** tabs

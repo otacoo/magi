@@ -73,6 +73,40 @@ fn swap_ab_in(v: &serde_json::Value, system: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Per-system L1/R1 swap chosen in the shelf's SYSTEM tab (Dreamcast).
+pub(super) fn load_swap_l1r1(system: &str) -> bool {
+    std::fs::read_to_string(runtime_config_path())
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .map(|v| swap_l1r1_in(&v, system))
+        .unwrap_or(false)
+}
+
+fn swap_l1r1_in(v: &serde_json::Value, system: &str) -> bool {
+    v.get("swap_l1r1")
+        .and_then(|m| m.get(system))
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false)
+}
+
+/// D-pad as the left analog stick. The handheld has no stick, and Dreamcast
+/// needs one for many games, so Dreamcast defaults on.
+pub(super) fn load_analog_dpad(system: &str) -> bool {
+    let fallback = system == "dc";
+    std::fs::read_to_string(runtime_config_path())
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .map(|v| analog_dpad_in(&v, system, fallback))
+        .unwrap_or(fallback)
+}
+
+fn analog_dpad_in(v: &serde_json::Value, system: &str, fallback: bool) -> bool {
+    v.get("analog_dpad")
+        .and_then(|m| m.get(system))
+        .and_then(|x| x.as_bool())
+        .unwrap_or(fallback)
+}
+
 pub(super) fn save_runtime_volume(pct: u8) {
     let path = Path::new(runtime_config_path());
     let mut v: serde_json::Value = std::fs::read_to_string(path)
@@ -399,7 +433,7 @@ pub(super) struct AdjState {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_scale, swap_ab_in, ScaleMode, ShaderMode};
+    use super::{load_scale, swap_ab_in, swap_l1r1_in, ScaleMode, ShaderMode};
 
     #[test]
     fn psx_scale_defaults_to_stretch() {
@@ -422,6 +456,15 @@ mod tests {
         assert!(!swap_ab_in(&v, "gb"));
         assert!(!swap_ab_in(&v, "snes"));
         assert!(!swap_ab_in(&serde_json::json!({}), "nes"));
+    }
+
+    #[test]
+    fn swap_l1r1_is_per_system() {
+        let v = serde_json::json!({"swap_l1r1": {"dc": true, "psx": false}});
+        assert!(swap_l1r1_in(&v, "dc"));
+        assert!(!swap_l1r1_in(&v, "psx"));
+        assert!(!swap_l1r1_in(&v, "snes"));
+        assert!(!swap_l1r1_in(&serde_json::json!({}), "dc"));
     }
 
     #[test]

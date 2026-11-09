@@ -1452,7 +1452,16 @@ pub fn set_cpu_governor(governor: &str) -> bool {
         }
     }
     if written > 0 {
-        log(&format!("cpu: governor {governor} ({written} cores)"));
+        let max = std::fs::read_to_string("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq")
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .map(|khz| khz / 1000);
+        match max {
+            Some(mhz) => log(&format!(
+                "cpu: governor {governor} ({written} cores, max {mhz} MHz)"
+            )),
+            None => log(&format!("cpu: governor {governor} ({written} cores)")),
+        }
         true
     } else {
         false
@@ -1464,6 +1473,51 @@ pub fn set_cpu_governor(governor: &str) -> bool {
 pub fn set_cpu_governor(_governor: &str) -> bool {
     false
 }
+
+/// Hold the Mali GPU at its top step while a 3D core runs. The H700's
+/// devfreq governor otherwise stays at 420 MHz; Flycast needs the 648 MHz
+/// step. Returns the previous `min_freq` so the caller can put it back.
+#[cfg(target_os = "linux")]
+pub fn set_gpu_min_freq_max() -> Option<String> {
+    const DIR: &str = "/sys/class/devfreq/gpu";
+    let frequencies = std::fs::read_to_string(format!("{DIR}/available_frequencies")).ok()?;
+    let top = frequencies
+        .split_whitespace()
+        .filter_map(|f| f.parse::<u64>().ok())
+        .max()?;
+    let previous = std::fs::read_to_string(format!("{DIR}/min_freq")).ok()?;
+    if let Err(e) = std::fs::write(format!("{DIR}/min_freq"), top.to_string()) {
+        log(&format!("gpu: cannot set min_freq {top}: {e}"));
+        return None;
+    }
+    let now = std::fs::read_to_string(format!("{DIR}/cur_freq"))
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    log(&format!(
+        "gpu: min_freq {} MHz (now {} MHz)",
+        top / 1_000_000,
+        now / 1_000_000
+    ));
+    Some(previous.trim().to_string())
+}
+
+#[cfg(target_os = "linux")]
+pub fn restore_gpu_min_freq(previous: &str) {
+    if let Err(e) = std::fs::write("/sys/class/devfreq/gpu/min_freq", previous) {
+        log(&format!("gpu: cannot restore min_freq {previous}: {e}"));
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(dead_code)]
+pub fn set_gpu_min_freq_max() -> Option<String> {
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(dead_code)]
+pub fn restore_gpu_min_freq(_previous: &str) {}
 
 /// The LED-during-sleep switch: 0 keeps the power LED dark while suspended
 /// (the default MAGI sets), 1 leaves it on.

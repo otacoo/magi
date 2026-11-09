@@ -12,8 +12,10 @@ use std::os::raw::{c_char, c_uint};
 use std::path::Path;
 #[cfg(target_os = "linux")]
 use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{
+    AtomicBool, AtomicI16, AtomicPtr, AtomicU16, AtomicU32, AtomicU64, Ordering,
+};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
@@ -45,10 +47,10 @@ use overlay::{
 };
 use pad::{pump_pads, PadHat, PadState};
 use prefs::{
-    load_display_prefs, load_runtime_prefs, load_runtime_volume, load_shot_chord_pref,
-    load_swap_ab, load_text_scale, save_display_prefs, save_runtime_volume, scale_factors, AdjKind,
-    AdjState, DisplayPrefs, ScaleMode, ShaderMode, COMBO_FIRST_REPEAT, COMBO_REPEAT, COMBO_STEP,
-    DOUBLE_TAP, TRIGGER_ON,
+    load_analog_dpad, load_display_prefs, load_runtime_prefs, load_runtime_volume,
+    load_shot_chord_pref, load_swap_ab, load_swap_l1r1, load_text_scale, save_display_prefs,
+    save_runtime_volume, scale_factors, AdjKind, AdjState, DisplayPrefs, ScaleMode, ShaderMode,
+    COMBO_FIRST_REPEAT, COMBO_REPEAT, COMBO_STEP, DOUBLE_TAP, TRIGGER_ON,
 };
 
 #[cfg(target_os = "linux")]
@@ -68,6 +70,21 @@ const RETRO_DEVICE_PSE_DUALSHOCK: u32 = retro_subclass(RETRO_DEVICE_ANALOG, 1);
 const ANALOG_X: u32 = 0;
 const ANALOG_Y: u32 = 1;
 const STICK_DEADZONE: i16 = 4000;
+/// Rumble is a spike effect. Ignore sustained low-level Purupuru values,
+/// and give a held or repeated request one short pulse instead of a motor
+/// that runs continuously.
+const RUMBLE_MIN_STRENGTH: u16 = 0x6000;
+const RUMBLE_ON_GAP: Duration = Duration::from_millis(250);
+const RUMBLE_ON_MAX: Duration = Duration::from_millis(160);
+/// The request must fall below the threshold for this long before the same
+/// effect can fire again.
+const RUMBLE_REARM: Duration = Duration::from_millis(250);
+/// A jump this large while the pack is already high is a new spike.
+const RUMBLE_RISE: u16 = 0x2000;
+/// Let the emulation lead the audio clock by this much before the audio
+/// callback blocks. RetroArch gets this pacing from its blocking audio
+/// driver; MAGI's writer does not block the core.
+const AUDIO_LEAD: f64 = 0.050;
 
 const ENV_GET_CAN_DUPE: u32 = 3;
 const ENV_SET_MESSAGE: u32 = 6;
@@ -81,9 +98,14 @@ const ENV_GET_VARIABLE_UPDATE: u32 = 17;
 const ENV_GET_RUMBLE_INTERFACE: u32 = 23;
 const ENV_GET_LOG_INTERFACE: u32 = 27;
 const ENV_GET_SAVE_DIRECTORY: u32 = 31;
+const ENV_SET_SYSTEM_AV_INFO: u32 = 32;
 const ENV_SET_GEOMETRY: u32 = 37;
 const ENV_GET_INPUT_BITMASKS: u32 = 51 | 0x1_0000;
 const ENV_GET_CORE_OPTIONS_VERSION: u32 = 52;
+const ENV_GET_FASTFORWARDING: u32 = 49 | 0x1_0000;
+/// RetroArch extension the 2021 Flycast uses before waiting for its emu
+/// thread to leave on unload.
+const ENV_GET_CLEAR_ALL_THREAD_WAITS_CB: u32 = 3 | 0x80_0000;
 const ENV_SET_DISK_CONTROL_INTERFACE: u32 = 13;
 
 #[cfg(target_os = "linux")]
@@ -111,7 +133,7 @@ struct DiskControl {
 }
 
 extern "C" fn rumble_cb(_port: c_uint, _effect: c_uint, strength: u16) -> bool {
-    ctx().set_rumble(strength > 0)
+    ctx().set_rumble(strength)
 }
 
 const PIXFMT_0RGB1555: u32 = 0;
@@ -217,6 +239,7 @@ struct HwRender {
     reset: Option<unsafe extern "C" fn()>,
     destroy: Option<unsafe extern "C" fn()>,
     bottom_left: bool,
+    stencil: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -270,6 +293,24 @@ fn default_option(core: &str, system: &str, key: &str) -> Option<&'static str> {
             Some(if system == "gbc" { "disabled" } else { "auto" })
         }
         ("gambatte", "gambatte_gb_internal_palette") => Some("GB - DMG"),
+        // The H700's L1/R1 are digital buttons; Flycast then treats the
+        // L2/R2 bits they are moved to as full-press analog triggers.
+        ("flycast", "reicast_digital_triggers") => Some("enabled"),
+        // The 2021 flycastvl build has no LOW_END defaults. Pin the fast
+        // options it would otherwise leave off.
+        ("flycast", "reicast_internal_resolution") => Some("640x480"),
+        ("flycast", "reicast_enable_dsp") => Some("disabled"),
+        // Threaded rendering runs ahead of the presenter without this.
+        ("flycast", "reicast_synchronous_rendering") => Some("enabled"),
+        // The current core's fast-loading path fails to find 1ST_READ.BIN
+        // in CHD images; the normal GD-ROM path is still full speed here.
+        ("flycast", "reicast_gdrom_fast_loading") => Some("disabled"),
+        ("flycast", "reicast_alpha_sorting") => Some("per-strip (fast, least accurate)"),
+        ("flycast", "reicast_cable_type") => Some("VGA (RGB)"),
+        ("flycast", "reicast_anisotropic_filtering") => Some("disabled"),
+        // The 2021 core drives the pack from a continuous Purupuru value;
+        // leave it off unless the player turns it back on in the CORE menu.
+        ("flycast", "reicast_enable_purupuru") => Some("disabled"),
         // PokeMini: 6x puts the 96x64 LCD at 576x384, close to the 640/720
         // panels, so the internal dot matrix survives the final scale.
         ("pokemini", "pokemini_video_scale") => Some("6x"),
@@ -341,6 +382,42 @@ fn chosen_index(
         if let Some(i) = values
             .iter()
             .position(|v| v.eq_ignore_ascii_case("disabled"))
+        {
+            return i;
+        }
+    }
+    // Flycast renders at native size on the H700: the frontend FBO is fixed
+    // at the load-time geometry, so higher values only cost frames. Ignore
+    // a stale saved choice; both rows are hidden from the CORE menu. The
+    // 2021 core spells native as 640x480, the current one as 1x.
+    if core == "flycast" && key == "reicast_internal_resolution" {
+        for native in ["1x", "640x480"] {
+            if let Some(i) = values.iter().position(|v| v.eq_ignore_ascii_case(native)) {
+                return i;
+            }
+        }
+    }
+    if core == "flycast" && key == "reicast_render_to_texture_upscaling" {
+        if let Some(i) = values.iter().position(|v| v.eq_ignore_ascii_case("1x")) {
+            return i;
+        }
+    }
+    // The current core's GD-ROM fast path cannot find the boot file in CHD
+    // images. Ignore a stale saved "enabled".
+    if core == "flycast" && key == "reicast_gdrom_fast_loading" {
+        if let Some(i) = values
+            .iter()
+            .position(|v| v.eq_ignore_ascii_case("disabled"))
+        {
+            return i;
+        }
+    }
+    // The 2021 core's threaded mode runs the emulation ahead of the renderer
+    // when this is off, which looks like permanent fast-forward.
+    if core == "flycast" && key == "reicast_synchronous_rendering" {
+        if let Some(i) = values
+            .iter()
+            .position(|v| v.eq_ignore_ascii_case("enabled"))
         {
             return i;
         }
@@ -419,6 +496,11 @@ fn save_core_options(ctx: &Ctx) {
     }
 }
 
+struct AudioPacer {
+    start: Instant,
+    produced: u64,
+}
+
 struct Ctx {
     pixfmt: u32,
     geometry: GameGeometry,
@@ -426,10 +508,18 @@ struct Ctx {
     /// Bumped by the video callback on real frames (nulls are dups).
     frame_seq: u64,
     pitch: usize,
-    bits: u16,
-    left: (i16, i16),
-    right: (i16, i16),
-    audio: Vec<i16>,
+    bits: AtomicU16,
+    analog_dpad: AtomicBool,
+    left: (AtomicI16, AtomicI16),
+    right: (AtomicI16, AtomicI16),
+    /// The core may deliver audio from its emulation thread while threaded
+    /// rendering is on (the 2021 Flycast does): this buffer is shared.
+    audio: Mutex<Vec<i16>>,
+    audio_rate: AtomicU32,
+    fps_milli: AtomicU32,
+    audio_pacer: Mutex<AudioPacer>,
+    audio_samples: AtomicU64,
+    audio_sleep_us: AtomicU64,
     save_dir: CString,
     system_dir: CString,
     shutdown: bool,
@@ -437,6 +527,9 @@ struct Ctx {
     ser_size: unsafe extern "C" fn() -> usize,
     ser: unsafe extern "C" fn(*mut c_void, usize) -> bool,
     unser: unsafe extern "C" fn(*const c_void, usize) -> bool,
+    /// Cached once, before the game loop: `retro_serialize_size` is not
+    /// thread-safe in cores with threaded rendering.
+    state_size: usize,
     options: Vec<CoreOption>,
     opt_key: String,
     opt_dirty: bool,
@@ -445,11 +538,17 @@ struct Ctx {
     overlay_dirty: bool,
     moto: Option<std::fs::File>,
     rumble_on: bool,
+    rumble_at: Option<Instant>,
+    rumble_high: bool,
+    rumble_peak: u16,
+    rumble_low_at: Option<Instant>,
+    rumble_armed: bool,
     rumble_ok: bool,
     /// The core's disk table while a multi-disc game is loaded.
     disk: Option<DiskControl>,
     system: String,
     rom: String,
+    core_version: String,
     netplay: Option<netplay::Session>,
     netplay_linked: bool,
     /// The LCD ACCURATE shader is selected.
@@ -467,11 +566,80 @@ impl Ctx {
     /// The handheld's vibration motor: a write-only sysfs switch on the
     /// AXP2202. The state is cached so a core pulsing rumble at frame rate
     /// does not beat on the attribute.
-    fn set_rumble(&mut self, on: bool) -> bool {
-        let on = on && self.rumble_ok;
-        if self.rumble_on == on {
+    ///
+    /// A held Purupuru value is not a rumble event. Fire one short pulse,
+    /// then wait for the request to drop (or rise sharply) before firing
+    /// again.
+    fn set_rumble(&mut self, strength: u16) -> bool {
+        if !self.rumble_ok {
+            if self.rumble_on {
+                return self.write_motor(false);
+            }
             return true;
         }
+        let now = Instant::now();
+        let high = strength >= RUMBLE_MIN_STRENGTH;
+        if !high {
+            if self.rumble_high {
+                self.rumble_low_at = Some(now);
+            }
+            self.rumble_high = false;
+            if self
+                .rumble_low_at
+                .is_some_and(|t| now.saturating_duration_since(t) >= RUMBLE_REARM)
+            {
+                self.rumble_armed = true;
+                self.rumble_peak = 0;
+            }
+            if self.rumble_on {
+                return self.write_motor(false);
+            }
+            return true;
+        }
+
+        self.rumble_high = true;
+        self.rumble_low_at = None;
+        if !self.rumble_armed
+            && strength > self.rumble_peak.saturating_add(RUMBLE_RISE)
+            && self
+                .rumble_at
+                .is_none_or(|t| now.saturating_duration_since(t) >= RUMBLE_ON_GAP)
+        {
+            self.rumble_armed = true;
+        }
+        self.rumble_peak = self.rumble_peak.max(strength);
+
+        if self.rumble_on {
+            if self
+                .rumble_at
+                .is_some_and(|t| now.saturating_duration_since(t) >= RUMBLE_ON_MAX)
+            {
+                return self.write_motor(false);
+            }
+            return true;
+        }
+        if !self.rumble_armed {
+            return true;
+        }
+        // Starting is debounced: a game that pulses the pack every frame must
+        // not block the emu thread on the sysfs attribute.
+        if self
+            .rumble_at
+            .is_some_and(|t| now.saturating_duration_since(t) < RUMBLE_ON_GAP)
+        {
+            return true;
+        }
+        self.rumble_armed = false;
+        self.write_motor(true)
+    }
+
+    /// The AXP2202 keeps the motor state across process restarts. Clear it
+    /// at launch so a killed run cannot leave the console buzzing.
+    fn reset_motor(&mut self) {
+        self.write_motor(false);
+    }
+
+    fn write_motor(&mut self, on: bool) -> bool {
         if self.moto.is_none() {
             self.moto = std::fs::OpenOptions::new()
                 .write(true)
@@ -482,17 +650,87 @@ impl Ctx {
             use std::io::Write;
             if f.write_all(if on { b"1" } else { b"0" }).is_ok() {
                 self.rumble_on = on;
+                self.rumble_at = Some(Instant::now());
                 return true;
             }
         }
         false
     }
+
+    /// RetroArch's audio driver blocks when its buffer is full, which is what
+    /// paces the emulator thread. MAGI's ALSA writer never blocks, so the
+    /// 2021 Flycast can run the emulated machine faster than real time. Block
+    /// the audio producer once it gets a few frames ahead of wall time.
+    fn pace_audio(&self, frames: usize) {
+        if frames == 0 {
+            return;
+        }
+        let rate = f64::from(self.audio_rate.load(Ordering::Relaxed).max(1));
+        let mut pacer = self.audio_pacer.lock().unwrap();
+        pacer.produced = pacer.produced.saturating_add(frames as u64);
+        let due = pacer.produced as f64 / rate;
+        let elapsed = pacer.start.elapsed().as_secs_f64();
+        // A menu or a paused core leaves the clock far behind. Re-anchor
+        // instead of letting the next frame produce a catch-up burst.
+        if elapsed > due + AUDIO_LEAD {
+            pacer.start = Instant::now();
+            pacer.produced = frames as u64;
+            return;
+        }
+        let ahead = due - elapsed;
+        if ahead > AUDIO_LEAD {
+            let sleep = Duration::from_secs_f64((ahead - AUDIO_LEAD).min(0.100));
+            self.audio_sleep_us
+                .fetch_add(sleep.as_micros() as u64, Ordering::Relaxed);
+            drop(pacer);
+            std::thread::sleep(sleep);
+        }
+    }
+
+    fn reset_audio_pacer(&self) {
+        let mut pacer = self.audio_pacer.lock().unwrap();
+        pacer.start = Instant::now();
+        pacer.produced = 0;
+    }
 }
 
 static CTX: AtomicPtr<Ctx> = AtomicPtr::new(std::ptr::null_mut());
+/// The old Flycast's threaded path only sends audio and applies its own
+/// frame limiter when the frontend reports that it is not fast-forwarding.
+static FASTFORWARD: AtomicBool = AtomicBool::new(false);
 
 fn ctx() -> &'static mut Ctx {
     unsafe { &mut *CTX.load(Ordering::Relaxed) }
+}
+
+/// The 2021 Flycast ARM64 dynarec saves only the low halves of d8-d15. When
+/// it runs on the caller's thread (threaded rendering off), a live f64 in
+/// one of those registers can come back as garbage. Save the full registers
+/// around the call.
+#[cfg(target_arch = "aarch64")]
+#[inline(never)]
+unsafe fn core_run(run: unsafe extern "C" fn()) {
+    unsafe {
+        core::arch::asm!(
+            "stp d8, d9, [sp, #-16]!",
+            "stp d10, d11, [sp, #-16]!",
+            "stp d12, d13, [sp, #-16]!",
+            "stp d14, d15, [sp, #-16]!",
+            "blr {run}",
+            "ldp d14, d15, [sp], #16",
+            "ldp d12, d13, [sp], #16",
+            "ldp d10, d11, [sp], #16",
+            "ldp d8, d9, [sp], #16",
+            run = in(reg) run,
+            clobber_abi("C"),
+        );
+    }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+#[inline(always)]
+unsafe fn core_run(run: unsafe extern "C" fn()) {
+    run();
 }
 
 /// How many disc images the core offers (0 for single-disc content).
@@ -549,6 +787,9 @@ unsafe extern "C" fn core_log(
         let tag = CStr::from_ptr(a).to_string_lossy();
         let msg = CStr::from_ptr(b).to_string_lossy();
         util::log(&format!("core {level} [{tag}] {msg}"));
+    } else if fmt == "%s" && !a.is_null() {
+        let msg = CStr::from_ptr(a).to_string_lossy();
+        util::log(&format!("core {level}: {}", msg.trim_end()));
     } else {
         util::log(&format!("core {level}: {fmt}"));
     }
@@ -577,6 +818,24 @@ extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
         ENV_SET_PIXEL_FORMAT => {
             if !data.is_null() {
                 ctx.pixfmt = unsafe { *(data as *const u32) };
+                return true;
+            }
+            false
+        }
+        ENV_SET_SYSTEM_AV_INFO => {
+            if !data.is_null() {
+                let av = unsafe { &*(data as *const SystemAvInfo) };
+                ctx.geometry = av.geometry;
+                if av.timing.fps > 1.0 {
+                    let milli = (av.timing.fps * 1000.0).round() as u32;
+                    if ctx.fps_milli.swap(milli, Ordering::Relaxed) != milli {
+                        util::log(&format!("video: timing {:.2} fps", av.timing.fps));
+                    }
+                }
+                if av.timing.sample_rate >= 8000.0 {
+                    ctx.audio_rate
+                        .store(av.timing.sample_rate as u32, Ordering::Relaxed);
+                }
                 return true;
             }
             false
@@ -610,6 +869,23 @@ extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
             false
         }
         ENV_GET_INPUT_BITMASKS => true,
+        ENV_GET_FASTFORWARDING => {
+            if !data.is_null() {
+                unsafe { *(data as *mut bool) = FASTFORWARD.load(Ordering::Relaxed) };
+                return true;
+            }
+            false
+        }
+        ENV_GET_CLEAR_ALL_THREAD_WAITS_CB => {
+            if data.is_null() {
+                return false;
+            }
+            type ClearWaitsFn = extern "C" fn(c_uint, *mut c_void) -> bool;
+            unsafe {
+                *(data as *mut Option<ClearWaitsFn>) = Some(clear_thread_waits_cb);
+            }
+            true
+        }
         ENV_GET_LOG_INTERFACE => {
             if data.is_null() {
                 return false;
@@ -676,7 +952,8 @@ extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
                             || key == "gambatte_gb_internal_palette"
                             || (ctx.system == "gb" && key == "gambatte_dark_filter_level"));
                     let visible = (option_kept(&desc)
-                        || (ctx.opt_key == "pokemini" && pokemini_option_kept(&desc)))
+                        || (ctx.opt_key == "pokemini" && pokemini_option_kept(&desc))
+                        || (ctx.opt_key == "flycast" && flycast_option_kept(&desc)))
                         && !hidden_palette
                         && !(ctx.system == "genesis" && genesis_option_hidden(&desc))
                         && !(ctx.opt_key == "mgba" && mgba_option_hidden(&desc));
@@ -705,6 +982,29 @@ extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
                 labels.join(", ")
             ));
             ctx.options = options;
+            if ctx.opt_key == "flycast" {
+                let picked: Vec<String> = ctx
+                    .options
+                    .iter()
+                    .filter(|o| {
+                        matches!(
+                            o.key.as_str(),
+                            "reicast_threaded_rendering"
+                                | "reicast_internal_resolution"
+                                | "reicast_render_to_texture_upscaling"
+                                | "reicast_alpha_sorting"
+                                | "reicast_frame_skipping"
+                                | "reicast_gdrom_fast_loading"
+                                | "reicast_synchronous_rendering"
+                                | "reicast_enable_purupuru"
+                        )
+                    })
+                    .map(|o| format!("{}={}", o.key, o.values[o.chosen]))
+                    .collect();
+                if !picked.is_empty() {
+                    util::log(&format!("core options: {}", picked.join(", ")));
+                }
+            }
             true
         }
         ENV_GET_VARIABLE => {
@@ -779,7 +1079,7 @@ extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
                 if gpu.is_null() {
                     return false;
                 }
-                let fbo = match unsafe { (&mut *gpu).hw_framebuffer(fw, fh) } {
+                let fbo = match unsafe { (&mut *gpu).hw_framebuffer(fw, fh, hw.stencil) } {
                     Ok(fbo) => fbo,
                     Err(e) => {
                         util::log(&format!("hw: {e}; software fallback"));
@@ -793,6 +1093,7 @@ extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
                     reset: hw.context_reset,
                     destroy: hw.context_destroy,
                     bottom_left: hw.bottom_left_origin,
+                    stencil: hw.stencil,
                 });
                 util::log(&format!(
                     "hw: GLES2 context accepted (depth {}, bottom-left {})",
@@ -831,17 +1132,42 @@ extern "C" fn video_cb(data: *const c_void, width: c_uint, height: c_uint, pitch
 
 extern "C" fn audio_sample_cb(left: i16, right: i16) {
     let ctx = ctx();
-    ctx.audio.push(left);
-    ctx.audio.push(right);
+    let mut audio = ctx.audio.lock().unwrap();
+    audio.push(left);
+    audio.push(right);
 }
 
 extern "C" fn audio_batch_cb(data: *const i16, frames: usize) -> usize {
     let ctx = ctx();
     if !data.is_null() {
         let slice = unsafe { std::slice::from_raw_parts(data, frames * 2) };
-        ctx.audio.extend_from_slice(slice);
+        ctx.audio.lock().unwrap().extend_from_slice(slice);
+        ctx.audio_samples
+            .fetch_add(frames as u64, Ordering::Relaxed);
+        if !FASTFORWARD.load(Ordering::Relaxed) {
+            ctx.pace_audio(frames);
+        }
     }
     frames
+}
+
+extern "C" fn clear_thread_waits_cb(_cmd: c_uint, _data: *mut c_void) -> bool {
+    // MAGI has no frontend-side thread waits; the core's own cancel is enough.
+    true
+}
+
+/// A d-pad pair as a full-scale analog axis: negative is the first bit,
+/// positive the second, both or neither is centred.
+fn dpad_axis(bits: u16, lo: u16, hi: u16) -> i16 {
+    let lo = bits & (1 << lo) != 0;
+    let hi = bits & (1 << hi) != 0;
+    if lo == hi {
+        0
+    } else if lo {
+        -0x7fff
+    } else {
+        0x7fff
+    }
 }
 
 extern "C" fn input_poll_cb() {}
@@ -852,11 +1178,36 @@ extern "C" fn input_state_cb(port: c_uint, device: c_uint, index: c_uint, id: c_
     }
     if device == RETRO_DEVICE_ANALOG {
         let ctx = ctx();
+        let (lx, ly) = (
+            ctx.left.0.load(Ordering::Relaxed),
+            ctx.left.1.load(Ordering::Relaxed),
+        );
+        let (dx, dy) = if ctx.analog_dpad.load(Ordering::Relaxed) {
+            let bits = ctx.bits.load(Ordering::Relaxed);
+            (
+                dpad_axis(bits, retro::LEFT, retro::RIGHT),
+                dpad_axis(bits, retro::UP, retro::DOWN),
+            )
+        } else {
+            (0, 0)
+        };
         let v = match (index, id) {
-            (0, ANALOG_X) => ctx.left.0,
-            (0, ANALOG_Y) => ctx.left.1,
-            (1, ANALOG_X) => ctx.right.0,
-            (1, ANALOG_Y) => ctx.right.1,
+            (0, ANALOG_X) => {
+                if lx != 0 {
+                    lx
+                } else {
+                    dx
+                }
+            }
+            (0, ANALOG_Y) => {
+                if ly != 0 {
+                    ly
+                } else {
+                    dy
+                }
+            }
+            (1, ANALOG_X) => ctx.right.0.load(Ordering::Relaxed),
+            (1, ANALOG_Y) => ctx.right.1.load(Ordering::Relaxed),
             _ => 0,
         };
         return if v.abs() < STICK_DEADZONE { 0 } else { v };
@@ -864,7 +1215,7 @@ extern "C" fn input_state_cb(port: c_uint, device: c_uint, index: c_uint, id: c_
     if device != RETRO_DEVICE_JOYPAD {
         return 0;
     }
-    let bits = ctx().bits;
+    let bits = ctx().bits.load(Ordering::Relaxed);
     if id == u32::from(retro::MASK) {
         // RETRO_DEVICE_ID_JOYPAD_MASK
         return bits as i16;
@@ -946,6 +1297,7 @@ fn log_bios(system_id: &str, dir: &Path) {
     let names: &[&str] = match system_id {
         "gba" => &["gba_bios.bin", "gba_bios.gba"],
         "psx" => &["scph5500.bin", "scph5501.bin", "scph5502.bin"],
+        "dc" => &["dc/dc_boot.bin", "dc/dc_flash.bin", "dc/dc_nvmem.bin"],
         "pce" => &[
             "syscard3.pce",
             "syscard3u.pce",
@@ -994,6 +1346,31 @@ impl Drop for GovernorGuard {
     }
 }
 
+/// The GPU devfreq minimum (H700: 420 MHz idle, 648 MHz top) for the
+/// hardware-rendered core.
+#[cfg(target_os = "linux")]
+struct GpuGovernorGuard(Option<String>);
+
+#[cfg(target_os = "linux")]
+impl GpuGovernorGuard {
+    fn new(performance: bool) -> Self {
+        Self(if performance {
+            util::set_gpu_min_freq_max()
+        } else {
+            None
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for GpuGovernorGuard {
+    fn drop(&mut self) {
+        if let Some(previous) = self.0.take() {
+            util::restore_gpu_min_freq(&previous);
+        }
+    }
+}
+
 /// Next frame deadline and how long to wait first. A short overrun keeps the
 /// clock so the following frames catch up; a real stall re-anchors instead of
 /// replaying a burst of frames.
@@ -1018,6 +1395,14 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     if swap_ab {
         util::log("input: A/B swapped");
     }
+    let swap_l1r1 = load_swap_l1r1(system_id);
+    if swap_l1r1 {
+        util::log("input: L1/R1 swapped");
+    }
+    let analog_dpad = (system_id == "psx" || system_id == "dc") && load_analog_dpad(system_id);
+    if analog_dpad {
+        util::log("input: d-pad as left analog stick");
+    }
     if !disp.shader.supported(system_id) {
         disp.shader = ShaderMode::Off;
     }
@@ -1030,6 +1415,8 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     util::hdmi_init();
     #[cfg(target_os = "linux")]
     let _governor = GovernorGuard::new(needs_performance(system_id));
+    #[cfg(target_os = "linux")]
+    let _gpu_governor = GpuGovernorGuard::new(system_id == "dc");
 
     let catalogue = Catalogue::load(Path::new("."));
     let folder = catalogue
@@ -1045,6 +1432,9 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         .unwrap_or_else(|_| Path::new("BIOS").to_path_buf());
     if system_id == "gba" {
         ensure_gba_bios(&bios_dir);
+    }
+    if system_id == "dc" {
+        let _ = std::fs::create_dir_all(bios_dir.join("dc"));
     }
     log_bios(system_id, &bios_dir);
     let system_dir = bios_dir.to_string_lossy().into_owned();
@@ -1157,10 +1547,19 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         frame: std::ptr::null(),
         frame_seq: 0,
         pitch: 0,
-        bits: 0,
-        left: (0, 0),
-        right: (0, 0),
-        audio: Vec::new(),
+        bits: AtomicU16::new(0),
+        analog_dpad: AtomicBool::new(false),
+        left: (AtomicI16::new(0), AtomicI16::new(0)),
+        right: (AtomicI16::new(0), AtomicI16::new(0)),
+        audio: Mutex::new(Vec::new()),
+        audio_rate: AtomicU32::new(44100),
+        fps_milli: AtomicU32::new(0),
+        audio_pacer: Mutex::new(AudioPacer {
+            start: Instant::now(),
+            produced: 0,
+        }),
+        audio_samples: AtomicU64::new(0),
+        audio_sleep_us: AtomicU64::new(0),
         save_dir: CString::new(save_dir.as_str()).unwrap(),
         system_dir: CString::new(system_dir.as_str()).unwrap(),
         shutdown: false,
@@ -1168,6 +1567,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         ser_size: serialize_size,
         ser: serialize,
         unser: unserialize,
+        state_size: 0,
         options: Vec::new(),
         opt_key: core_name.to_string(),
         opt_dirty: false,
@@ -1176,10 +1576,16 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         overlay_dirty: false,
         moto: None,
         rumble_on: false,
+        rumble_at: None,
+        rumble_high: false,
+        rumble_peak: 0,
+        rumble_low_at: None,
+        rumble_armed: true,
         rumble_ok: true,
         disk: None,
         system: system_id.to_string(),
         rom: rom.to_string(),
+        core_version: String::new(),
         netplay: None,
         netplay_linked: false,
         lcd_accurate,
@@ -1208,11 +1614,13 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         block_extract: false,
     };
     unsafe { get_system_info(&mut info) };
+    let library_version = cstr(info.library_version).to_string();
     util::log(&format!(
         "core: {} {}",
         cstr(info.library_name),
-        cstr(info.library_version)
+        library_version
     ));
+    ctx().core_version = library_version;
 
     // Cores that do not need a full path read the ROM from memory; handing
     // them a null buffer makes them refuse the game (gambatte does).
@@ -1275,6 +1683,19 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         }
     }
 
+    // Input sticks must be known before the core loads: Flycast registers its
+    // option list there, and the analog deadzones only appear when a real
+    // stick is attached.
+    #[cfg(target_os = "linux")]
+    let mut evdev = Evdev::open();
+    #[cfg(target_os = "linux")]
+    let analog_pad = pads.has_stick() || evdev.has_stick() || analog_dpad;
+    #[cfg(not(target_os = "linux"))]
+    let analog_pad = pads.has_stick() || analog_dpad;
+    if analog_pad {
+        reveal_analog_options();
+    }
+
     let rom_c = CString::new(rom).unwrap();
     let game = GameInfo {
         path: rom_c.as_ptr(),
@@ -1310,6 +1731,11 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         "video: {}x{} @ {:.2} fps; audio {} Hz",
         av.geometry.base_width, av.geometry.base_height, fps, sample_rate
     ));
+    ctx().audio_rate.store(sample_rate, Ordering::Relaxed);
+    ctx()
+        .fps_milli
+        .store((fps * 1000.0).round() as u32, Ordering::Relaxed);
+    ctx().reset_audio_pacer();
 
     // A core that took the hardware path draws into an FBO the size of its
     // base geometry. `context_reset` is only safe after `retro_load_game`
@@ -1319,6 +1745,10 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     #[cfg(target_os = "linux")]
     let hw_flip = ctx().hw_render.as_ref().is_some_and(|hw| hw.bottom_left);
     #[cfg(target_os = "linux")]
+    let hw_stencil = ctx().hw_render.as_ref().is_some_and(|hw| hw.stencil);
+    #[cfg(not(target_os = "linux"))]
+    let hw_render = false;
+    #[cfg(target_os = "linux")]
     if hw_render {
         let (fw, fh) = (
             av.geometry.base_width.max(1),
@@ -1327,7 +1757,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         let Some(g) = gpu.as_mut() else {
             bail!("hardware render without a GL context");
         };
-        let fbo = match g.hw_framebuffer(fw, fh) {
+        let fbo = match g.hw_framebuffer(fw, fh, hw_stencil) {
             Ok(fbo) => fbo,
             Err(e) => {
                 util::log(&format!("hw: {e}"));
@@ -1356,13 +1786,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     }
 
     #[cfg(target_os = "linux")]
-    let mut evdev = Evdev::open();
-    #[cfg(target_os = "linux")]
     let mut lid = crate::util::LidWatch::new();
-    #[cfg(target_os = "linux")]
-    let analog_pad = pads.has_stick() || evdev.has_stick();
-    #[cfg(not(target_os = "linux"))]
-    let analog_pad = pads.has_stick();
     // Beetle PCE only reads the joypad after the frontend selects it for
     // the port; it defaults to no device and otherwise ignores all input.
     if system_id == "pce" {
@@ -1408,6 +1832,8 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         gpu.set_shader(disp.shader.as_u8());
     }
     ctx().rumble_ok = disp.rumble;
+    ctx().analog_dpad.store(analog_dpad, Ordering::Relaxed);
+    ctx().reset_motor();
     crate::theme::load_user_themes(std::path::Path::new(crate::systems::DIR_THEMES));
     crate::theme::set_theme_index(disp.theme);
     crate::theme::set_bg_style(disp.background);
@@ -1437,8 +1863,10 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     let mut r2_down = false;
     let mut l2_down = false;
     // PS1 games need L2/R2 themselves; the frontend's rewind and FF then
-    // move under SELECT (SELECT+L2 / SELECT+R2).
+    // move under SELECT (SELECT+L2 / SELECT+R2). Dreamcast's core reads its
+    // triggers from L2/R2, so the handheld puts them on L1/R1 instead.
     let game_l2_r2 = needs_l2_r2(system_id);
+    let triggers_l1r1 = system_id == "dc";
     let mut menu_hold_t0: Option<Instant> = None;
     let mut menu_close_pending = false;
     let mut menu_tl2_down = false;
@@ -1452,6 +1880,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     let mut auto_hold: Option<(std::path::PathBuf, Instant)> = None;
     let mut a_down = false;
     let ser_size = unsafe { (ctx().ser_size)() };
+    ctx().state_size = ser_size;
     let mut rewind_ok = rewind_allowed(system_id, ser_size);
     if !rewind_ok {
         if system_id == "psx" {
@@ -1580,11 +2009,13 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     let mut take_shot = false;
     let mut osd = Osd::new();
     let mut pad = PadState::default();
-    let analog_core = system_id == "psx" && analog_pad;
+    let analog_core = (system_id == "psx" || system_id == "dc") && analog_pad;
     pad.analog = analog_core;
     let mut last_sram_flush = Instant::now();
-    let fps_dt = Duration::from_secs_f64(1.0 / fps);
+    let mut fps_dt = Duration::from_secs_f64(1.0 / fps);
+    let mut loop_fps = fps;
     let mut deadline = Instant::now() + fps_dt;
+    FASTFORWARD.store(false, Ordering::Relaxed);
     let mut frames = 0u32;
     let mut core_frames = 0u64;
     let mut work_total = Duration::ZERO;
@@ -1597,6 +2028,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     let mut t_pres = Duration::ZERO;
     let mut t_rew = Duration::ZERO;
     let mut last_report = Instant::now();
+    let mut last_slow_log = Instant::now();
     let mut last_start = Instant::now();
     let mut worst_gap = Duration::ZERO;
     let mut worst_work = Duration::ZERO;
@@ -1624,6 +2056,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
             .ok();
     }
 
+    ctx().reset_audio_pacer();
     util::log("game loop up");
     let play_t0 = Instant::now();
 
@@ -1631,6 +2064,16 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         if ctx().shutdown {
             util::log("core requested shutdown");
             break;
+        }
+        // The core re-reports the real refresh rate after the game sets its
+        // video mode. A PAL title is 50 Hz, and pacing it at the load-time
+        // 59.83 Hz leaves the audio ring fighting the frame clock.
+        let core_fps = f64::from(ctx().fps_milli.load(Ordering::Relaxed)) / 1000.0;
+        if core_fps > 1.0 && (core_fps - loop_fps).abs() > 0.005 {
+            loop_fps = core_fps;
+            fps_dt = Duration::from_secs_f64(1.0 / core_fps);
+            deadline = Instant::now() + fps_dt;
+            util::log(&format!("video: pacing {core_fps:.2} fps"));
         }
 
         // The lid has no input events on this kernel; its hallkey attribute
@@ -2033,9 +2476,14 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
             }
         }
 
-        ctx().bits = core_pad_bits(pad.bits, game_l2_r2, swap_ab);
-        ctx().left = pad.left;
-        ctx().right = pad.right;
+        ctx().bits.store(
+            core_pad_bits(pad.bits, game_l2_r2, swap_ab, triggers_l1r1, swap_l1r1),
+            Ordering::Relaxed,
+        );
+        ctx().left.0.store(pad.left.0, Ordering::Relaxed);
+        ctx().left.1.store(pad.left.1, Ordering::Relaxed);
+        ctx().right.0.store(pad.right.0, Ordering::Relaxed);
+        ctx().right.1.store(pad.right.1, Ordering::Relaxed);
 
         // A held SELECT + d-pad keeps repeating its adjustment; letting go
         // of either ends the gesture and persists the new level.
@@ -2318,6 +2766,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         last_start = started;
         let mut rew_dt = Duration::ZERO;
         let ff = !ctx().netplay_linked && (ff_latch || ff_key);
+        FASTFORWARD.store(ff, Ordering::Relaxed);
         let rewinding = !ctx().netplay_linked
             && rewind_ok
             && !ff
@@ -2329,8 +2778,8 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         if rewinding {
             if let Some(snap) = rewind_ring.pop_back() {
                 if unsafe { (ctx().unser)(snap.as_ptr() as *const c_void, snap.len()) } {
-                    unsafe { retro_run() }; // re-render the restored frame
-                    ctx().audio.clear(); // no scrub noise
+                    unsafe { core_run(retro_run) }; // re-render the restored frame
+                    ctx().audio.lock().unwrap().clear(); // no scrub noise
                 } else {
                     util::log("rewind: state rejected; buffer cleared");
                     rewind_ring.clear();
@@ -2339,18 +2788,18 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                 }
             }
         } else {
-            unsafe { retro_run() };
+            unsafe { core_run(retro_run) };
             if ff {
                 // The extra frames run headless: no video (the last frame is
                 // the one presented); audio keeps playing only if FF SOUND is on.
                 for _ in 1..ff_steps {
                     if !ff_sound {
-                        ctx().audio.clear();
+                        ctx().audio.lock().unwrap().clear();
                     }
-                    unsafe { retro_run() };
+                    unsafe { core_run(retro_run) };
                 }
                 if !ff_sound {
-                    ctx().audio.clear();
+                    ctx().audio.lock().unwrap().clear();
                 }
             }
             if rewind_ok && !ff && core_frames >= rewind_next {
@@ -2604,7 +3053,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         let t = Instant::now();
         #[cfg(target_os = "linux")]
         {
-            let mut samples = std::mem::take(&mut ctx.audio);
+            let mut samples = std::mem::take(&mut *ctx.audio.lock().unwrap());
             apply_gain(&mut samples, gain_pct);
             resampler.process(&samples, &mut audio_out);
             let level = audio.push(&audio_out);
@@ -2616,7 +3065,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
             resampler.set_ratio(1.0 - 0.03 * err);
         }
         #[cfg(not(target_os = "linux"))]
-        ctx.audio.clear();
+        ctx.audio.lock().unwrap().clear();
         t_aud += t.elapsed();
 
         let t = Instant::now();
@@ -2682,6 +3131,19 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         t_pres += pres;
         pres_ms = pres_ms * 0.9 + pres.as_secs_f64() * 1000.0;
         let work = started.elapsed();
+        if hw_render
+            && work > Duration::from_secs(1)
+            && last_slow_log.elapsed() >= Duration::from_secs(5)
+        {
+            last_slow_log = Instant::now();
+            util::log(&format!(
+                "hw: slow frame {:.2} s (present {:.2} s, {}x{})",
+                work.as_secs_f64(),
+                pres.as_secs_f64(),
+                ctx.geometry.base_width,
+                ctx.geometry.base_height
+            ));
+        }
         t_core += work - rew_dt;
         frames += 1;
         core_frames += 1;
@@ -2701,12 +3163,17 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
             }
         }
 
-        // Frame-clock pacing. When the pan blocks on vsync (~16 ms of
-        // present), sleeping to a free-running deadline periodically lands
-        // just past a vsync and drops a whole frame (the GBA/GBC stutter).
-        // At ~60 fps the present is then the clock; PAL rates still sleep.
+        // Frame-clock pacing. When the present really blocks on vsync
+        // (~one frame period), sleeping to a free-running deadline
+        // periodically lands just past a vsync and drops a whole frame (the
+        // GBA/GBC stutter). A present that merely waits for the GPU is much
+        // shorter; treating that as vsync lets the loop run past 60 Hz and
+        // makes threaded cores run fast. PAL rates still sleep.
         let now = Instant::now();
-        let vsync_paced = pres_ms > 8.0 && fps_dt < Duration::from_micros(17_240);
+        let frame_ms = fps_dt.as_secs_f64() * 1000.0;
+        let vsync_paced = fps_dt < Duration::from_micros(17_240)
+            && pres_ms >= frame_ms * 0.95
+            && pres.as_secs_f64() * 1000.0 >= frame_ms * 0.95;
         if vsync_paced {
             deadline = now + fps_dt;
         } else {
@@ -2719,10 +3186,14 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
 
         if last_report.elapsed() >= Duration::from_secs(5) {
             let secs = last_report.elapsed().as_secs_f64();
+            let audio_frames = ctx.audio_samples.swap(0, Ordering::Relaxed);
+            let audio_rate = f64::from(ctx.audio_rate.load(Ordering::Relaxed).max(1));
+            let emu = audio_frames as f64 / audio_rate / secs.max(0.001);
+            let paced_ms = ctx.audio_sleep_us.swap(0, Ordering::Relaxed) as f64 / 1000.0;
             let f = frames.max(1) as f64;
             let ms = |d: Duration| d.as_secs_f64() * 1000.0 / f;
             util::log(&format!(
-                "fps {:.1}, frame {:.1} ms (worst {:.1}, wframe {:.1}) | core {:.1} blit {:.1} ovl {:.1} hud {:.1} aud {:.1} pres {:.1} rew {:.1} ring {:.2} late {}",
+                "fps {:.1}, frame {:.1} ms (worst {:.1}, wframe {:.1}) | core {:.1} blit {:.1} ovl {:.1} hud {:.1} aud {:.1} pres {:.1} rew {:.1} ring {:.2} late {} frames {} secs {:.2} emu {:.2}x paced {:.0}ms ff {}",
                 frames as f64 / secs,
                 work_total.as_secs_f64() * 1000.0 / f,
                 worst_gap.as_secs_f64() * 1000.0,
@@ -2735,7 +3206,12 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                 ms(t_pres),
                 ms(t_rew),
                 min_level,
-                late_frames
+                late_frames,
+                frames,
+                secs,
+                emu,
+                paced_ms,
+                ff
             ));
             frames = 0;
             work_total = Duration::ZERO;
@@ -2776,7 +3252,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         drop(hw_game.take());
     }
     save_display_prefs(system_id, &disp);
-    ctx().set_rumble(false);
+    ctx().set_rumble(0);
     save_runtime_volume(gain_pct);
     // Hand the mixer back to the user's level: the ports and the shelf play
     // through ALSA directly.
@@ -2950,6 +3426,47 @@ fn pokemini_option_kept(desc: &str) -> bool {
     .any(|k| d.contains(k))
 }
 
+/// Flycast's curated options. VMU, light gun, NAOMI, HDR, orientation and
+/// texture-upscaling rows stay hidden. The two analog deadzones are added
+/// after a stick is detected, since the option list is registered first.
+fn flycast_option_kept(desc: &str) -> bool {
+    let d = desc.to_ascii_lowercase();
+    [
+        "region",
+        "language",
+        "use real bios",
+        "hle bios",
+        "threaded rendering",
+        "force windows ce mode",
+        "cable type",
+        "alpha sorting",
+        "frame skipping",
+        "digital triggers",
+        "purupuru",
+    ]
+    .iter()
+    .any(|k| d.contains(k))
+}
+
+/// The core registers its options before input devices are opened. If a real
+/// stick is attached, put the two deadzone rows back into the CORE menu.
+fn reveal_analog_options() {
+    let ctx = ctx();
+    if ctx.opt_key != "flycast" {
+        return;
+    }
+    let mut shown = false;
+    for o in &mut ctx.options {
+        if o.key == "reicast_analog_stick_deadzone" || o.key == "reicast_trigger_deadzone" {
+            o.visible = true;
+            shown = true;
+        }
+    }
+    if shown {
+        util::log("core options: analog stick rows shown");
+    }
+}
+
 /// True when this press completes a double tap (and then starts fresh).
 fn double_tap(last: &mut Option<Instant>, now: Instant, window: Duration) -> bool {
     match *last {
@@ -2964,8 +3481,9 @@ fn double_tap(last: &mut Option<Instant>, now: Instant, window: Duration) -> boo
     }
 }
 
-/// True when the game owns the shoulder triggers and the frontend's
-/// rewind/FF live under SELECT instead.
+/// True when the game owns L2/R2 and the frontend's rewind/FF live under
+/// SELECT instead. Dreamcast triggers are moved to L1/R1, so only PS1 keeps
+/// L2/R2.
 fn needs_l2_r2(system_id: &str) -> bool {
     system_id == "psx"
 }
@@ -2973,13 +3491,46 @@ fn needs_l2_r2(system_id: &str) -> bool {
 /// L2/R2 are rewind and fast-forward unless the core owns those buttons.
 /// Keep them out of the core's joypad mask there: mGBA maps them to Turbo
 /// L/R, so pressing R2 to fast-forward would also pull the GBA's R button.
-/// SWAP A/B exchanges the two buttons the emulated console sees; the
-/// frontend's own A/B confirmation stays as it is.
-fn core_pad_bits(bits: u16, game_l2_r2: bool, swap_ab: bool) -> u16 {
-    let mut bits = if game_l2_r2 {
-        bits
+/// Dreamcast reports its triggers on L2/R2, so move the handheld's L1/R1
+/// bits there and leave L2/R2 for the frontend. SWAP A/B exchanges the two
+/// buttons the emulated console sees; the frontend's own A/B confirmation
+/// stays as it is.
+fn core_pad_bits(
+    bits: u16,
+    game_l2_r2: bool,
+    swap_ab: bool,
+    triggers_l1r1: bool,
+    swap_l1r1: bool,
+) -> u16 {
+    let mut bits = if triggers_l1r1 {
+        let mut l = bits & (1 << retro::L) != 0;
+        let mut r = bits & (1 << retro::R) != 0;
+        if swap_l1r1 {
+            std::mem::swap(&mut l, &mut r);
+        }
+        let mut out =
+            bits & !((1 << retro::L) | (1 << retro::R) | (1 << retro::L2) | (1 << retro::R2));
+        if l {
+            out |= 1 << retro::L2;
+        }
+        if r {
+            out |= 1 << retro::R2;
+        }
+        out
     } else {
-        bits & !((1 << retro::L2) | (1 << retro::R2))
+        let mut out = if game_l2_r2 {
+            bits
+        } else {
+            bits & !((1 << retro::L2) | (1 << retro::R2))
+        };
+        if swap_l1r1 {
+            let l = out & (1 << retro::L) != 0;
+            let r = out & (1 << retro::R) != 0;
+            if l != r {
+                out ^= (1 << retro::L) | (1 << retro::R);
+            }
+        }
+        out
     };
     if swap_ab {
         let a = bits & (1 << retro::A) != 0;
@@ -2993,16 +3544,16 @@ fn core_pad_bits(bits: u16, game_l2_r2: bool, swap_ab: bool) -> u16 {
 
 /// Cores that still need the performance governor after GPU presentation.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-/// PS1 keeps the performance governor; Genesis and PCE run on schedutil and
-/// ramp only when they need to.
+/// PS1 and Dreamcast keep the performance governor; Genesis and PCE run on
+/// schedutil and ramp only when they need to.
 fn needs_performance(system_id: &str) -> bool {
-    system_id == "psx"
+    matches!(system_id, "psx" | "dc")
 }
 
 /// Rewind is off for the heavy cores and for any state too large to snapshot
 /// without stalling the frame loop.
 fn rewind_allowed(system_id: &str, ser_size: usize) -> bool {
-    system_id != "psx" && ser_size > 0 && ser_size <= REWIND_MAX_STATE
+    !matches!(system_id, "psx" | "dc") && ser_size > 0 && ser_size <= REWIND_MAX_STATE
 }
 
 /// Live on-screen counters: frames per second and a once-a-second system
@@ -3179,6 +3730,14 @@ fn state_thumb_path(path: &Path) -> std::path::PathBuf {
     std::path::PathBuf::from(name)
 }
 
+/// The core version that wrote a state. Cores serialize differently: loading
+/// another core's state can crash the core, and does with the 2021 Flycast.
+fn state_meta_path(path: &Path) -> std::path::PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".core");
+    std::path::PathBuf::from(name)
+}
+
 /// Capture the current game frame as a small PNG beside a state.
 fn save_state_thumb(path: &Path) {
     let ctx = ctx();
@@ -3278,12 +3837,13 @@ fn unpack_state(bytes: Vec<u8>) -> std::io::Result<Vec<u8>> {
 
 /// Serialize into a file; `None` means the core cannot save at all.
 fn save_state_to(path: &Path) -> Option<bool> {
-    let size = unsafe { (ctx().ser_size)() };
+    let size = ctx().state_size;
     if size == 0 {
         return None;
     }
     let t0 = Instant::now();
     let mut buf = vec![0u8; size];
+    util::log(&format!("state save: begin {} bytes", size));
     let ok = unsafe { (ctx().ser)(buf.as_mut_ptr() as *mut c_void, size) };
     let ser_ms = t0.elapsed().as_secs_f64() * 1000.0;
     if !ok {
@@ -3297,6 +3857,10 @@ fn save_state_to(path: &Path) -> Option<bool> {
     match util::write_file_atomic(path, &data) {
         Ok(()) => {
             let write_ms = t1.elapsed().as_secs_f64() * 1000.0;
+            let meta = state_meta_path(path);
+            if let Err(e) = util::write_file_atomic(&meta, ctx().core_version.as_bytes()) {
+                util::log(&format!("state version tag: {}: {e}", meta.display()));
+            }
             save_state_thumb(path);
             util::log(&format!(
                 "state saved: {} ({} -> {} bytes{}, serialize {:.1} ms, pack {:.1} ms, write {:.1} ms)",
@@ -3318,6 +3882,26 @@ fn save_state_to(path: &Path) -> Option<bool> {
 }
 
 fn load_state_from(path: &Path) -> std::io::Result<bool> {
+    let meta = state_meta_path(path);
+    match std::fs::read_to_string(&meta) {
+        Ok(v) if v.trim() == ctx().core_version.as_str() => {}
+        Ok(v) => {
+            util::log(&format!(
+                "state: {} written by core {}; this is {}",
+                path.display(),
+                v.trim(),
+                ctx().core_version
+            ));
+            return Ok(false);
+        }
+        Err(_) => {
+            util::log(&format!(
+                "state: {} has no core tag; not loading",
+                path.display()
+            ));
+            return Ok(false);
+        }
+    }
     let buf = unpack_state(std::fs::read(path)?)?;
     Ok(unsafe { (ctx().unser)(buf.as_ptr() as *const c_void, buf.len()) })
 }
@@ -3325,7 +3909,7 @@ fn load_state_from(path: &Path) -> std::io::Result<bool> {
 /// Push a fresh snapshot into the rewind ring, dropping the oldest states
 /// once the memory budget is exceeded.
 fn push_rewind(ring: &mut VecDeque<Vec<u8>>, bytes: &mut usize) {
-    let size = unsafe { (ctx().ser_size)() };
+    let size = ctx().state_size;
     if size == 0 {
         return;
     }
@@ -4240,11 +4824,142 @@ mod option_tests {
             Some("enabled")
         );
     }
+
+    #[test]
+    fn flycast_ships_a_curated_option_set() {
+        for label in [
+            "Region",
+            "Language",
+            "Use Real BIOS",
+            "HLE BIOS",
+            "Threaded Rendering",
+            "Force Windows CE Mode",
+            "Cable Type",
+            "Alpha Sorting",
+            "Frame Skipping",
+            "Digital Triggers",
+            "Purupuru Pack/Vibration Pack",
+        ] {
+            assert!(super::flycast_option_kept(label), "{label}");
+        }
+        for label in [
+            "Screen Orientation",
+            "Internal Resolution",
+            "GD-ROM Fast Loading",
+            "GDROM Fast Loading (inaccurate)",
+            "Per-Game VMUs",
+            "VMU Screen 1 Display",
+            "Analog Stick Deadzone",
+            "Trigger Deadzone",
+            "Gun Crosshair 1 Display",
+            "Anisotropic Filtering",
+            "Texture Upscaling (xBRZ)",
+        ] {
+            assert!(!super::flycast_option_kept(label), "{label}");
+        }
+        assert_eq!(
+            default_option("flycast", "dc", "reicast_digital_triggers"),
+            Some("enabled")
+        );
+        assert_eq!(
+            default_option("flycast", "dc", "reicast_enable_dsp"),
+            Some("disabled")
+        );
+        assert_eq!(
+            default_option("flycast", "dc", "reicast_synchronous_rendering"),
+            Some("enabled")
+        );
+        assert_eq!(
+            default_option("flycast", "dc", "reicast_gdrom_fast_loading"),
+            Some("disabled")
+        );
+        assert_eq!(
+            default_option("flycast", "dc", "reicast_alpha_sorting"),
+            Some("per-strip (fast, least accurate)")
+        );
+        assert_eq!(
+            default_option("flycast", "dc", "reicast_enable_purupuru"),
+            Some("disabled")
+        );
+    }
+
+    #[test]
+    fn flycast_stays_at_native_resolution() {
+        let values: Vec<String> = ["1x", "2x", "4x", "8x"]
+            .iter()
+            .map(|v| (*v).to_string())
+            .collect();
+        let saved = "8x".to_string();
+        assert_eq!(
+            super::chosen_index(
+                "flycast",
+                "dc",
+                "reicast_internal_resolution",
+                &values,
+                Some(&saved),
+                false
+            ),
+            0
+        );
+        assert_eq!(
+            super::chosen_index(
+                "flycast",
+                "dc",
+                "reicast_render_to_texture_upscaling",
+                &values,
+                Some(&saved),
+                false
+            ),
+            0
+        );
+
+        let fast = ["enabled", "disabled"].map(str::to_string);
+        assert_eq!(
+            super::chosen_index(
+                "flycast",
+                "dc",
+                "reicast_gdrom_fast_loading",
+                &fast,
+                Some(&"enabled".to_string()),
+                false
+            ),
+            1
+        );
+
+        let old: Vec<String> = ["320x240", "640x480", "800x600"]
+            .iter()
+            .map(|v| (*v).to_string())
+            .collect();
+        let old_saved = "800x600".to_string();
+        assert_eq!(
+            super::chosen_index(
+                "flycast",
+                "dc",
+                "reicast_internal_resolution",
+                &old,
+                Some(&old_saved),
+                false
+            ),
+            1
+        );
+        let sync = ["disabled", "enabled"].map(str::to_string);
+        assert_eq!(
+            super::chosen_index(
+                "flycast",
+                "dc",
+                "reicast_synchronous_rendering",
+                &sync,
+                Some(&"disabled".to_string()),
+                false
+            ),
+            1
+        );
+    }
 }
 
 #[cfg(test)]
 mod key_mode_tests {
-    use super::{needs_performance, rewind_allowed, REWIND_MAX_STATE};
+    use super::{needs_l2_r2, needs_performance, rewind_allowed, REWIND_MAX_STATE};
 
     #[test]
     fn light_systems_stay_on_schedutil() {
@@ -4254,14 +4969,23 @@ mod key_mode_tests {
             assert!(!needs_performance(system), "{system}");
         }
         assert!(needs_performance("psx"));
+        assert!(needs_performance("dc"));
     }
 
     #[test]
-    fn rewind_is_off_for_psx_and_large_states() {
+    fn rewind_is_off_for_psx_dreamcast_and_large_states() {
         assert!(!rewind_allowed("psx", 1 << 20));
+        assert!(!rewind_allowed("dc", 1 << 20));
         assert!(rewind_allowed("gba", 1 << 20));
         assert!(!rewind_allowed("gba", REWIND_MAX_STATE + 1));
         assert!(!rewind_allowed("gba", 0));
+    }
+
+    #[test]
+    fn only_psx_keeps_l2_r2_from_the_frontend() {
+        assert!(needs_l2_r2("psx"));
+        assert!(!needs_l2_r2("dc"));
+        assert!(!needs_l2_r2("snes"));
     }
 }
 
@@ -4274,6 +4998,15 @@ mod pad_tests {
         RawEvent {
             dev: 0,
             type_: ev::EV_ABS,
+            code,
+            value,
+        }
+    }
+
+    fn key(code: u16, value: i32) -> RawEvent {
+        RawEvent {
+            dev: 0,
+            type_: ev::EV_KEY,
             code,
             value,
         }
@@ -4292,6 +5025,19 @@ mod pad_tests {
     }
 
     #[test]
+    fn dpad_becomes_a_full_analog_axis() {
+        let left = 1 << retro::LEFT;
+        let right = 1 << retro::RIGHT;
+        let up = 1 << retro::UP;
+        let down = 1 << retro::DOWN;
+        assert_eq!(super::dpad_axis(left, retro::LEFT, retro::RIGHT), -0x7fff);
+        assert_eq!(super::dpad_axis(right, retro::LEFT, retro::RIGHT), 0x7fff);
+        assert_eq!(super::dpad_axis(left | right, retro::LEFT, retro::RIGHT), 0);
+        assert_eq!(super::dpad_axis(up, retro::UP, retro::DOWN), -0x7fff);
+        assert_eq!(super::dpad_axis(down, retro::UP, retro::DOWN), 0x7fff);
+    }
+
+    #[test]
     fn psx_dualshock_is_analog_subclass_one() {
         assert_eq!(
             super::RETRO_DEVICE_PSE_DUALSHOCK,
@@ -4304,19 +5050,49 @@ mod pad_tests {
     fn frontend_triggers_stay_out_of_the_core() {
         let triggers = (1 << retro::L2) | (1 << retro::R2);
         let bits = triggers | (1 << retro::A);
-        assert_eq!(super::core_pad_bits(bits, false, false), 1 << retro::A);
-        assert_eq!(super::core_pad_bits(bits, true, false), bits);
+        assert_eq!(
+            super::core_pad_bits(bits, false, false, false, false),
+            1 << retro::A
+        );
+        assert_eq!(super::core_pad_bits(bits, true, false, false, false), bits);
+    }
+
+    #[test]
+    fn dreamcast_triggers_move_to_l1_r1() {
+        let mut pad = PadState::default();
+        pad.apply(&key(ev::BTN_WEST, 1));
+        pad.apply(&key(ev::BTN_Z, 1));
+        let bits = super::core_pad_bits(pad.bits, false, false, true, false);
+        assert_ne!(bits & (1 << retro::L2), 0);
+        assert_ne!(bits & (1 << retro::R2), 0);
+        assert_eq!(bits & ((1 << retro::L) | (1 << retro::R)), 0);
+
+        // Physical L2/R2 belong to the frontend on Dreamcast.
+        let l2 = 1 << retro::L2;
+        let r2 = 1 << retro::R2;
+        assert_eq!(super::core_pad_bits(l2 | r2, false, false, true, false), 0);
+
+        // The optional swap exchanges the two triggers.
+        let left = super::core_pad_bits(1 << retro::L, false, false, true, true);
+        assert_ne!(left & (1 << retro::R2), 0);
+        assert_eq!(left & (1 << retro::L2), 0);
+        let right = super::core_pad_bits(1 << retro::R, false, false, true, true);
+        assert_ne!(right & (1 << retro::L2), 0);
+        assert_eq!(right & (1 << retro::R2), 0);
     }
 
     #[test]
     fn ab_swap_only_moves_the_pressed_button() {
         let a = 1 << retro::A;
         let b = 1 << retro::B;
-        assert_eq!(super::core_pad_bits(a, false, true), b);
-        assert_eq!(super::core_pad_bits(b, false, true), a);
-        assert_eq!(super::core_pad_bits(a | b, false, true), a | b);
-        assert_eq!(super::core_pad_bits(0, false, true), 0);
-        assert_eq!(super::core_pad_bits(a, false, false), a);
+        assert_eq!(super::core_pad_bits(a, false, true, false, false), b);
+        assert_eq!(super::core_pad_bits(b, false, true, false, false), a);
+        assert_eq!(
+            super::core_pad_bits(a | b, false, true, false, false),
+            a | b
+        );
+        assert_eq!(super::core_pad_bits(0, false, true, false, false), 0);
+        assert_eq!(super::core_pad_bits(a, false, false, false, false), a);
     }
 }
 

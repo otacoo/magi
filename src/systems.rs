@@ -145,7 +145,7 @@ mod tests {
         let s = builtin();
         assert!(s.len() >= 5);
         for id in [
-            "gb", "gbc", "gba", "nes", "snes", "genesis", "psx", "ngp", "pce", "pokemini",
+            "gb", "gbc", "gba", "nes", "snes", "genesis", "psx", "ngp", "pce", "pokemini", "dc",
         ] {
             assert!(s.iter().any(|d| d.id == id), "missing {id}");
         }

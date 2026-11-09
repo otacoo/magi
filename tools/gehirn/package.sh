@@ -98,7 +98,7 @@ fi
 
 cat > "$OUT/Games/README.txt" <<'EOF'
 Games, one folder per console: GB, GBC, GBA, NES, SNES, GENESIS, PS1,
-NGPC, POKEMINI, PCE, ...
+DC, NGPC, POKEMINI, PCE, ...
 Folder names are declared in System/magi/systems.json ("folder").
 EOF
 
@@ -114,6 +114,7 @@ Console BIOS files (for systems that need one):
   PC Engine CD: syscard3.pce, syscard3u.pce (US), syscard2/1.pce, gexpress.pce
                 (HuCards do not use a CD System Card)
   Pokemon Mini: bios.min (optional; the free BIOS is used when absent)
+  Dreamcast: dc/dc_boot.bin, dc/dc_flash.bin (optional; HLE BIOS otherwise)
 EOF
 
 cat > "$OUT/Overlays/README.txt" <<'EOF'
