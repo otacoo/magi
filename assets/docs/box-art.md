@@ -37,7 +37,7 @@ existing `covers/ps1/...` still matches; MAGI writes the canonical case. A
 ## Art types
 
 `ART TYPE` selects the file shown in the panel: boxart, snap, title or
-logo. For one system, **Y → CORE → CORE ART** overrides the global art type.
+logo. For one system, **X → CORE → CORE ART** overrides the global art type.
 
 ## How a download is matched
 

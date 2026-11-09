@@ -951,7 +951,7 @@ impl LibraryState {
         Some((sys, game))
     }
 
-    /// X on the shelf: add or drop the selected game in FAVORITES.
+    /// Y on the shelf: add or drop the selected game in FAVORITES.
     pub fn toggle_favorite(&mut self) {
         let Some(game) = self.selected_game() else {
             return;
@@ -992,7 +992,7 @@ impl LibraryState {
             .unwrap_or(self.prefs.art_type)
     }
 
-    /// Y -> CORE -> CORE ART: cycle the selected game's system type.
+    /// X -> CORE -> CORE ART: cycle the selected game's system type.
     pub fn cycle_game_art(&mut self, path: &str, delta: i32) {
         let Some(id) = self.game_system(path).map(|s| s.id.clone()) else {
             return;
@@ -1009,7 +1009,7 @@ impl LibraryState {
         self.play.get(path).copied().unwrap_or_default()
     }
 
-    /// Y -> GAME -> TRACK PLAY TIME: flip the opt-in flag, keeping the total.
+    /// X -> GAME -> TRACK PLAY TIME: flip the opt-in flag, keeping the total.
     pub fn toggle_play_tracking(&mut self, path: &str) -> bool {
         let entry = self.play.entry(path.to_string()).or_default();
         entry.track = !entry.track;
@@ -1296,7 +1296,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
 
         if total == 0 && !st.is_scanning() {
             let (msg, hint) = if sys.id == FAV_ID {
-                ("NO FAVORITES".to_string(), "PRESS X ON A GAME".to_string())
+                ("NO FAVORITES".to_string(), "PRESS Y ON A GAME".to_string())
             } else {
                 (
                     "NO GAMES FOUND".to_string(),
@@ -1524,7 +1524,7 @@ fn menu_cta(
     );
 }
 
-/// The game menu overlay (Y on the shelf): INFO, GAME, CORE and CLOSE tabs.
+/// The game menu overlay (X on the shelf): INFO, GAME, CORE and CLOSE tabs.
 pub fn draw_game_menu(
     cv: &mut Canvas,
     fonts: &mut Fonts,
@@ -1676,10 +1676,10 @@ pub fn draw_game_menu(
     let center_x = content_x + content_w / 2;
 
     let hint = match active {
-        0 => "L1/R1 TAB   B CLOSE",
-        1 => "U/D PICK   A SELECT   L1/R1 TAB   B CLOSE",
-        2 => "L/R CHANGE   A CHANGE   L1/R1 TAB   B CLOSE",
-        _ => "A CLOSE   B CLOSE",
+        0 => "L1/R1 TAB   B/X CLOSE",
+        1 => "U/D PICK   A SELECT   L1/R1 TAB   B/X CLOSE",
+        2 => "L/R CHANGE   A CHANGE   L1/R1 TAB   B/X CLOSE",
+        _ => "A CLOSE   B/X CLOSE",
     };
 
     match active {
@@ -1910,8 +1910,8 @@ fn draw_controls(cv: &mut Canvas, fonts: &mut Fonts, t: f32) {
         ("D-PAD U/D", "BROWSE GAMES"),
         ("L1 / R1", "PAGE"),
         ("A", "PLAY"),
-        ("X", "FAVORITE"),
-        ("Y", "GAME MENU"),
+        ("X", "GAME MENU"),
+        ("Y", "FAVORITE"),
         ("MENU", "SETTINGS"),
         ("SELECT", "THIS PANEL"),
         ("SELECT+U/D", "BRIGHTNESS"),

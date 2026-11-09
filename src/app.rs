@@ -237,7 +237,7 @@ impl Ui {
                     }
                     return;
                 }
-                Action::Back | Action::Y | Action::Menu => m.confirm = false,
+                Action::Back | Action::X | Action::Menu => m.confirm = false,
                 _ => {}
             }
             self.game_menu = Some(m);
@@ -288,7 +288,7 @@ impl Ui {
             Action::Confirm if m.tab == 1 && m.sel == 2 => m.confirm = true,
             Action::Confirm if m.tab == 2 => self.library.cycle_game_art(&m.path, 1),
             Action::Confirm if m.tab == 3 => return,
-            Action::Back | Action::Y | Action::Menu => return,
+            Action::Back | Action::X | Action::Menu => return,
             _ => {}
         }
         self.game_menu = Some(m);
@@ -743,7 +743,7 @@ impl Ui {
                     Action::Right | Action::R2 => self.library.move_system(1),
                     Action::L1 => self.library.move_game(-10),
                     Action::R1 => self.library.move_game(10),
-                    Action::Y => {
+                    Action::X => {
                         if let Some(g) = self.library.selected_game() {
                             self.game_menu = Some(GameMenuUi {
                                 title: g.title,
@@ -776,7 +776,7 @@ impl Ui {
                         }
                     }
                     Action::Select => self.library.toggle_controls(),
-                    Action::X => self.library.toggle_favorite(),
+                    Action::Y => self.library.toggle_favorite(),
                     Action::Back => self.library.stop_art(),
                     Action::Menu => self.open_settings(),
                     Action::Screenshot => self.pending_screenshot = true,

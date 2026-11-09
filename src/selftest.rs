@@ -268,7 +268,7 @@ pub fn run() -> Result<()> {
         );
     }
 
-    // The Y menu: INFO, GAME, CORE and CLOSE tabs on the left.
+    // The X menu: INFO, GAME, CORE and CLOSE tabs on the left.
     let info = library::GameMenuInfo {
         title: "SUPER MARIO 64",
         system: "NINTENDO 64",
