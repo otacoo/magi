@@ -12,6 +12,7 @@ core. Use unzipped ROMs.
 | SNES | `SNES` | `snes9x2005_plus` |
 | Genesis / Mega Drive | `GENESIS` | `genesis_plus_gx` |
 | Neo Geo Pocket / Color | `NGPC` | `mednafen_ngp` |
+| Pokemon Mini | `POKEMINI` | `pokemini` |
 | PlayStation | `PS1` | `pcsx_rearmed` |
 | PC Engine / SuperGrafx | `PCE` | `mednafen_pce` |
 | Nintendo 64 | `N64` | native ports (see [Miyoo64 ports](n64-ports.md)) |
@@ -29,6 +30,13 @@ MAGI loads BIOS files automatically from `BIOS/`:
   `scph5500.bin` (Japan), `scph5502.bin` (Europe).
 - **PC Engine CD**: `syscard3.pce` (or `syscard3u.pce` or another System
   Card). HuCards do not use a CD System Card.
+- **Pokemon Mini**: `bios.min` (optional; the free BIOS is used when absent).
+
+**PokeMini** exposes its video and rumble options in the CORE tab: Video Scale,
+LCD Filter, LCD Mode, LCD Contrast, LCD Brightness, Palette, Piezo Filter,
+Screen Shake Level and Controller Rumble Level. Set a rumble level to `0` to
+turn that effect off. The pad maps **A/B** to A/B, **L1** to Shake, **R1** to C
+and **SELECT** to the console's Power button.
 
 Core options are edited in the in-game pause menu and persist per core in
 `Config/core-options.json`.

@@ -270,6 +270,11 @@ fn default_option(core: &str, system: &str, key: &str) -> Option<&'static str> {
             Some(if system == "gbc" { "disabled" } else { "auto" })
         }
         ("gambatte", "gambatte_gb_internal_palette") => Some("GB - DMG"),
+        // PokeMini: 6x puts the 96x64 LCD at 576x384, close to the 640/720
+        // panels, so the internal dot matrix survives the final scale.
+        ("pokemini", "pokemini_video_scale") => Some("6x"),
+        // The H700 panel runs at 60Hz; the core's 72Hz native rate would tear.
+        ("pokemini", "pokemini_60hz_mode") => Some("enabled"),
         // PS1 (PCSX-ReARMed)
         ("pcsx_rearmed", "pcsx_rearmed_show_bios_bootlogo") => Some("disabled"),
         ("pcsx_rearmed", "pcsx_rearmed_dithering") => Some("disabled"),
@@ -670,7 +675,8 @@ extern "C" fn env_cb(cmd: c_uint, data: *mut c_void) -> bool {
                         && (key == "gambatte_gb_colorization"
                             || key == "gambatte_gb_internal_palette"
                             || (ctx.system == "gb" && key == "gambatte_dark_filter_level"));
-                    let visible = option_kept(&desc)
+                    let visible = (option_kept(&desc)
+                        || (ctx.opt_key == "pokemini" && pokemini_option_kept(&desc)))
                         && !hidden_palette
                         && !(ctx.system == "genesis" && genesis_option_hidden(&desc))
                         && !(ctx.opt_key == "mgba" && mgba_option_hidden(&desc));
@@ -948,6 +954,7 @@ fn log_bios(system_id: &str, dir: &Path) {
             "syscard1.pce",
             "gexpress.pce",
         ],
+        "pokemini" => &["bios.min"],
         _ => &[],
     };
     if names.is_empty() {
@@ -2920,6 +2927,25 @@ fn genesis_option_hidden(desc: &str) -> bool {
         || d.contains("pcm volume")
 }
 
+/// PokeMini's curated options; the audio filter, turbo period and 60Hz mode
+/// stay at the core defaults.
+fn pokemini_option_kept(desc: &str) -> bool {
+    let d = desc.to_ascii_lowercase();
+    [
+        "video scale",
+        "lcd filter",
+        "lcd mode",
+        "lcd contrast",
+        "lcd brightness",
+        "palette",
+        "piezo filter",
+        "screen shake level",
+        "controller rumble level",
+    ]
+    .iter()
+    .any(|k| d.contains(k))
+}
+
 /// True when this press completes a double tap (and then starts fresh).
 fn double_tap(last: &mut Option<Instant>, now: Instant, window: Duration) -> bool {
     match *last {
@@ -4171,6 +4197,35 @@ mod option_tests {
         );
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn pokemini_ships_a_curated_option_set() {
+        for label in [
+            "Video Scale (Restart)",
+            "LCD Filter",
+            "LCD Mode",
+            "LCD Contrast",
+            "LCD Brightness",
+            "Palette",
+            "Piezo Filter",
+            "Screen Shake Level",
+            "Controller Rumble Level",
+        ] {
+            assert!(super::pokemini_option_kept(label), "{label}");
+        }
+        assert!(!super::pokemini_option_kept("60Hz Mode"));
+        assert!(!super::pokemini_option_kept("Low Pass Filter"));
+        assert!(!super::pokemini_option_kept("Low Pass Filter Level (%)"));
+        assert!(!super::pokemini_option_kept("Turbo Button Period"));
+        assert_eq!(
+            default_option("pokemini", "pokemini", "pokemini_video_scale"),
+            Some("6x")
+        );
+        assert_eq!(
+            default_option("pokemini", "pokemini", "pokemini_60hz_mode"),
+            Some("enabled")
+        );
+    }
 }
 
 #[cfg(test)]
@@ -4179,7 +4234,9 @@ mod key_mode_tests {
 
     #[test]
     fn light_systems_stay_on_schedutil() {
-        for system in ["gb", "gbc", "gba", "ngp", "snes", "pce", "genesis"] {
+        for system in [
+            "gb", "gbc", "gba", "ngp", "pokemini", "snes", "pce", "genesis",
+        ] {
             assert!(!needs_performance(system), "{system}");
         }
         assert!(needs_performance("psx"));

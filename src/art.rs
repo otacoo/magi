@@ -98,6 +98,7 @@ fn builtin(id: &str) -> Option<&'static str> {
         "snes" => "Nintendo - Super Nintendo Entertainment System",
         "genesis" => "Sega - Mega Drive - Genesis",
         "ngp" => "SNK - Neo Geo Pocket",
+        "pokemini" => "Nintendo - Pokemon Mini",
         "psx" => "Sony - PlayStation",
         "pce" => "NEC - PC Engine - TurboGrafx 16",
         "n64" => "Nintendo - Nintendo 64",

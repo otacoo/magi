@@ -145,7 +145,7 @@ mod tests {
         let s = builtin();
         assert!(s.len() >= 5);
         for id in [
-            "gb", "gbc", "gba", "nes", "snes", "genesis", "psx", "ngp", "pce",
+            "gb", "gbc", "gba", "nes", "snes", "genesis", "psx", "ngp", "pce", "pokemini",
         ] {
             assert!(s.iter().any(|d| d.id == id), "missing {id}");
         }
@@ -159,5 +159,14 @@ mod tests {
         assert_eq!(gb.folder(), "GB");
         let psx = s.iter().find(|d| d.id == "psx").unwrap();
         assert_eq!(psx.folder(), "PS1");
+    }
+
+    #[test]
+    fn pokemini_uses_the_expected_folder_and_core() {
+        let s = builtin();
+        let pm = s.iter().find(|d| d.id == "pokemini").unwrap();
+        assert_eq!(pm.folder(), "POKEMINI");
+        assert_eq!(pm.core.as_deref(), Some("pokemini"));
+        assert_eq!(pm.exts, ["min"]);
     }
 }
