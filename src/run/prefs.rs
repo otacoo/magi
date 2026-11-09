@@ -57,6 +57,22 @@ pub(super) fn load_shot_chord_pref() -> bool {
         .unwrap_or(Defaults::SHOT_CHORD)
 }
 
+/// Per-system A/B swap chosen in the shelf's SYSTEM tab.
+pub(super) fn load_swap_ab(system: &str) -> bool {
+    std::fs::read_to_string(runtime_config_path())
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .map(|v| swap_ab_in(&v, system))
+        .unwrap_or(false)
+}
+
+fn swap_ab_in(v: &serde_json::Value, system: &str) -> bool {
+    v.get("swap_ab")
+        .and_then(|m| m.get(system))
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false)
+}
+
 pub(super) fn save_runtime_volume(pct: u8) {
     let path = Path::new(runtime_config_path());
     let mut v: serde_json::Value = std::fs::read_to_string(path)
@@ -383,7 +399,7 @@ pub(super) struct AdjState {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_scale, ScaleMode, ShaderMode};
+    use super::{load_scale, swap_ab_in, ScaleMode, ShaderMode};
 
     #[test]
     fn psx_scale_defaults_to_stretch() {
@@ -397,6 +413,15 @@ mod tests {
 
         let explicit = serde_json::json!({"scale_mode": 1, "scales": {"psx": 0}});
         assert_eq!(load_scale(&explicit, "psx"), ScaleMode::Fit);
+    }
+
+    #[test]
+    fn swap_ab_is_per_system() {
+        let v = serde_json::json!({"swap_ab": {"nes": true, "gb": false}});
+        assert!(swap_ab_in(&v, "nes"));
+        assert!(!swap_ab_in(&v, "gb"));
+        assert!(!swap_ab_in(&v, "snes"));
+        assert!(!swap_ab_in(&serde_json::json!({}), "nes"));
     }
 
     #[test]

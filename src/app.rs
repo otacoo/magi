@@ -42,12 +42,12 @@ enum InfoKind {
     About,
 }
 
-/// The Y-button game menu (INFO / GAME / CORE / CLOSE) over the shelf.
+/// The X-button game menu (INFO / GAME / SYSTEM / CLOSE) over the shelf.
 #[derive(Clone)]
 struct GameMenuUi {
     title: String,
     path: String,
-    /// 0 = INFO, 1 = GAME, 2 = CORE, 3 = CLOSE.
+    /// 0 = INFO, 1 = GAME, 2 = SYSTEM, 3 = CLOSE.
     tab: u8,
     sel: usize,
     confirm: bool,
@@ -223,7 +223,7 @@ impl Ui {
         self.screen = Screen::Shots;
     }
 
-    /// The Y-button game menu: INFO / GAME / CORE / CLOSE.
+    /// The X-button game menu: INFO / GAME / SYSTEM / CLOSE.
     fn game_menu_action(&mut self, a: Action) {
         let Some(mut m) = self.game_menu.take() else {
             return;
@@ -259,9 +259,25 @@ impl Ui {
                     (m.sel + 1) % 3
                 };
             }
+            Action::Up | Action::Down if m.tab == 2 => {
+                let rows = if self.library.game_swap_ab(&m.path).is_some() {
+                    2
+                } else {
+                    1
+                };
+                m.sel = if a == Action::Up {
+                    (m.sel + rows - 1) % rows
+                } else {
+                    (m.sel + 1) % rows
+                };
+            }
             Action::Left | Action::Right if m.tab == 2 => {
-                self.library
-                    .cycle_game_art(&m.path, if a == Action::Left { -1 } else { 1 });
+                if m.sel == 1 {
+                    self.toggle_swap_ab(&m.path);
+                } else {
+                    self.library
+                        .cycle_game_art(&m.path, if a == Action::Left { -1 } else { 1 });
+                }
             }
             Action::Confirm if m.tab == 1 && m.sel == 0 => {
                 let on = self.library.toggle_play_tracking(&m.path);
@@ -286,12 +302,24 @@ impl Ui {
                 return;
             }
             Action::Confirm if m.tab == 1 && m.sel == 2 => m.confirm = true,
-            Action::Confirm if m.tab == 2 => self.library.cycle_game_art(&m.path, 1),
+            Action::Confirm if m.tab == 2 => {
+                if m.sel == 1 {
+                    self.toggle_swap_ab(&m.path);
+                } else {
+                    self.library.cycle_game_art(&m.path, 1);
+                }
+            }
             Action::Confirm if m.tab == 3 => return,
             Action::Back | Action::X | Action::Menu => return,
             _ => {}
         }
         self.game_menu = Some(m);
+    }
+
+    fn toggle_swap_ab(&mut self, path: &str) {
+        if let Some(on) = self.library.toggle_game_swap_ab(path) {
+            crate::status::show(if on { "A/B SWAPPED" } else { "A/B NORMAL" });
+        }
     }
 
     /// L/R (and A on adjustable rows) for the settings screen; changes are
@@ -1104,6 +1132,9 @@ impl Ui {
 
     /// Hand the panel to the run host (BALTHASAR) and wait for it to exit.
     fn launch(&mut self, l: &crate::run::Launch) {
+        // The child reads Config/magi.json for its runtime preferences; make
+        // sure a just-changed shelf option is already on the card.
+        self.library.flush();
         util::log(&format!("launch {} [{}]: {}", l.system, l.core, l.rom));
         let started = Instant::now();
         let status = util::spawn_self().and_then(|mut c| {
@@ -1275,6 +1306,7 @@ impl Ui {
                         tracking: stat.track,
                         favorite: self.library.favorites.contains(&m.path),
                         art_type: sys.map(|s| self.library.art_type_for(&s.id)).unwrap_or(0),
+                        swap_ab: self.library.game_swap_ab(&m.path),
                     };
                     library::draw_game_menu(
                         &mut self.cv,

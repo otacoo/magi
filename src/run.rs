@@ -46,9 +46,9 @@ use overlay::{
 use pad::{pump_pads, PadHat, PadState};
 use prefs::{
     load_display_prefs, load_runtime_prefs, load_runtime_volume, load_shot_chord_pref,
-    load_text_scale, save_display_prefs, save_runtime_volume, scale_factors, AdjKind, AdjState,
-    DisplayPrefs, ScaleMode, ShaderMode, COMBO_FIRST_REPEAT, COMBO_REPEAT, COMBO_STEP, DOUBLE_TAP,
-    TRIGGER_ON,
+    load_swap_ab, load_text_scale, save_display_prefs, save_runtime_volume, scale_factors, AdjKind,
+    AdjState, DisplayPrefs, ScaleMode, ShaderMode, COMBO_FIRST_REPEAT, COMBO_REPEAT, COMBO_STEP,
+    DOUBLE_TAP, TRIGGER_ON,
 };
 
 #[cfg(target_os = "linux")]
@@ -1014,6 +1014,10 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     // Read the shader before the core registers its options, so the
     // LCD-accurate GB choice can force the grey palette from the first frame.
     let mut disp = load_display_prefs(system_id);
+    let swap_ab = load_swap_ab(system_id);
+    if swap_ab {
+        util::log("input: A/B swapped");
+    }
     if !disp.shader.supported(system_id) {
         disp.shader = ShaderMode::Off;
     }
@@ -2029,7 +2033,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
             }
         }
 
-        ctx().bits = core_pad_bits(pad.bits, game_l2_r2);
+        ctx().bits = core_pad_bits(pad.bits, game_l2_r2, swap_ab);
         ctx().left = pad.left;
         ctx().right = pad.right;
 
@@ -2969,12 +2973,22 @@ fn needs_l2_r2(system_id: &str) -> bool {
 /// L2/R2 are rewind and fast-forward unless the core owns those buttons.
 /// Keep them out of the core's joypad mask there: mGBA maps them to Turbo
 /// L/R, so pressing R2 to fast-forward would also pull the GBA's R button.
-fn core_pad_bits(bits: u16, game_l2_r2: bool) -> u16 {
-    if game_l2_r2 {
+/// SWAP A/B exchanges the two buttons the emulated console sees; the
+/// frontend's own A/B confirmation stays as it is.
+fn core_pad_bits(bits: u16, game_l2_r2: bool, swap_ab: bool) -> u16 {
+    let mut bits = if game_l2_r2 {
         bits
     } else {
         bits & !((1 << retro::L2) | (1 << retro::R2))
+    };
+    if swap_ab {
+        let a = bits & (1 << retro::A) != 0;
+        let b = bits & (1 << retro::B) != 0;
+        if a != b {
+            bits ^= (1 << retro::A) | (1 << retro::B);
+        }
     }
+    bits
 }
 
 /// Cores that still need the performance governor after GPU presentation.
@@ -4290,8 +4304,19 @@ mod pad_tests {
     fn frontend_triggers_stay_out_of_the_core() {
         let triggers = (1 << retro::L2) | (1 << retro::R2);
         let bits = triggers | (1 << retro::A);
-        assert_eq!(super::core_pad_bits(bits, false), 1 << retro::A);
-        assert_eq!(super::core_pad_bits(bits, true), bits);
+        assert_eq!(super::core_pad_bits(bits, false, false), 1 << retro::A);
+        assert_eq!(super::core_pad_bits(bits, true, false), bits);
+    }
+
+    #[test]
+    fn ab_swap_only_moves_the_pressed_button() {
+        let a = 1 << retro::A;
+        let b = 1 << retro::B;
+        assert_eq!(super::core_pad_bits(a, false, true), b);
+        assert_eq!(super::core_pad_bits(b, false, true), a);
+        assert_eq!(super::core_pad_bits(a | b, false, true), a | b);
+        assert_eq!(super::core_pad_bits(0, false, true), 0);
+        assert_eq!(super::core_pad_bits(a, false, false), a);
     }
 }
 

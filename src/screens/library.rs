@@ -96,6 +96,8 @@ struct StateFile {
     hdmi_auto: Option<bool>,
     #[serde(default)]
     play: HashMap<String, PlayStat>,
+    #[serde(default)]
+    swap_ab: HashMap<String, bool>,
 }
 
 impl StateFile {
@@ -248,6 +250,8 @@ pub struct LibraryState {
     art_types: HashMap<String, u8>,
     /// Per-game play-time tracking, by ROM path.
     play: HashMap<String, PlayStat>,
+    /// Systems whose emulated A/B buttons are swapped, by system id.
+    swap_ab: HashMap<String, bool>,
     pub prefs: Prefs,
     state_dirty: bool,
     last_save: Instant,
@@ -289,6 +293,7 @@ impl LibraryState {
                 .into_iter()
                 .map(|(p, v)| (games::card_path(&p), v))
                 .collect(),
+            swap_ab: state.swap_ab,
             fav_games: Vec::new(),
             fav_system: SystemDef {
                 id: FAV_ID.into(),
@@ -551,6 +556,7 @@ impl LibraryState {
             rumble: Some(self.prefs.rumble),
             hdmi_auto: Some(self.prefs.hdmi_auto),
             play: self.play.clone(),
+            swap_ab: self.swap_ab.clone(),
         };
         let path = self.cwd.join("Config/magi.json");
         let _ = std::fs::create_dir_all(self.cwd.join("Config"));
@@ -992,7 +998,7 @@ impl LibraryState {
             .unwrap_or(self.prefs.art_type)
     }
 
-    /// X -> CORE -> CORE ART: cycle the selected game's system type.
+    /// X -> SYSTEM -> CORE ART: cycle the selected game's system type.
     pub fn cycle_game_art(&mut self, path: &str, delta: i32) {
         let Some(id) = self.game_system(path).map(|s| s.id.clone()) else {
             return;
@@ -1007,6 +1013,36 @@ impl LibraryState {
     /// The play-time entry for a game, if it has one.
     pub fn play_stat(&self, path: &str) -> PlayStat {
         self.play.get(path).copied().unwrap_or_default()
+    }
+
+    /// The system's saved A/B swap. `None` for native cores, which cannot use
+    /// the libretro button mapping.
+    pub fn game_swap_ab(&self, path: &str) -> Option<bool> {
+        let sys = self.game_system(path)?;
+        let core = sys.core.as_deref()?;
+        if core == "native" {
+            return None;
+        }
+        Some(self.swap_ab.get(&sys.id).copied().unwrap_or(false))
+    }
+
+    /// X -> SYSTEM -> SWAP A/B: flip the selected game's system choice.
+    pub fn toggle_game_swap_ab(&mut self, path: &str) -> Option<bool> {
+        let (id, core) = {
+            let sys = self.game_system(path)?;
+            (sys.id.clone(), sys.core.clone()?)
+        };
+        if core == "native" {
+            return None;
+        }
+        let on = !self.swap_ab.get(&id).copied().unwrap_or(false);
+        if on {
+            self.swap_ab.insert(id, true);
+        } else {
+            self.swap_ab.remove(&id);
+        }
+        self.state_dirty = true;
+        Some(on)
     }
 
     /// X -> GAME -> TRACK PLAY TIME: flip the opt-in flag, keeping the total.
@@ -1411,6 +1447,8 @@ pub struct GameMenuInfo<'a> {
     pub tracking: bool,
     pub favorite: bool,
     pub art_type: u8,
+    /// `None` when the system's native core has no libretro button mapping.
+    pub swap_ab: Option<bool>,
 }
 
 /// Hours:minutes:seconds, with hours free to grow past 99.
@@ -1524,7 +1562,7 @@ fn menu_cta(
     );
 }
 
-/// The game menu overlay (X on the shelf): INFO, GAME, CORE and CLOSE tabs.
+/// The game menu overlay (X on the shelf): INFO, GAME, SYSTEM and CLOSE tabs.
 pub fn draw_game_menu(
     cv: &mut Canvas,
     fonts: &mut Fonts,
@@ -1604,7 +1642,7 @@ pub fn draw_game_menu(
     let pane_x = left + tab_w;
     let pane_w = (right - pane_x).max(p(140.0)) as u32;
 
-    let tabs = ["INFO", "GAME", "CORE", "CLOSE"];
+    let tabs = ["INFO", "GAME", "SYSTEM", "CLOSE"];
     let n = tabs.len() as i32;
     let gap = p(4.0);
     let pitch = ((body_h as i32 - gap * (n - 1).max(0)) / n)
@@ -1678,7 +1716,7 @@ pub fn draw_game_menu(
     let hint = match active {
         0 => "L1/R1 TAB   B/X CLOSE",
         1 => "U/D PICK   A SELECT   L1/R1 TAB   B/X CLOSE",
-        2 => "L/R CHANGE   A CHANGE   L1/R1 TAB   B/X CLOSE",
+        2 => "U/D PICK   L/R CHANGE   A CHANGE   L1/R1 TAB   B/X CLOSE",
         _ => "A CLOSE   B/X CLOSE",
     };
 
@@ -1804,6 +1842,10 @@ pub fn draw_game_menu(
             );
         }
         2 => {
+            let rows = if info.swap_ab.is_some() { 2 } else { 1 };
+            let sel = sel.min(rows - 1);
+            let y0 = content_top + p(22.0);
+            let pitch = p(34.0);
             let value = format!(
                 "< {} >",
                 crate::art::LABELS[(info.art_type as usize).min(crate::art::LABELS.len() - 1)]
@@ -1812,18 +1854,41 @@ pub fn draw_game_menu(
                 cv,
                 fonts,
                 content_x,
-                content_top + p(22.0),
+                y0,
                 content_w,
                 "CORE ART",
                 Some((&value, pal().text)),
-                true,
+                sel == 0,
                 false,
             );
+            if let Some(on) = info.swap_ab {
+                let (label, color) = if on {
+                    ("ON", pal().signal)
+                } else {
+                    ("OFF", pal().text_faint)
+                };
+                menu_option_row(
+                    cv,
+                    fonts,
+                    content_x,
+                    y0 + pitch,
+                    content_w,
+                    "SWAP A/B",
+                    Some((label, color)),
+                    sel == 1,
+                    false,
+                );
+            }
+            let note = if sel == 1 {
+                "SWAPS A AND B FOR THIS SYSTEM"
+            } else {
+                "COVER STYLE FOR THIS SYSTEM"
+            };
             fonts.draw(
                 cv,
                 content_x,
-                content_top + p(62.0),
-                "COVER STYLE FOR THIS SYSTEM",
+                y0 + pitch * rows as i32 - p(4.0),
+                note,
                 9.0,
                 pal().text_faint,
             );
@@ -2044,6 +2109,15 @@ mod state_tests {
         assert_eq!(play_time_label(stat.secs), "1:02:05");
         assert_eq!(play_time_label(0), "0:00:00");
         assert_eq!(play_time_label(360_000), "100:00:00");
+    }
+
+    #[test]
+    fn swap_ab_is_stored_per_system() {
+        let stored: StateFile =
+            serde_json::from_str(r#"{"swap_ab":{"nes":true,"gb":false}}"#).unwrap();
+        assert_eq!(stored.swap_ab.get("nes"), Some(&true));
+        assert_eq!(stored.swap_ab.get("gb"), Some(&false));
+        assert_eq!(stored.swap_ab.get("snes"), None);
     }
 
     fn sys(id: &str, folder: Option<&str>) -> SystemDef {

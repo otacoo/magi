@@ -26,7 +26,8 @@ All notable changes to MAGI are documented here.
 - Added **Pokemon Mini** support with the PokeMini core, including its LCD, palette and rumble options
 - Swapped the shelf buttons: **X** opens the game menu and **Y** favorites a game
 - Added per-game **play time** tracking in the shelf game menu, shown as hours:minutes:seconds
-- Redesigned the shelf game menu with **INFO**, **GAME**, **CORE** and **CLOSE** tabs
+- Redesigned the shelf game menu with **INFO**, **GAME**, **SYSTEM** and **CLOSE** tabs
+- Added a per-system **SWAP A/B** option to the shelf game menu
 - Added mitigations and a way to repair the SD card when it becomes **READ ONLY**, see [SD card repair](assets/docs/storage.md)
 - Removed ALL option for art
 - Removed the last step from the BRIGHTNESS overlay that fully darken the screen
