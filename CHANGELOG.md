@@ -16,6 +16,9 @@ All notable changes to MAGI are documented here.
 - Added **DPAD AS ANALOG** for Dreamcast and PlayStation games that need a stick; it maps the d-pad to the left analog stick and is on by default for Dreamcast
 - Dreamcast PAL games now run at their real 50 Hz refresh rate instead of fighting the 60 Hz frame clock
 - Dreamcast save states require **Threaded Rendering** to be off; MAGI blocks them while it is on to avoid crashes
+- **SWAP L1/R1** now only swaps the Dreamcast triggers when it is ON
+- Shader choices are saved per system, so starting another system no longer overwrites them
+- The pause menu's **CRT** and **BEZEL** rows show **OFF** instead of **NONE** when nothing is selected
 - A read-only or failing card no longer makes the shelf retry its settings save every frame, and is rechecked while the shelf is open
 - The keyboard has **:**, **!**, **+** and **&** on the X shift layer
 - Shelf art settings now use **AUTO DOWNLOAD ART**, and the redundant **DOWNLOAD ART** row is gone

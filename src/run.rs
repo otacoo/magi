@@ -2309,6 +2309,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                     && (e.code == ev::BTN_NORTH || (e.code == ev::BTN_SELECT && !game_l2_r2));
                 if scale_key {
                     disp.scale = disp.scale.next();
+                    sync_display_menu(&mut disp, &menu);
                     save_display_prefs(system_id, &disp);
                     hud = Some((disp.scale.label().into(), Instant::now()));
                     continue;
@@ -2467,9 +2468,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                 };
             }
             save_overlay_prefs(system_id, &overlay_names);
-            disp.fps_counter = menu.fps;
-            disp.sysinfo = menu.sysinfo;
-            disp.shader = menu.shader;
+            sync_display_menu(&mut disp, &menu);
             if disp.shader == ShaderMode::LcdAccurate {
                 disp.scale = ScaleMode::Integer;
             }
@@ -2525,6 +2524,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                 }
                 adj_state = Some(st);
             } else {
+                sync_display_menu(&mut disp, &menu);
                 save_display_prefs(system_id, &disp);
                 prefs_save_at = None;
             }
@@ -3175,6 +3175,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
             if Instant::now() >= t {
                 prefs_save_at = None;
                 save_runtime_volume(gain_pct);
+                sync_display_menu(&mut disp, &menu);
                 save_display_prefs(system_id, &disp);
             }
         }
@@ -3267,6 +3268,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         drop(hw_overlay.take());
         drop(hw_game.take());
     }
+    sync_display_menu(&mut disp, &menu);
     save_display_prefs(system_id, &disp);
     ctx().set_rumble(0);
     save_runtime_volume(gain_pct);
@@ -3511,6 +3513,15 @@ fn needs_l2_r2(system_id: &str) -> bool {
     system_id == "psx"
 }
 
+/// The in-game menu owns the live shader and OSD choices. Bring the saved
+/// display prefs up to date before any write, including an exit that happens
+/// before the next overlay pass.
+fn sync_display_menu(disp: &mut DisplayPrefs, menu: &GameMenu) {
+    disp.shader = menu.shader;
+    disp.fps_counter = menu.fps;
+    disp.sysinfo = menu.sysinfo;
+}
+
 /// L2/R2 are rewind and fast-forward unless the core owns those buttons.
 /// Keep them out of the core's joypad mask there: mGBA maps them to Turbo
 /// L/R, so pressing R2 to fast-forward would also pull the GBA's R button.
@@ -3526,17 +3537,22 @@ fn core_pad_bits(
     swap_l1r1: bool,
 ) -> u16 {
     let mut bits = if triggers_l1r1 {
-        let mut l = bits & (1 << retro::L) != 0;
-        let mut r = bits & (1 << retro::R) != 0;
-        if swap_l1r1 {
-            std::mem::swap(&mut l, &mut r);
-        }
+        // Flycast files the left trigger under R2 and the right trigger under
+        // L2. Keep that normal mapping when the swap option is off, and
+        // exchange the two only when it is on.
+        let physical_l = bits & (1 << retro::L) != 0;
+        let physical_r = bits & (1 << retro::R) != 0;
+        let (l2, r2) = if swap_l1r1 {
+            (physical_l, physical_r)
+        } else {
+            (physical_r, physical_l)
+        };
         let mut out =
             bits & !((1 << retro::L) | (1 << retro::R) | (1 << retro::L2) | (1 << retro::R2));
-        if l {
+        if l2 {
             out |= 1 << retro::L2;
         }
-        if r {
+        if r2 {
             out |= 1 << retro::R2;
         }
         out
@@ -5042,15 +5058,6 @@ mod pad_tests {
         }
     }
 
-    fn key(code: u16, value: i32) -> RawEvent {
-        RawEvent {
-            dev: 0,
-            type_: ev::EV_KEY,
-            code,
-            value,
-        }
-    }
-
     #[test]
     fn left_stick_is_dpad_only_for_digital_cores() {
         let mut pad = PadState::default();
@@ -5097,27 +5104,34 @@ mod pad_tests {
     }
 
     #[test]
-    fn dreamcast_triggers_move_to_l1_r1() {
-        let mut pad = PadState::default();
-        pad.apply(&key(ev::BTN_WEST, 1));
-        pad.apply(&key(ev::BTN_Z, 1));
-        let bits = super::core_pad_bits(pad.bits, false, false, true, false);
-        assert_ne!(bits & (1 << retro::L2), 0);
-        assert_ne!(bits & (1 << retro::R2), 0);
-        assert_eq!(bits & ((1 << retro::L) | (1 << retro::R)), 0);
-
-        // Physical L2/R2 belong to the frontend on Dreamcast.
+    fn dreamcast_triggers_swap_only_when_enabled() {
+        let l1 = 1 << retro::L;
+        let r1 = 1 << retro::R;
         let l2 = 1 << retro::L2;
         let r2 = 1 << retro::R2;
-        assert_eq!(super::core_pad_bits(l2 | r2, false, false, true, false), 0);
 
-        // The optional swap exchanges the two triggers.
-        let left = super::core_pad_bits(1 << retro::L, false, false, true, true);
-        assert_ne!(left & (1 << retro::R2), 0);
-        assert_eq!(left & (1 << retro::L2), 0);
-        let right = super::core_pad_bits(1 << retro::R, false, false, true, true);
-        assert_ne!(right & (1 << retro::L2), 0);
-        assert_eq!(right & (1 << retro::R2), 0);
+        // Off: physical L1 is the Dreamcast's left trigger.
+        let left = super::core_pad_bits(l1, false, false, true, false);
+        assert_ne!(left & r2, 0);
+        assert_eq!(left & l2, 0);
+        let right = super::core_pad_bits(r1, false, false, true, false);
+        assert_ne!(right & l2, 0);
+        assert_eq!(right & r2, 0);
+        let both = super::core_pad_bits(l1 | r1, false, false, true, false);
+        assert_ne!(both & l2, 0);
+        assert_ne!(both & r2, 0);
+        assert_eq!(both & (l1 | r1), 0);
+
+        // On: the two triggers exchange places.
+        let left = super::core_pad_bits(l1, false, false, true, true);
+        assert_ne!(left & l2, 0);
+        assert_eq!(left & r2, 0);
+        let right = super::core_pad_bits(r1, false, false, true, true);
+        assert_ne!(right & r2, 0);
+        assert_eq!(right & l2, 0);
+
+        // Physical L2/R2 belong to the frontend on Dreamcast.
+        assert_eq!(super::core_pad_bits(l2 | r2, false, false, true, false), 0);
     }
 
     #[test]

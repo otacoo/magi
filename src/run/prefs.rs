@@ -325,6 +325,24 @@ fn load_scale(v: &serde_json::Value, system: &str) -> ScaleMode {
         })
 }
 
+/// A system's saved shader. The old global `shader` key is only a migration
+/// fallback; new saves always live in the per-system `shaders` map.
+fn load_shader(v: &serde_json::Value, system: &str) -> ShaderMode {
+    let per_system = v
+        .get("shaders")
+        .and_then(|s| s.get(system))
+        .and_then(|x| x.as_u64());
+    let legacy = v.get("shader").and_then(|x| x.as_u64());
+    ShaderMode::from_u8(per_system.or(legacy).unwrap_or(0) as u8)
+}
+
+fn store_shader(v: &mut serde_json::Value, system: &str, shader: ShaderMode) {
+    if !v.get("shaders").is_some_and(|s| s.is_object()) {
+        v["shaders"] = serde_json::json!({});
+    }
+    v["shaders"][system] = serde_json::json!(shader.as_u8());
+}
+
 pub(super) fn load_display_prefs(system: &str) -> DisplayPrefs {
     let v: serde_json::Value = std::fs::read_to_string(runtime_config_path())
         .ok()
@@ -355,7 +373,7 @@ pub(super) fn load_display_prefs(system: &str) -> DisplayPrefs {
             .and_then(|x| x.as_bool())
             .unwrap_or(Defaults::GLOW),
         scale: load_scale(&v, system),
-        shader: ShaderMode::from_u8(v.get("shader").and_then(|x| x.as_u64()).unwrap_or(0) as u8),
+        shader: load_shader(&v, system),
         brightness,
         warmth: v
             .get("warmth")
@@ -405,7 +423,7 @@ pub(super) fn save_display_prefs(system: &str, p: &DisplayPrefs) {
     if system != "psx" {
         v["scale_mode"] = serde_json::json!(p.scale.as_u8());
     }
-    v["shader"] = serde_json::json!(p.shader.as_u8());
+    store_shader(&mut v, system, p.shader);
     v["rumble"] = serde_json::json!(p.rumble);
     v["brightness"] = serde_json::json!(p.brightness);
     v["warmth"] = serde_json::json!(p.warmth);
@@ -433,7 +451,9 @@ pub(super) struct AdjState {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_scale, swap_ab_in, swap_l1r1_in, ScaleMode, ShaderMode};
+    use super::{
+        load_scale, load_shader, store_shader, swap_ab_in, swap_l1r1_in, ScaleMode, ShaderMode,
+    };
 
     #[test]
     fn psx_scale_defaults_to_stretch() {
@@ -480,6 +500,31 @@ mod tests {
             assert_eq!(ShaderMode::from_u8(mode.as_u8()), mode);
         }
         assert_eq!(ShaderMode::from_u8(6), ShaderMode::Off);
+    }
+
+    #[test]
+    fn shaders_are_saved_per_system() {
+        let v = serde_json::json!({"shader": 3, "shaders": {"gb": 5, "gba": 1}});
+        assert_eq!(load_shader(&v, "gb"), ShaderMode::LcdAccurate);
+        assert_eq!(load_shader(&v, "gba"), ShaderMode::GbaColor);
+        assert_eq!(
+            load_shader(&v, "snes"),
+            ShaderMode::Lcd3x,
+            "the legacy global shader still applies to unconfigured systems"
+        );
+        assert_eq!(load_shader(&serde_json::json!({}), "gb"), ShaderMode::Off);
+
+        let mut v = serde_json::json!({"shader": 3});
+        store_shader(&mut v, "gb", ShaderMode::Dot);
+        store_shader(&mut v, "gba", ShaderMode::Off);
+        assert_eq!(load_shader(&v, "gb"), ShaderMode::Dot);
+        assert_eq!(load_shader(&v, "gba"), ShaderMode::Off);
+        assert_eq!(
+            load_shader(&v, "snes"),
+            ShaderMode::Lcd3x,
+            "saving one system must not rewrite the legacy default"
+        );
+        assert_eq!(v.get("shader").and_then(|x| x.as_u64()), Some(3));
     }
 
     #[test]

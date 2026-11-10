@@ -814,12 +814,12 @@ fn right_text(
 
 fn overlay_pick(files: &OverlayLayers, idx: usize, layer: usize) -> String {
     if idx == 0 {
-        return "NONE".into();
+        return "OFF".into();
     }
     files[layer]
         .get(idx - 1)
         .and_then(|s| Path::new(s).file_name().and_then(|x| x.to_str()))
-        .unwrap_or("NONE")
+        .unwrap_or("OFF")
         .to_string()
 }
 
