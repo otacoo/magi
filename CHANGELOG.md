@@ -17,6 +17,8 @@ All notable changes to MAGI are documented here.
 - Dreamcast PAL games now run at their real 50 Hz refresh rate instead of fighting the 60 Hz frame clock
 - Dreamcast save states require **Threaded Rendering** to be off; MAGI blocks them while it is on to avoid crashes
 - A read-only or failing card no longer makes the shelf retry its settings save every frame, and is rechecked while the shelf is open
+- The keyboard has **:**, **!**, **+** and **&** on the X shift layer
+- Shelf art settings now use **AUTO DOWNLOAD ART**, and the redundant **DOWNLOAD ART** row is gone
 - Payload pushes keep the card's settings, saves and BIOS files
 - Added per-game **play time** tracking in the shelf game menu, shown as hours:minutes:seconds
 - Redesigned the shelf game menu with **INFO**, **GAME**, **SYSTEM** and **CLOSE** tabs

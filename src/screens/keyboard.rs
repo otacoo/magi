@@ -124,12 +124,39 @@ impl KeyboardState {
             ["SHIFT", "SPACE", "DEL", "CANCEL", "DONE"][self.col].to_string()
         } else {
             let c = ROWS[self.row].chars().nth(self.col).unwrap_or(' ');
-            if self.caps && c.is_ascii_lowercase() {
-                c.to_ascii_uppercase().to_string()
-            } else {
-                c.to_string()
-            }
+            self.label(c).to_string()
         }
+    }
+
+    /// The shifted layer: digits become the usual symbols, the three punctuation
+    /// keys in the bottom letter row become `+`, `=` and `&`, and `.` becomes
+    /// `:`. Letters become capitals.
+    fn label(&self, c: char) -> char {
+        if !self.caps {
+            return c;
+        }
+        match c {
+            '1' => '!',
+            '2' => '@',
+            '3' => '#',
+            '4' => '$',
+            '5' => '%',
+            '6' => '^',
+            '7' => '&',
+            '8' => '*',
+            '9' => '(',
+            '0' => ')',
+            '.' => ':',
+            '-' => '+',
+            '_' => '=',
+            '@' => '&',
+            c if c.is_ascii_lowercase() => c.to_ascii_uppercase(),
+            c => c,
+        }
+    }
+
+    pub fn toggle_shift(&mut self) {
+        self.caps = !self.caps;
     }
 
     /// Act on the current key. `None` = still editing; `Some(false)` =
@@ -137,7 +164,7 @@ impl KeyboardState {
     pub fn activate(&mut self) -> Option<bool> {
         match self.selected().as_str() {
             "SHIFT" => {
-                self.caps = !self.caps;
+                self.toggle_shift();
                 None
             }
             "SPACE" => {
@@ -256,11 +283,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &KeyboardState, t: f32) {
             let x = gx + c as i32 * cell_w;
             let y = gy + r as i32 * cell_h;
             let selected = st.row == r && st.col == c;
-            let shown = if st.caps && ch.is_ascii_lowercase() {
-                ch.to_ascii_uppercase()
-            } else {
-                ch
-            };
+            let shown = st.label(ch);
             cv.fill_rect(x, y, (cell_w - 4) as u32, 36, pal().bg2);
             if selected {
                 theme::glow_border(
@@ -291,7 +314,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &KeyboardState, t: f32) {
         cv,
         w / 2,
         h - 16,
-        "U/D/L/R PICK   L/R CURSOR   A TYPE   START DONE   B CANCEL",
+        "U/D/L/R PICK   L/R CURSOR   X SHIFT   A TYPE   START DONE   B CANCEL",
         9.0,
         pal().text_faint,
     );
@@ -300,6 +323,26 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &KeyboardState, t: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shift_layer_has_punctuation() {
+        let mut kb = KeyboardState::new("TEST", Target::Hostname);
+        kb.toggle_shift();
+        assert_eq!(kb.label('1'), '!');
+        assert_eq!(kb.label('7'), '&');
+        assert_eq!(kb.label('.'), ':');
+        assert_eq!(kb.label('-'), '+');
+        assert_eq!(kb.label('a'), 'A');
+
+        kb.row = 2;
+        kb.col = 9;
+        kb.activate();
+        assert_eq!(kb.text(), ":");
+        kb.row = 0;
+        kb.col = 0;
+        kb.activate();
+        assert_eq!(kb.text(), ":!");
+    }
 
     #[test]
     fn edits_at_the_cursor() {

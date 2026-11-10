@@ -382,7 +382,7 @@ impl Ui {
     fn settings_adjust(&mut self, delta: i32) {
         match self.settings.rows()[self.settings.sel] {
             "INTERFACE" => self.settings.adjust_interface(delta),
-            "AUTO ART" => self.settings.toggle_auto_art(),
+            "AUTO DOWNLOAD ART" => self.settings.toggle_auto_art(),
             "ART TYPE" => self.settings.adjust_art_type(delta),
             "ART BACKGROUND" => self.settings.adjust_art_bg(delta),
             "FAST FORWARD" => self.settings.adjust_ff_steps(delta),
@@ -879,20 +879,15 @@ impl Ui {
                 Action::Left => self.settings_adjust(-1),
                 Action::Right => self.settings_adjust(1),
                 Action::Confirm => match self.settings.rows()[self.settings.sel] {
-                    "INTERFACE" | "AUTO ART" | "ART TYPE" | "ART BACKGROUND" | "FAST FORWARD"
-                    | "FF SOUND" | "RUMBLE" | "COLOUR THEME" | "TEXT SIZE" | "BACKGROUND"
-                    | "SHELF BACKGROUND" | "ANIM BACKGROUND" | "GLOW FX" | "SCREENSHOT"
-                    | "SHOW BATTERY %" | "LID SLEEP" | "LID SHUTDOWN AFTER" | "IDLE SHUTDOWN"
-                    | "BATTERY SHUTDOWN" | "CHARGE LIMIT" | "LED" | "HDMI AUTO" => {
-                        self.settings_adjust(1)
-                    }
+                    "INTERFACE" | "AUTO DOWNLOAD ART" | "ART TYPE" | "ART BACKGROUND"
+                    | "FAST FORWARD" | "FF SOUND" | "RUMBLE" | "COLOUR THEME" | "TEXT SIZE"
+                    | "BACKGROUND" | "SHELF BACKGROUND" | "ANIM BACKGROUND" | "GLOW FX"
+                    | "SCREENSHOT" | "SHOW BATTERY %" | "LID SLEEP" | "LID SHUTDOWN AFTER"
+                    | "IDLE SHUTDOWN" | "BATTERY SHUTDOWN" | "CHARGE LIMIT" | "LED"
+                    | "HDMI AUTO" => self.settings_adjust(1),
                     "SHELF" => {
                         self.settings.page = settings::Page::Shelf;
                         self.settings.sel = 0;
-                    }
-                    "DOWNLOAD ART" => {
-                        self.leave_settings();
-                        self.library.start_art_job();
                     }
                     "THEME" => {
                         self.settings.page = settings::Page::Theme;
@@ -1140,6 +1135,7 @@ impl Ui {
                 Action::Right => self.kb_move(|k| k.right()),
                 Action::L1 | Action::L2 => self.kb_move(|k| k.cursor_left()),
                 Action::R1 | Action::R2 => self.kb_move(|k| k.cursor_right()),
+                Action::X => self.kb_move(|k| k.toggle_shift()),
                 Action::Confirm => self.kb_activate(),
                 Action::Start => self.kb_commit(),
                 Action::Back | Action::Menu => {

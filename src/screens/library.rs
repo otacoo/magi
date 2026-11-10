@@ -1153,11 +1153,6 @@ impl LibraryState {
         util::log(&format!("play time: {path} +{secs}s = {}s", entry.secs));
     }
 
-    /// Fetch the current system's missing art. A running job is left alone.
-    pub fn start_art_job(&mut self) -> bool {
-        self.start_art(false)
-    }
-
     /// B on the shelf: stop after the request in flight.
     pub fn stop_art(&mut self) {
         if let Some(stop) = &self.art_stop {

@@ -21,12 +21,11 @@ pub const MAIN_ROWS: [&str; 8] = [
 const MAIN_GROUPS: [(usize, &str); 2] = [(0, "CONFIGS"), (3, "GENERAL")];
 const NO_GROUPS: [(usize, &str); 0] = [];
 
-pub const SHELF_ROWS: [&str; 5] = [
+pub const SHELF_ROWS: [&str; 4] = [
     "INTERFACE",
-    "AUTO ART",
+    "AUTO DOWNLOAD ART",
     "ART TYPE",
     "ART BACKGROUND",
-    "DOWNLOAD ART",
 ];
 /// The art choices; SIMPLE has no covers, so only the interface stays.
 const SHELF_ROWS_SIMPLE: [&str; 1] = ["INTERFACE"];
@@ -394,7 +393,7 @@ impl SettingsState {
                 ),
                 true,
             )),
-            "AUTO ART" => Some((format!("< {} >", onoff(self.prefs.auto_art)), true)),
+            "AUTO DOWNLOAD ART" => Some((format!("< {} >", onoff(self.prefs.auto_art)), true)),
             "ART TYPE" => {
                 let i = self.prefs.art_type.min(crate::art::LABELS.len() as u8 - 1) as usize;
                 Some((format!("< {} >", crate::art::LABELS[i]), true))
@@ -455,7 +454,7 @@ impl SettingsState {
             "CHARGE LIMIT" => Some((format!("< {} >", pct_label(self.prefs.charge_limit)), true)),
             "CLOCK" => Some((clock.to_string(), false)),
             "THEME" | "SHELF" | "SYSTEM" | "NETWORK" | "ABOUT" | "POWER MANAGEMENT"
-            | "DOWNLOAD ART" | "SCREENSHOTS" | "CHECK FOR UPDATES" => Some((">".into(), false)),
+            | "SCREENSHOTS" | "CHECK FOR UPDATES" => Some((">".into(), false)),
             _ => None,
         }
     }
@@ -676,7 +675,7 @@ mod tests {
             let (_, adjustable) = st
                 .value_text(row, "--")
                 .unwrap_or_else(|| panic!("{row} has no value"));
-            assert_eq!(row != "DOWNLOAD ART", adjustable, "{row} adjustability");
+            assert!(adjustable, "{row} adjustability");
         }
     }
 
