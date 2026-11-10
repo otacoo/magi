@@ -2,34 +2,54 @@
 
 All notable changes to MAGI are documented here.
 
-## [Unreleased]
+## [1.3.0] - 2026-11-10
 
-### Changes
+### NEW SYSTEMS ADDED
+- Pokemon Mini (PokeMini)
+  - Added a Pokemon Mini *overlay*
+- Dreamcast (Flycast)
+  - Save states do not work when *THREADED RENDERING* is enabled
+  - Rumble may have issues with certain games (Purupuru disabled by default in the CORE settings)
 
-- Added **Pokemon Mini** support with the PokeMini core, including its LCD, palette and rumble options, plus default bezels
-- Added **Sega Dreamcast** support with the Flycast core, including analog-stick detection and digital triggers
-- Dreamcast uses the lighter **Flycast VL** core for better speed
-- Dreamcast renders at native 1x resolution; the Internal Resolution option is gone
-- Dreamcast triggers use **L1/R1**; **L2/R2** stay with the frontend
-- Dreamcast rumble is off by default (enable **Purupuru** in the CORE menu) and now fires short pulses only on spikes, not continuously
-- Added a per-system **SWAP L1/R1** option, used by Dreamcast
-- Added **DPAD AS ANALOG** for Dreamcast and PlayStation games that need a stick; it maps the d-pad to the left analog stick and is on by default for Dreamcast
-- Dreamcast PAL games now run at their real 50 Hz refresh rate instead of fighting the 60 Hz frame clock
-- Dreamcast save states require **Threaded Rendering** to be off; MAGI blocks them while it is on to avoid crashes
-- **SWAP L1/R1** now only swaps the Dreamcast triggers when it is ON
+### SHELF MENU:
+- Reworked the menu to be similar to the in-game menu
+- Swapped the shelf buttons: **X** opens the game menu and **Y** favorites a game
+- **New options:**
+  - TRACK PLAY TIME (per game)
+  - SWAP A/B (Swap A and B buttons)
+  - SWAP L1/R1 with L2/R2 (system dependent)
+  - DPAD AS ANALOG (map the analog stick to the DPAD, system dependent)
+  - Improved the keyboard:
+    - Use *X* for SHIFT
+    - Added more symbols
+
+### Other changes & fixes
+
 - Shader choices are saved per system, so starting another system no longer overwrites them
 - The pause menu's **CRT** and **BEZEL** rows show **OFF** instead of **NONE** when nothing is selected
 - A read-only or failing card no longer makes the shelf retry its settings save every frame, and is rechecked while the shelf is open
-- The keyboard has **:**, **!**, **+** and **&** on the X shift layer
 - Shelf art settings now use **AUTO DOWNLOAD ART**, and the redundant **DOWNLOAD ART** row is gone
-- Dreamcast art now uses the Redump DAT; art lookup ignores punctuation and version noise such as `v1.01` or `Rev 1` and falls back to fuzzy DAT names
-- The Card Tool can rename a ROM file, and clicking the cover preview opens the image picker
+- The Card Tool can now rename a ROM file, and clicking the cover preview opens the image picker
 - Payload pushes keep the card's settings, saves and BIOS files
-- Added per-game **play time** tracking in the shelf game menu, shown as hours:minutes:seconds
-- Redesigned the shelf game menu with **INFO**, **GAME**, **SYSTEM** and **CLOSE** tabs
-- Shelf game menu now uses the same d-pad tab and pane navigation as the in-game menu
-- Added a per-system **SWAP A/B** option to the shelf game menu
-- Swapped the shelf buttons: **X** opens the game menu and **Y** favorites a game
+
+
+### Commits
+
+- SETTINGS FIXES (49ca707)
+- CARD TOOL ART (bbeeebf)
+- KEYS AND ART (1e9467b)
+- FLYCAST VL (8f7d637)
+- CARD CHECK (0721cf6)
+- CASTING DREAMS (72f3b18)
+- KEEP CARD DATA (752e8c0)
+- MENU CONTROLS (620f8da)
+- SWAP A/B (d332d51)
+- SWAP (0c8b598)
+- POKEMINI (8c49d00)
+- PLAY TIME (e5548f5)
+- CHANGE (e114a49)
+- STATIC (b40211c)
+- UN (4560c0b)
 
 ## [1.2.1] - 2026-11-02
 
