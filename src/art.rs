@@ -109,7 +109,9 @@ fn builtin(id: &str) -> Option<&'static str> {
 
 fn dat_set(collection: &str) -> &'static str {
     match collection {
-        "Sony - PlayStation" | "NEC - PC Engine CD - TurboGrafx-CD" => "redump",
+        "Sony - PlayStation" | "NEC - PC Engine CD - TurboGrafx-CD" | "Sega - Dreamcast" => {
+            "redump"
+        }
         _ => "no-intro",
     }
 }
@@ -206,7 +208,16 @@ struct Dat {
     by_base: HashMap<String, Vec<String>>,
 }
 
-/// The title without `(USA)`, `(Rev 1)`, `[!]` and similar groups.
+/// A version suffix written without brackets: `v1.01`, `Rev 1`, `Ver 1.0`.
+fn version_token(token: &str) -> bool {
+    matches!(token, "rev" | "revision" | "ver" | "version")
+        || token
+            .strip_prefix('v')
+            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// The title without `(USA)`, `(Rev 1)`, `[!]` and similar groups, punctuation
+/// or a trailing version token. This is the key art lookup compares.
 fn base_key(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     let mut depth = 0u32;
@@ -218,11 +229,25 @@ fn base_key(name: &str) -> String {
             _ => {}
         }
     }
-    out.replace('_', " ")
-        .to_lowercase()
+    let mut words: Vec<String> = out
+        .replace('_', " ")
         .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+        .map(|word| {
+            word.chars()
+                .filter(|c| c.is_alphanumeric())
+                .collect::<String>()
+                .to_lowercase()
+        })
+        .filter(|word| !word.is_empty())
+        .collect();
+    if let Some(at) = words
+        .iter()
+        .enumerate()
+        .position(|(i, word)| i > 0 && version_token(word))
+    {
+        words.truncate(at);
+    }
+    words.join(" ")
 }
 
 const REGIONS: [&str; 20] = [
@@ -303,7 +328,15 @@ fn fuzzy_rank(want: &str, candidate: &str) -> (u8, u8, u8) {
     let wanted = regions(want);
     let have = regions(candidate);
     let region = if wanted.is_empty() {
-        1
+        if have.contains(&"usa") {
+            0
+        } else if have.contains(&"world") {
+            1
+        } else if have.contains(&"europe") {
+            2
+        } else {
+            3
+        }
     } else if wanted.iter().any(|r| have.contains(r)) {
         0
     } else if have.contains(&"world") {
@@ -444,7 +477,13 @@ fn is_disc(sys: &SystemDef, rom: &str) -> bool {
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    sys.id == "psx" || (sys.id == "pce" && (ext == "cue" || ext == "chd"))
+    match sys.id.as_str() {
+        "psx" => true,
+        // A Dreamcast dump is the whole disc, never a single CRC-able file.
+        "dc" => matches!(ext.as_str(), "cue" | "chd" | "gdi" | "cdi" | "m3u"),
+        "pce" => ext == "cue" || ext == "chd",
+        _ => false,
+    }
 }
 
 /// A multi-disc dump's game name without the disc tag.
@@ -714,6 +753,10 @@ mod tests {
             dat_url("Sony - PlayStation"),
             "https://raw.githubusercontent.com/libretro/libretro-database/master/metadat/redump/Sony%20-%20PlayStation.dat"
         );
+        assert_eq!(
+            dat_url("Sega - Dreamcast"),
+            "https://raw.githubusercontent.com/libretro/libretro-database/master/metadat/redump/Sega%20-%20Dreamcast.dat"
+        );
     }
 
     #[test]
@@ -774,12 +817,76 @@ mod tests {
     }
 
     #[test]
-    fn fuzzy_keys_ignore_region_and_disc_tags() {
+    fn fuzzy_keys_ignore_region_disc_tags_punctuation_and_versions() {
         assert_eq!(base_key("Game (USA) (Disc 1) [b]"), "game");
+        assert_eq!(base_key("Mr Driller"), base_key("Mr. Driller (USA)"));
+        assert_eq!(base_key("Sonic Adventure v1.01"), "sonic adventure");
+        assert_eq!(base_key("Sonic Adventure Rev 1"), "sonic adventure");
+        assert_eq!(base_key("Sonic Adventure Ver 1.0 (USA)"), "sonic adventure");
         assert_eq!(regions("Game (USA, Europe)"), vec!["usa", "europe"]);
         assert_eq!(disc_tag("Game (Disc 1 of 2)"), Some("1 of 2"));
         assert_eq!(disc_number("1 of 2"), "1");
         assert_eq!(disc_tag("Game"), None);
+    }
+
+    #[test]
+    fn fuzzy_names_ignore_punctuation_and_version_noise() {
+        let text = "game (\n name \"Mr. Driller (Europe)\"\n)\ngame (\n name \"Mr. Driller (Japan)\"\n)\ngame (\n name \"Mr. Driller (USA)\"\n)\ngame (\n name \"Sonic Adventure (USA) (Rev 1)\"\n)\n";
+        let dat = Dat::parse(text);
+        assert_eq!(
+            dat.fuzzy("Mr Driller").first().map(String::as_str),
+            Some("Mr. Driller (USA)")
+        );
+        assert_eq!(
+            dat.fuzzy("Sonic Adventure v1.01")
+                .first()
+                .map(String::as_str),
+            Some("Sonic Adventure (USA) (Rev 1)")
+        );
+    }
+
+    #[test]
+    fn dreamcast_images_are_matched_by_dump_name() {
+        let dc = sys("dc");
+        assert!(is_disc(&dc, "Games/DC/Game.chd"));
+        assert!(is_disc(&dc, "Games/DC/Game.gdi"));
+        assert!(is_disc(&dc, "Games/DC/Game.cue"));
+        assert!(is_disc(&dc, "Games/DC/Game.cdi"));
+        assert!(!is_disc(&dc, "Games/DC/readme.txt"));
+        assert!(!is_disc(&sys("gb"), "Games/GB/Game.gb"));
+
+        let dat = Dat::parse(
+            "game (\n name \"Sonic Adventure (USA)\"\n rom ( name \"track01.bin\" size 1 crc 00000000 )\n)\n",
+        );
+        assert_eq!(
+            dat_name(
+                Path::new("."),
+                &dc,
+                "Games/DC/Sonic Adventure (USA).chd",
+                &dat
+            )
+            .as_deref(),
+            Some("Sonic Adventure (USA)")
+        );
+    }
+
+    #[test]
+    fn crc_finds_the_dat_name_for_a_noisy_stem() {
+        let dir = std::env::temp_dir().join(format!("magi_art_crc_{}", std::process::id()));
+        let sub = dir.join("Games/GB");
+        std::fs::create_dir_all(&sub).unwrap();
+        let rom = b"a noisy filename still has a clean dump";
+        std::fs::write(sub.join("Tetris v1.01.gb"), rom).unwrap();
+        let text = format!(
+            "game (\n name \"Tetris (World)\"\n rom ( name \"Tetris (World).gb\" size 1 crc {:08X} )\n)\n",
+            crc32(rom)
+        );
+        let dat = Dat::parse(&text);
+        assert_eq!(
+            dat_name(&dir, &sys("gb"), "Games/GB/Tetris v1.01.gb", &dat).as_deref(),
+            Some("Tetris (World)")
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

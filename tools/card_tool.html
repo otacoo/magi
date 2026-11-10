@@ -350,7 +350,9 @@ tbody tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--glow); }
   background-size: 18px 18px;
   background-position: 0 0, 9px 9px;
   overflow: hidden;
+  cursor: pointer;
 }
+.preview:hover { border-color: var(--title); }
 .preview img { max-width: 100%; max-height: 350px; display: block; object-fit: contain; }
 .preview .missing { color: var(--faint); letter-spacing: .14em; font-size: 11px; text-align: center; padding: 20px; }
 .preview.drag { border-color: var(--glow); box-shadow: inset 0 0 25px rgba(0,255,136,.12); }
@@ -602,7 +604,9 @@ const BUILTIN_SYSTEMS = [
   { id: "nes",     name: "NES",              exts: ["nes", "fds"],               folder: "NES",     art: "Nintendo - Nintendo Entertainment System" },
   { id: "snes",    name: "SNES",             exts: ["sfc", "smc"],               folder: "SNES",    art: "Nintendo - Super Nintendo Entertainment System" },
   { id: "genesis", name: "GENESIS",          exts: ["md", "gen"],                folder: "GENESIS", art: "Sega - Mega Drive - Genesis" },
+  { id: "dc",      name: "DREAMCAST",        exts: ["cdi", "gdi", "chd", "cue", "m3u"], folder: "DC", art: "Sega - Dreamcast" },
   { id: "ngp",     name: "NEO GEO POCKET",   exts: ["ngp", "ngc", "ngpc"],       folder: "NGPC",    art: "SNK - Neo Geo Pocket" },
+  { id: "pokemini", name: "POKEMON MINI",    exts: ["min"],                      folder: "POKEMINI", art: "Nintendo - Pokemon Mini" },
   { id: "psx",     name: "PLAYSTATION",      exts: ["cue", "chd", "pbp", "m3u"], folder: "PS1",     art: "Sony - PlayStation" },
   { id: "pce",     name: "PC ENGINE / SFX",  exts: ["pce", "sgx", "cue", "chd"], folder: "PCE",     art: "NEC - PC Engine - TurboGrafx 16" },
   { id: "n64",     name: "NINTENDO 64",      exts: ["z64", "v64", "n64"],        folder: "N64",     art: "Nintendo - Nintendo 64" },
@@ -643,6 +647,30 @@ function fileStem(value) {
 function naturalCmp(a, b) {
   return collator.compare(String(a), String(b));
 }
+function versionToken(word) {
+  const token = lower(word).replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "");
+  if (!token) return false;
+  if (token === "rev" || token === "revision" || token === "ver" || token === "version") return true;
+  return /^v\d/.test(token);
+}
+function stripVersionWords(text) {
+  const words = String(text).split(/\s+/).filter(Boolean);
+  const at = words.findIndex((word, i) => i > 0 && versionToken(word));
+  return (at > 0 ? words.slice(0, at) : words).join(" ");
+}
+function baseKey(value) {
+  let out = "";
+  let depth = 0;
+  for (const ch of String(value)) {
+    if (ch === "(" || ch === "[") depth++;
+    else if (ch === ")" || ch === "]") depth = Math.max(0, depth - 1);
+    else if (depth === 0) out += ch;
+  }
+  const words = lower(out).replace(/_/g, " ").replace(/[^\p{L}\p{N}]+/gu, " ").split(/\s+/).filter(Boolean);
+  const at = words.findIndex((word, i) => i > 0 && versionToken(word));
+  if (at > 0) words.length = at;
+  return words.join(" ");
+}
 function cleanTitle(stem) {
   let out = "";
   let depth = 0;
@@ -651,7 +679,7 @@ function cleanTitle(stem) {
     else if (ch === ")" || ch === "]") depth = Math.max(0, depth - 1);
     else if (depth === 0) out += ch;
   }
-  return out.replace(/_/g, " ").split(/\s+/).filter(Boolean).join(" ");
+  return stripVersionWords(out.replace(/_/g, " ").split(/\s+/).filter(Boolean).join(" "));
 }
 function coverStem(relPath) {
   const parts = splitPath(relPath);
@@ -1453,7 +1481,7 @@ function renderDetail() {
   const statusText = status === "ok" ? "OK" : status === "bad" ? "INVALID PNG" : status === "warn" ? "DUPLICATE FILE" : "MISSING";
 
   if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
-  let preview = `<div class="missing">NO COVER<br><span class="game-path">${esc(path)}</span></div>`;
+  let preview = `<div class="missing">NO COVER<br>CLICK OR DROP AN IMAGE<br><span class="game-path">${esc(path)}</span></div>`;
   if (cover) {
     previewUrl = URL.createObjectURL(cover.file);
     preview = `<img id="coverImg" alt="" src="${previewUrl}">`;
@@ -1482,6 +1510,9 @@ function renderDetail() {
   const deleteRomButton = card && card.canWrite
     ? `<button type="button" class="btn small danger" data-action="delete-rom">DELETE ROM</button>`
     : "";
+  const renameRomButton = card && card.canWrite
+    ? `<button type="button" class="btn small" data-action="rename-rom">RENAME ROM</button>`
+    : "";
   const modeHint = card && !card.canWrite
     ? `<div class="hint warn">READ ONLY: the optimized PNG downloads with the expected name; copy it to the card.</div>`
     : `<div class="hint">PNG only. JPG, WebP, GIF and BMP are converted locally; covers are resized to fit 640x480.</div>`;
@@ -1494,7 +1525,7 @@ function renderDetail() {
       <div class="detail-sub">${esc(game.systemName)} // ${esc(game.path)}</div>
     </div>
     <div class="arttabs">${tabs}</div>
-    <div id="preview" class="preview">${preview}</div>
+    <div id="preview" class="preview" data-action="add" title="CLICK OR DROP AN IMAGE">${preview}</div>
     <div class="dropnote">DROP AN IMAGE HERE TO SET THIS ART TYPE</div>
     <div class="meta">${meta.join("")}</div>
     <div class="actions">
@@ -1502,6 +1533,7 @@ function renderDetail() {
       ${remove}
       <button type="button" class="btn small" data-action="search">LIBRETRO SEARCH</button>
       <button type="button" class="btn small" data-action="copy">COPY PATH</button>
+      ${renameRomButton}
       ${deleteRomButton}
     </div>
     ${modeHint}${shared}${conflict}
@@ -1823,7 +1855,11 @@ async function renameEntry(path, kind) {
   } else {
     const ext = extname(current);
     if (ext && !extname(name)) name += `.${ext}`;
-    if (!window.confirm(`RENAME ${current} TO ${name}?\n\nRenaming a ROM changes its save, favorites and cover stem.`)) return;
+    const linked = ["cue", "chd", "gdi", "cdi", "pbp"].includes(lower(ext));
+    const note = linked
+      ? "\n\nA playlist or cue sheet may refer to this file name; update it after renaming."
+      : "";
+    if (!window.confirm(`RENAME ${current} TO ${name}?\n\nRenaming a ROM changes its save, favorites and cover stem.${note}`)) return;
   }
   const target = `${dirname(path)}/${name}`;
   if (lower(target) === lower(path)) return;
@@ -1844,6 +1880,7 @@ const REDUMP_COLLECTIONS = new Set([
   "Sony - PlayStation",
   "Sony - PlayStation Portable",
   "NEC - PC Engine CD - TurboGrafx-CD",
+  "Sega - Dreamcast",
 ]);
 const searchCache = new Map();
 let searchGameId = null;
@@ -1891,6 +1928,7 @@ const datCache = new Map();
 function parseDat(text) {
   const byName = new Map();
   const byCrc = new Map();
+  const byBase = new Map();
   let current = null;
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
@@ -1902,6 +1940,11 @@ function parseDat(text) {
     if (nameMatch) {
       current = nameMatch[1];
       byName.set(lower(current), current);
+      const key = baseKey(current);
+      if (key) {
+        if (!byBase.has(key)) byBase.set(key, []);
+        if (!byBase.get(key).includes(current)) byBase.get(key).push(current);
+      }
       continue;
     }
     if (current && line.startsWith("rom (")) {
@@ -1921,7 +1964,7 @@ function parseDat(text) {
       paths: ART_TYPES.map((art) => `${art.folder}/${file}`),
     });
   }
-  return { names, crcs: byCrc };
+  return { names, crcs: byCrc, byBase };
 }
 
 async function loadDatData(collection) {
@@ -2007,11 +2050,71 @@ function crc32Bytes(bytes, start = 0) {
 function isDiscGame(game) {
   const ext = lower(extname(game.path));
   return game.systemId === "psx" ||
+    (game.systemId === "dc" && ["cdi", "gdi", "chd", "cue", "m3u"].includes(ext)) ||
     (game.systemId === "pce" && (ext === "cue" || ext === "chd"));
 }
 
 function withoutDisc(stem) {
   return stem.split(" (Disc ")[0];
+}
+
+function discNumber(name) {
+  const match = /\(Disc\s+([^)]+)\)/i.exec(String(name));
+  return match ? match[1].split(/\s+/)[0] : null;
+}
+
+const REGIONS = new Set([
+  "usa", "europe", "japan", "world", "asia", "australia", "korea", "china",
+  "brazil", "canada", "france", "germany", "spain", "italy", "netherlands",
+  "sweden", "taiwan", "hong kong", "russia", "poland",
+]);
+
+function regionsOf(name) {
+  const out = [];
+  for (const match of String(name).matchAll(/\(([^)]+)\)/g)) {
+    for (const part of match[1].split(/[,+]/)) {
+      const region = lower(part.trim());
+      if (REGIONS.has(region) && !out.includes(region)) out.push(region);
+    }
+  }
+  return out;
+}
+
+function regionRank(want, candidate) {
+  const wanted = regionsOf(want);
+  const have = regionsOf(candidate);
+  let rank;
+  if (!wanted.length) {
+    rank = have.includes("usa") ? 0 : have.includes("world") ? 1 : have.includes("europe") ? 2 : 3;
+  } else if (wanted.some((region) => have.includes(region))) {
+    rank = 0;
+  } else if (have.includes("world")) {
+    rank = 1;
+  } else {
+    rank = 2;
+  }
+  if (/\((beta|proto|prototype|demo|sample|unl|kiosk)\)/.test(lower(candidate))) rank += 10;
+  return rank;
+}
+
+function discRank(want, candidate) {
+  const a = discNumber(want);
+  const b = discNumber(candidate);
+  if (a && b) return lower(a) === lower(b) ? 0 : 1;
+  if (a && !b) return 1;
+  if (!a && b) return 2;
+  return 0;
+}
+
+function datBaseMatch(dat, stem) {
+  const key = baseKey(stem);
+  if (!key || !dat.byBase) return null;
+  const list = (dat.byBase.get(key) || []).slice();
+  if (!list.length) return null;
+  list.sort((a, b) => regionRank(stem, a) - regionRank(stem, b) ||
+    discRank(stem, a) - discRank(stem, b) ||
+    naturalCmp(a, b));
+  return list[0];
 }
 
 async function discStemFor(game) {
@@ -2028,7 +2131,7 @@ async function discStemFor(game) {
   return null;
 }
 
-async function matchSearchCrc() {
+async function matchSearchCrc(auto = false) {
   const game = model.games.find((entry) => entry.id === searchGameId);
   if (!game || !card) return;
   const token = ++searchToken;
@@ -2038,11 +2141,13 @@ async function matchSearchCrc() {
     if (token !== searchToken) return;
     let name = null;
     let detail = "";
+    let kind = isDiscGame(game) ? "DAT NAME" : "CRC";
     if (isDiscGame(game)) {
       const stem = await discStemFor(game);
       if (stem) {
         name = (dat.names.get(lower(stem)) || {}).name ||
-          (dat.names.get(lower(withoutDisc(stem))) || {}).name || null;
+          (dat.names.get(lower(withoutDisc(stem))) || {}).name ||
+          datBaseMatch(dat, stem) || null;
         detail = `DISC ${stem}`;
       }
     } else {
@@ -2059,21 +2164,31 @@ async function matchSearchCrc() {
           break;
         }
       }
-      if (!name) detail = values.map((crc) => `CRC ${crc.toString(16).toUpperCase().padStart(8, "0")}`).join(" / ");
+      if (!name) {
+        const stem = fileStem(game.path);
+        name = datBaseMatch(dat, stem);
+        if (name) {
+          kind = "NAME";
+          detail = `NAME ${stem}`;
+        } else {
+          detail = values.map((crc) => `CRC ${crc.toString(16).toUpperCase().padStart(8, "0")}`).join(" / ");
+        }
+      }
     }
     if (token !== searchToken) return;
     if (name) {
       $("searchQuery").value = name;
       renderSearchResults();
-      $("searchStatus").textContent = `${isDiscGame(game) ? "DAT NAME" : "CRC"} MATCH // ${name}`;
+      $("searchStatus").textContent = `${kind} MATCH // ${name}`;
       $("searchQuery").focus();
       $("searchQuery").select();
-    } else {
+    } else if (!auto) {
       $("searchStatus").textContent = `NO DAT MATCH${detail ? ` // ${detail}` : ""}`;
     }
   } catch (error) {
     if (token !== searchToken) return;
-    $("searchStatus").textContent = `MATCH FAILED: ${error.message || error}`;
+    if (!auto) $("searchStatus").textContent = `MATCH FAILED: ${error.message || error}`;
+    else console.warn("libretro DAT match", error);
   }
 }
 
@@ -2093,7 +2208,7 @@ async function openLibretroSearch() {
   searchRows = [];
   $("searchContext").textContent = `${game.systemName} // ${collection}`;
   $("searchCrc").textContent = isDiscGame(game) ? "MATCH DISC" : "MATCH CRC";
-  $("searchQuery").value = game.title || game.stem;
+  $("searchQuery").value = game.title || cleanTitle(game.stem);
   $("searchStatus").textContent = "LOADING LIBRETRO INDEX..";
   $("searchResults").innerHTML = "";
   if (!dialog.open) dialog.showModal();
@@ -2107,10 +2222,24 @@ async function openLibretroSearch() {
     renderSearchResults();
     $("searchQuery").focus();
     $("searchQuery").select();
+    // Prefer a DAT/CRC match over the file name: version noise and punctuation
+    // in the stem must not hide the right art.
+    await matchSearchCrc(true);
   } catch (error) {
     if (token !== searchToken) return;
     $("searchStatus").textContent = `INDEX UNAVAILABLE: ${error.message || error}`;
   }
+}
+
+function searchScore(name, query, key) {
+  const n = lower(name);
+  if (n === query) return 0;
+  if (n.startsWith(query)) return 1;
+  if (n.includes(query)) return 2;
+  const k = baseKey(name);
+  if (key && k === key) return 3;
+  if (key && k.includes(key)) return 4;
+  return 5;
 }
 
 function renderSearchResults() {
@@ -2123,9 +2252,14 @@ function renderSearchResults() {
     $("searchStatus").textContent = `${searchIndex.names.size} NAMES // TYPE TO FILTER${source}`;
     return;
   }
+  const key = baseKey(query);
   const hits = [...searchIndex.names.values()]
-    .filter((item) => lower(item.name).includes(query));
-  hits.sort((a, b) => naturalCmp(a.name, b.name));
+    .map((item) => ({ item, score: searchScore(item.name, query, key) }))
+    .filter((entry) => entry.score < 5)
+    .sort((a, b) => a.score - b.score ||
+      (a.score >= 3 ? regionRank(query, a.item.name) - regionRank(query, b.item.name) : 0) ||
+      naturalCmp(a.item.name, b.item.name))
+    .map((entry) => entry.item);
   searchRows = hits.slice(0, 80);
   if (!hits.length) {
     $("searchResults").innerHTML = `<div class="empty">NO LIBRETRO NAMES MATCH.</div>`;
@@ -2338,6 +2472,10 @@ function init() {
     if (action.dataset.action === "add") $("filePicker").click();
     else if (action.dataset.action === "remove") removeCover();
     else if (action.dataset.action === "search") openLibretroSearch();
+    else if (action.dataset.action === "rename-rom") {
+      const game = currentGame();
+      if (game) renameEntry(game.path, "GAME");
+    }
     else if (action.dataset.action === "delete-rom") deleteRom();
     else if (action.dataset.action === "copy") copyPath();
   });
@@ -2349,7 +2487,7 @@ function init() {
   });
 
   $("searchGo").addEventListener("click", renderSearchResults);
-  $("searchCrc").addEventListener("click", matchSearchCrc);
+  $("searchCrc").addEventListener("click", () => matchSearchCrc(false));
   $("searchQuery").addEventListener("input", renderSearchResults);
   $("searchQuery").addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
@@ -2412,6 +2550,7 @@ if (typeof window !== "undefined") {
     MemoryCard,
     makeInputCard,
     cleanTitle,
+    baseKey,
     coverPath,
     coverStem,
     pngInfo,

@@ -19,6 +19,8 @@ All notable changes to MAGI are documented here.
 - A read-only or failing card no longer makes the shelf retry its settings save every frame, and is rechecked while the shelf is open
 - The keyboard has **:**, **!**, **+** and **&** on the X shift layer
 - Shelf art settings now use **AUTO DOWNLOAD ART**, and the redundant **DOWNLOAD ART** row is gone
+- Dreamcast art now uses the Redump DAT; art lookup ignores punctuation and version noise such as `v1.01` or `Rev 1` and falls back to fuzzy DAT names
+- The Card Tool can rename a ROM file, and clicking the cover preview opens the image picker
 - Payload pushes keep the card's settings, saves and BIOS files
 - Added per-game **play time** tracking in the shelf game menu, shown as hours:minutes:seconds
 - Redesigned the shelf game menu with **INFO**, **GAME**, **SYSTEM** and **CLOSE** tabs

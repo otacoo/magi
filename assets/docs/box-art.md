@@ -43,13 +43,15 @@ logo. For one system, **X → SYSTEM → CORE ART** overrides the global art typ
 
 MAGI first asks libretro-thumbnails for the ROM's own stem. If that misses, it
 resolves the dump through the system's DAT — CRC-32 for cartridge dumps, dump
-name for disc images; a multi-disc `.m3u` uses its first disc — and asks for
-the DAT name instead.
+name for disc images (including Dreamcast); a multi-disc `.m3u` uses its first
+disc — and asks for the DAT name instead.
 
 If neither exact name has art, MAGI falls back to DAT entries with the same
-title ignoring region/revision tags. It prefers a stable dump, then the same
-region, then the same disc number; up to six candidates are tried. This is how
-patched, translated or renamed ROMs still get a cover.
+title ignoring region/revision tags, punctuation and bare version suffixes such
+as `v1.01` or `Rev 1`. `Mr Driller` therefore matches `Mr. Driller (USA)`, and
+`Sonic Adventure v1.01` matches `Sonic Adventure`. It prefers a stable dump,
+then the same region, then the same disc number; up to six candidates are tried.
+This is how patched, translated or renamed ROMs still get a cover.
 
 A 404 or a file that is not a valid PNG is a miss. A connection failure aborts
 the job and reports `ART: OFFLINE`. Existing files are never replaced, and
@@ -63,10 +65,9 @@ Everything lives under **SETTINGS → SHELF**:
 | Row | Effect |
 |---|---|
 | **INTERFACE** | SIMPLE (text rows) or ART (cover panel). |
-| **AUTO ART** | Fetch missing covers when a system is opened in ART with Wi-Fi up. Off leaves the card untouched. |
+| **AUTO DOWNLOAD ART** | Fetch missing covers when a system is opened in ART with Wi-Fi up. Off leaves the card untouched. |
 | **ART TYPE** | Boxart, snap, title or logo. |
 | **ART BACKGROUND** | NONE floats the cover on a drop shadow; CARD keeps the bordered plate. |
-| **DOWNLOAD ART** | Fetch the current system now. Progress and the spinner appear in the bottom bar; **B** stops it. |
 
 ## Card tool
 
@@ -79,11 +80,12 @@ select the card root. The card tool reads `Games/` and `Covers/` locally and rep
 - non-ASCII file names, which can stop Firefox's folder picker.
 
 Select a game, choose BOXART/SNAP/TITLE/LOGO, then add, replace or drop an
-image. JPG, WebP, GIF and BMP are converted to PNG in the browser before the
-write. Covers, including orphans, can be renamed in place; a ROM can also be
-renamed from NON-ASCII after accepting that its save and cover stem change.
-With the directory picker the tool writes directly to the card; without
-it the tool scans read-only and downloads the correctly named PNG to copy over.
+image. Clicking the preview also opens the image picker. JPG, WebP, GIF and BMP
+are converted to PNG in the browser before the write. Covers, including orphans,
+can be renamed in place; **RENAME ROM** renames the selected game file, with a
+warning that its save, favorites and cover stem change. With the directory
+picker the tool writes directly to the card; without it the tool scans
+read-only and downloads the correctly named PNG to copy over.
 Firefox and other browsers without the directory API give the page a read-only
 copy; use Chrome or Edge for direct writes. Firefox's folder input can return
 nothing when the card has hidden system folders or non-ASCII file names; rename
@@ -99,7 +101,9 @@ cached in memory and nothing is uploaded.
 in the system's DAT. A SNES copier header is handled by testing both sides of
 the 512-byte boundary. Disc systems use the DAT dump name instead (for a
 `.m3u`, the first disc). The matched canonical name fills the search box, so
-the right art can be chosen without guessing.
+the right art can be chosen without guessing. Opening **LIBRETRO SEARCH** runs
+this match automatically; if the CRC does not match it falls back to the same
+punctuation- and version-insensitive title match as the shelf downloader.
 
 The selected game’s **DELETE ROM** removes the ROM file only; covers, saves and
 states are left on the card.
