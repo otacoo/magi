@@ -14,10 +14,8 @@ All notable changes to MAGI are documented here.
 - Dreamcast rumble is off by default (enable **Purupuru** in the CORE menu) and now fires short pulses only on spikes, not continuously
 - Added a per-system **SWAP L1/R1** option, used by Dreamcast
 - Added **DPAD AS ANALOG** for Dreamcast and PlayStation games that need a stick; it maps the d-pad to the left analog stick and is on by default for Dreamcast
-- Dreamcast uses the current Flycast core for safer save states and better game compatibility
-- Dreamcast CHD games boot again; GD-ROM fast loading is off on the current core
 - Dreamcast PAL games now run at their real 50 Hz refresh rate instead of fighting the 60 Hz frame clock
-- Fixed a crash when saving a Dreamcast state
+- Dreamcast save states require **Threaded Rendering** to be off; MAGI blocks them while it is on to avoid crashes
 - A read-only or failing card no longer makes the shelf retry its settings save every frame, and is rechecked while the shelf is open
 - Payload pushes keep the card's settings, saves and BIOS files
 - Added per-game **play time** tracking in the shelf game menu, shown as hours:minutes:seconds

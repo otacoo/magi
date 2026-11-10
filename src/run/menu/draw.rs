@@ -1533,6 +1533,7 @@ pub(crate) fn draw_menu_preview(
         ser,
         unser,
         state_size: 0,
+        states_blocked: false,
         options,
         opt_key: "gambatte".into(),
         opt_dirty: false,

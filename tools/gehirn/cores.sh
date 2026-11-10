@@ -25,7 +25,7 @@ mgba|https://github.com/libretro/mgba|7a12d6d4b9acb14c0ae62c9166b6a2f3d08007f6|m
 fceumm|https://github.com/libretro/libretro-fceumm|ac0d00a7fc01166f84c7bac01d1084ebfd2b865e|make|1
 snes9x2005_plus|https://github.com/libretro/snes9x2005|a79dfe9047e7fec58808aefe48ad2bf499c7af11|make|0
 genesis_plus_gx|https://github.com/libretro/Genesis-Plus-GX|aa74d79634cd230f65cce4180e92688e53883d2f|gpgx|0
-flycast|https://github.com/libretro/flycast|5d12c85ff927505b294ee3a2761c1a2606edd6d2|flycast|1
+flycast|https://github.com/libretro/flycast|4a913e063c95d1fae98afc64645831de0bcad57e|flycast|1
 mednafen_ngp|https://github.com/libretro/beetle-ngp-libretro|a50d5ac288a81f2104ddf43195a4efdd15c72227|make|1
 pokemini|https://github.com/libretro/PokeMini|132111b76343559860532a1ccc094f93f1ed5650|make|1
 mednafen_pce|https://github.com/libretro/beetle-pce-libretro|b96c11e095b6a40a412d2da02766ae1c3f4fd539|make|1
@@ -83,8 +83,8 @@ build_core() { # dir kind commit
                     GIT_VERSION="\" $(printf %s "$3" | cut -c1-7)\"" ) 2>&1
             ;;
         flycast)
-            # The current core has a safe save-state path (emu_hold, a size
-            # headroom and a fit check) and better game compatibility. The
+            # Knulli ships this 2021 commit as flycastvl on H700: the older
+            # GLES2 renderer is much lighter than the current one. The
             # mali-drm-gles2 target is the aarch64 GLES2 build (Cortex-A53,
             # ARM64 dynarec); ARCH=arm64 makes the makefile use the cross
             # gcc as the assembler for ngen_arm64.S. OpenMP and xBRZ are left

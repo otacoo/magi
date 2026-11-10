@@ -302,9 +302,7 @@ fn default_option(core: &str, system: &str, key: &str) -> Option<&'static str> {
         ("flycast", "reicast_enable_dsp") => Some("disabled"),
         // Threaded rendering runs ahead of the presenter without this.
         ("flycast", "reicast_synchronous_rendering") => Some("enabled"),
-        // The current core's fast-loading path fails to find 1ST_READ.BIN
-        // in CHD images; the normal GD-ROM path is still full speed here.
-        ("flycast", "reicast_gdrom_fast_loading") => Some("disabled"),
+        ("flycast", "reicast_gdrom_fast_loading") => Some("enabled"),
         ("flycast", "reicast_alpha_sorting") => Some("per-strip (fast, least accurate)"),
         ("flycast", "reicast_cable_type") => Some("VGA (RGB)"),
         ("flycast", "reicast_anisotropic_filtering") => Some("disabled"),
@@ -402,12 +400,13 @@ fn chosen_index(
             return i;
         }
     }
-    // The current core's GD-ROM fast path cannot find the boot file in CHD
-    // images. Ignore a stale saved "enabled".
+
+    // Fast loading is part of the VL speed profile; ignore a stale
+    // "disabled" left by a previous core.
     if core == "flycast" && key == "reicast_gdrom_fast_loading" {
         if let Some(i) = values
             .iter()
-            .position(|v| v.eq_ignore_ascii_case("disabled"))
+            .position(|v| v.eq_ignore_ascii_case("enabled"))
         {
             return i;
         }
@@ -530,6 +529,8 @@ struct Ctx {
     /// Cached once, before the game loop: `retro_serialize_size` is not
     /// thread-safe in cores with threaded rendering.
     state_size: usize,
+    /// Flycast VL cannot serialize while its emulation thread is running.
+    states_blocked: bool,
     options: Vec<CoreOption>,
     opt_key: String,
     opt_dirty: bool,
@@ -1568,6 +1569,7 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         ser: serialize,
         unser: unserialize,
         state_size: 0,
+        states_blocked: false,
         options: Vec::new(),
         opt_key: core_name.to_string(),
         opt_dirty: false,
@@ -1879,6 +1881,12 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
     let mut auto_pending = true;
     let mut auto_hold: Option<(std::path::PathBuf, Instant)> = None;
     let mut a_down = false;
+    let threaded =
+        core_option_value(ctx(), "reicast_threaded_rendering").as_deref() != Some("disabled");
+    ctx().states_blocked = flycast_states_blocked(core_name, threaded);
+    if ctx().states_blocked {
+        util::log("states: off while Flycast threaded rendering is on");
+    }
     let ser_size = unsafe { (ctx().ser_size)() };
     ctx().state_size = ser_size;
     let mut rewind_ok = rewind_allowed(system_id, ser_size);
@@ -2263,6 +2271,10 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                 && (e.code == ev::BTN_Z || e.code == ev::BTN_WEST)
             {
                 let slot = menu.slot;
+                if ctx().states_blocked {
+                    hud = Some(("STATES NEED THREADED OFF".into(), Instant::now()));
+                    continue;
+                }
                 let msg = if e.code == ev::BTN_Z {
                     let saved = save_state_to(&state_paths[slot]);
                     if saved == Some(true) {
@@ -2411,18 +2423,22 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                     if sram_size > 0 && !sram_ptr.is_null() {
                         save_sram(&srm_path, sram_ptr, sram_size);
                     }
-                    match save_state_to(&state_paths[menu.slot]) {
-                        Some(true) => util::log("state saved (menu hold)"),
-                        Some(false) if util::card_read_only() => {
-                            util::log("state save failed (menu hold): card read-only")
+                    if ctx().states_blocked {
+                        util::log("state save skipped (menu hold): threaded Flycast");
+                    } else {
+                        match save_state_to(&state_paths[menu.slot]) {
+                            Some(true) => util::log("state saved (menu hold)"),
+                            Some(false) if util::card_read_only() => {
+                                util::log("state save failed (menu hold): card read-only")
+                            }
+                            Some(false) => util::log("state save failed (menu hold)"),
+                            None => util::log("state save not supported by core (menu hold)"),
                         }
-                        Some(false) => util::log("state save failed (menu hold)"),
-                        None => util::log("state save not supported by core (menu hold)"),
-                    }
-                    match save_state_to(&auto_state_path(&save_dir, &stem)) {
-                        Some(true) => util::log("auto state saved"),
-                        Some(false) => util::log("auto state save failed"),
-                        None => util::log("auto state not supported by core"),
+                        match save_state_to(&auto_state_path(&save_dir, &stem)) {
+                            Some(true) => util::log("auto state saved"),
+                            Some(false) => util::log("auto state save failed"),
+                            None => util::log("auto state not supported by core"),
+                        }
                     }
                     break;
                 }
@@ -3467,6 +3483,13 @@ fn reveal_analog_options() {
     }
 }
 
+/// Flycast VL's serializer is only safe when its emulation thread is not
+/// running. With threaded rendering on, MAGI refuses states instead of
+/// crashing the core.
+fn flycast_states_blocked(core: &str, threaded: bool) -> bool {
+    core == "flycast" && threaded
+}
+
 /// True when this press completes a double tap (and then starts fresh).
 fn double_tap(last: &mut Option<Instant>, now: Instant, window: Duration) -> bool {
     match *last {
@@ -3837,6 +3860,9 @@ fn unpack_state(bytes: Vec<u8>) -> std::io::Result<Vec<u8>> {
 
 /// Serialize into a file; `None` means the core cannot save at all.
 fn save_state_to(path: &Path) -> Option<bool> {
+    if ctx().states_blocked {
+        return None;
+    }
     let size = ctx().state_size;
     if size == 0 {
         return None;
@@ -3882,6 +3908,9 @@ fn save_state_to(path: &Path) -> Option<bool> {
 }
 
 fn load_state_from(path: &Path) -> std::io::Result<bool> {
+    if ctx().states_blocked {
+        return Ok(false);
+    }
     let meta = state_meta_path(path);
     match std::fs::read_to_string(&meta) {
         Ok(v) if v.trim() == ctx().core_version.as_str() => {}
@@ -4569,7 +4598,10 @@ fn rgb1555(v: u32) -> u32 {
 
 #[cfg(test)]
 mod option_tests {
-    use super::{chosen_index, default_option, ensure_gba_bios, parse_option, pce_bios_default_in};
+    use super::{
+        chosen_index, default_option, ensure_gba_bios, flycast_states_blocked, parse_option,
+        pce_bios_default_in,
+    };
 
     #[test]
     fn parses_legacy_value_strings() {
@@ -4826,6 +4858,13 @@ mod option_tests {
     }
 
     #[test]
+    fn flycast_states_need_threading_off() {
+        assert!(flycast_states_blocked("flycast", true));
+        assert!(!flycast_states_blocked("flycast", false));
+        assert!(!flycast_states_blocked("pcsx_rearmed", true));
+    }
+
+    #[test]
     fn flycast_ships_a_curated_option_set() {
         for label in [
             "Region",
@@ -4871,7 +4910,7 @@ mod option_tests {
         );
         assert_eq!(
             default_option("flycast", "dc", "reicast_gdrom_fast_loading"),
-            Some("disabled")
+            Some("enabled")
         );
         assert_eq!(
             default_option("flycast", "dc", "reicast_alpha_sorting"),
@@ -4920,10 +4959,10 @@ mod option_tests {
                 "dc",
                 "reicast_gdrom_fast_loading",
                 &fast,
-                Some(&"enabled".to_string()),
+                Some(&"disabled".to_string()),
                 false
             ),
-            1
+            0
         );
 
         let old: Vec<String> = ["320x240", "640x480", "800x600"]

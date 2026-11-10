@@ -363,6 +363,10 @@ impl GameMenu {
             self.msg = Some(("LINKED: STATES LOCKED".into(), Instant::now()));
             return;
         }
+        if ctx().states_blocked {
+            self.msg = Some(("STATES NEED THREADED OFF".into(), Instant::now()));
+            return;
+        }
         if self.states.len() < STATE_SLOTS {
             self.refresh_states();
         }
@@ -392,6 +396,10 @@ impl GameMenu {
     fn load_selected_state(&mut self) {
         if ctx().netplay_linked {
             self.msg = Some(("LINKED: STATES LOCKED".into(), Instant::now()));
+            return;
+        }
+        if ctx().states_blocked {
+            self.msg = Some(("STATES NEED THREADED OFF".into(), Instant::now()));
             return;
         }
         if self.states.len() < STATE_SLOTS {

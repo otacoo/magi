@@ -41,14 +41,17 @@ Screen Shake Level and Controller Rumble Level. Set a rumble level to `0` to
 turn that effect off. The pad maps **A/B** to A/B, **L1** to Shake, **R1** to C
 and **SELECT** to the console's Power button.
 
-**Flycast** is the current build, used for its safe save-state path and
-better game compatibility. It puts the Dreamcast's triggers on **L1/R1**
-(Digital Triggers is on by default on H700 hardware); **L2/R2** stay with the
-frontend. The analog deadzone rows appear only when a real stick is attached;
-the stick works on devices that have one, and the d-pad keeps working
-everywhere. For games that need a stick, turn on **DPAD AS ANALOG** in the
-shelf's SYSTEM tab. GD-ROM fast loading stays off: the current core's fast
-path does not find the boot file in CHD images.
+**Flycast** is the 2021 **Flycast VL** build, which is lighter on the H700
+GPU. It puts the Dreamcast's triggers on **L1/R1** (Digital Triggers is on by
+default on H700 hardware); **L2/R2** stay with the frontend. The analog
+deadzone rows appear only when a real stick is attached; the stick works on
+devices that have one, and the d-pad keeps working everywhere. For games that
+need a stick, turn on **DPAD AS ANALOG** in the shelf's SYSTEM tab.
+
+Save states need **Threaded Rendering** off: Flycast VL cannot serialize
+safely while its emulation thread is running. With threaded rendering on,
+MAGI refuses state saves instead of crashing; VMU saves still work. State
+saves work normally when threaded rendering is disabled.
 
 Core options are edited in the in-game pause menu and persist per core in
 `Config/core-options.json`.
