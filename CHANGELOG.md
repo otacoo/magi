@@ -18,6 +18,7 @@ All notable changes to MAGI are documented here.
 - Dreamcast CHD games boot again; GD-ROM fast loading is off on the current core
 - Dreamcast PAL games now run at their real 50 Hz refresh rate instead of fighting the 60 Hz frame clock
 - Fixed a crash when saving a Dreamcast state
+- A read-only or failing card no longer makes the shelf retry its settings save every frame, and is rechecked while the shelf is open
 - Payload pushes keep the card's settings, saves and BIOS files
 - Added per-game **play time** tracking in the shelf game menu, shown as hours:minutes:seconds
 - Redesigned the shelf game menu with **INFO**, **GAME**, **SYSTEM** and **CLOSE** tabs

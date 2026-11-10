@@ -262,6 +262,7 @@ pub struct LibraryState {
     analog_dpad: HashMap<String, bool>,
     pub prefs: Prefs,
     state_dirty: bool,
+    save_failed: bool,
     last_save: Instant,
     cwd: PathBuf,
     last_poll: Instant,
@@ -340,6 +341,7 @@ impl LibraryState {
             cover: None,
             prefs,
             state_dirty: false,
+            save_failed: false,
             last_save: Instant::now(),
             cwd: cwd.to_path_buf(),
             last_poll: Instant::now() - Duration::from_secs(3600),
@@ -587,9 +589,16 @@ impl LibraryState {
         match serde_json::to_string_pretty(&v) {
             Ok(text) => {
                 if let Err(e) = util::write_file_fast(&path, text.as_bytes()) {
-                    util::log(&format!("cannot save Config/magi.json: {e}"));
+                    // A read-only card must not make the shelf retry and log
+                    // every frame: wait out the debounce, and say it once.
+                    self.last_save = Instant::now();
+                    if !self.save_failed {
+                        self.save_failed = true;
+                        util::log(&format!("cannot save Config/magi.json: {e}"));
+                    }
                 } else {
                     self.state_dirty = false;
+                    self.save_failed = false;
                     self.last_save = Instant::now();
                 }
             }

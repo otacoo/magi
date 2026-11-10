@@ -109,6 +109,7 @@ struct Ui {
     card_repair_ready: bool,
     card_dismissed: bool,
     card_alerted: bool,
+    card_check_at: Instant,
     card_result: Option<&'static str>,
 }
 
@@ -164,6 +165,7 @@ impl Ui {
             card_repair_ready: util::card_repair_available(),
             card_dismissed: false,
             card_alerted: false,
+            card_check_at: Instant::now(),
             card_result: util::take_repair_result(),
         };
         // Create the card tree and scan immediately: the walk then overlaps
@@ -1256,6 +1258,28 @@ impl Ui {
             if self.card_read_only {
                 util::log("card: read-only at boot; repair offered");
                 self.card_notice = true;
+            }
+        }
+        // The card can turn read-only after boot (a FAT error during a game
+        // or a card walk). Keep an eye on it while the shelf is up; the game
+        // host cannot draw this alert.
+        if self.screen != Screen::Boot && now >= self.card_check_at {
+            self.card_check_at = now + Duration::from_secs(2);
+            let read_only = util::card_read_only();
+            if read_only {
+                if !self.card_dismissed
+                    && !self.card_notice
+                    && !self.card_confirm
+                    && !self.card_repairing
+                {
+                    self.card_read_only = true;
+                    self.card_repair_ready = util::card_repair_available();
+                    self.card_notice = true;
+                    util::log("card: read-only; repair offered");
+                }
+            } else {
+                self.card_read_only = false;
+                self.card_dismissed = false;
             }
         }
         // POWER held: run the EVA countdown; released early, it aborts, and
