@@ -1551,6 +1551,8 @@ pub(crate) fn draw_menu_preview(
         rumble_low_at: None,
         rumble_armed: true,
         rumble_ok: false,
+        rumble_hold_until: None,
+        rumble_warned: false,
         disk: Some(DiskControl {
             set_eject_state: dc_eject,
             get_eject_state: dc_get_eject,

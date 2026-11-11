@@ -81,6 +81,9 @@ const RUMBLE_ON_MAX: Duration = Duration::from_millis(160);
 const RUMBLE_REARM: Duration = Duration::from_millis(250);
 /// A jump this large while the pack is already high is a new spike.
 const RUMBLE_RISE: u16 = 0x2000;
+/// Standard libretro rumble is a switch, but PokeMini can toggle it for a
+/// single frame. Keep the motor on briefly so short pulses are felt.
+const RUMBLE_HOLD: Duration = Duration::from_millis(150);
 /// Let the emulation lead the audio clock by this much before the audio
 /// callback blocks. RetroArch gets this pacing from its blocking audio
 /// driver; MAGI's writer does not block the core.
@@ -312,10 +315,16 @@ fn default_option(core: &str, system: &str, key: &str) -> Option<&'static str> {
         // PokeMini: 6x puts the 96x64 LCD at 576x384, close to the 640/720
         // panels, so the internal dot matrix survives the final scale.
         ("pokemini", "pokemini_video_scale") => Some("6x"),
+        ("pokemini", "pokemini_lcdfilter") => Some("none"),
+        ("pokemini", "pokemini_lcdmode") => Some("analog"),
+        ("pokemini", "pokemini_lcdcontrast") => Some("64"),
+        ("pokemini", "pokemini_lcdbright") => Some("0"),
+        ("pokemini", "pokemini_palette") => Some("LEDBacklight"),
+        ("pokemini", "pokemini_piezofilter") => Some("enabled"),
         // The H700 panel runs at 60Hz; the core's 72Hz native rate would tear.
         ("pokemini", "pokemini_60hz_mode") => Some("enabled"),
         // PS1 (PCSX-ReARMed)
-        ("pcsx_rearmed", "pcsx_rearmed_show_bios_bootlogo") => Some("disabled"),
+        ("pcsx_rearmed", "pcsx_rearmed_show_bios_bootlogo") => Some("enabled"),
         ("pcsx_rearmed", "pcsx_rearmed_dithering") => Some("disabled"),
         ("pcsx_rearmed", "pcsx_rearmed_frameskip_type") => Some("auto_threshold"),
         ("pcsx_rearmed", "pcsx_rearmed_frameskip_threshold") => Some("15"),
@@ -545,6 +554,10 @@ struct Ctx {
     rumble_low_at: Option<Instant>,
     rumble_armed: bool,
     rumble_ok: bool,
+    /// Minimum hold for the standard libretro rumble switch, and the motor
+    /// device warning latch.
+    rumble_hold_until: Option<Instant>,
+    rumble_warned: bool,
     /// The core's disk table while a multi-disc game is loaded.
     disk: Option<DiskControl>,
     system: String,
@@ -563,6 +576,12 @@ struct Ctx {
     hw_render: Option<HwRender>,
 }
 
+/// Flycast's Purupuru value is a continuous level; every other core reports a
+/// normal rumble switch.
+fn rumble_is_spike(core: &str) -> bool {
+    core == "flycast"
+}
+
 impl Ctx {
     /// The handheld's vibration motor: a write-only sysfs switch on the
     /// AXP2202. The state is cached so a core pulsing rumble at frame rate
@@ -577,6 +596,26 @@ impl Ctx {
                 return self.write_motor(false);
             }
             return true;
+        }
+        if !rumble_is_spike(&self.opt_key) {
+            // Standard libretro rumble is a switch. PokeMini in particular
+            // can pulse it for a single frame; keep the motor on for a short
+            // minimum so those pulses are felt.
+            let now = Instant::now();
+            if strength == 0 {
+                self.rumble_high = false;
+                if self.rumble_on && self.rumble_hold_until.is_none_or(|t| now >= t) {
+                    self.rumble_hold_until = None;
+                    return self.write_motor(false);
+                }
+                return true;
+            }
+            self.rumble_high = true;
+            self.rumble_hold_until = Some(now + RUMBLE_HOLD);
+            if self.rumble_on {
+                return true;
+            }
+            return self.write_motor(true);
         }
         let now = Instant::now();
         let high = strength >= RUMBLE_MIN_STRENGTH;
@@ -634,9 +673,19 @@ impl Ctx {
         self.write_motor(true)
     }
 
+    /// End a standard rumble pulse once its minimum hold has elapsed.
+    fn tick_rumble(&mut self, now: Instant) {
+        if self.rumble_on && !self.rumble_high && self.rumble_hold_until.is_some_and(|t| now >= t) {
+            self.rumble_hold_until = None;
+            self.write_motor(false);
+        }
+    }
+
     /// The AXP2202 keeps the motor state across process restarts. Clear it
     /// at launch so a killed run cannot leave the console buzzing.
     fn reset_motor(&mut self) {
+        self.rumble_high = false;
+        self.rumble_hold_until = None;
         self.write_motor(false);
     }
 
@@ -646,14 +695,27 @@ impl Ctx {
                 .write(true)
                 .open("/sys/class/power_supply/axp2202-battery/moto")
                 .ok();
-        }
-        if let Some(f) = &mut self.moto {
-            use std::io::Write;
-            if f.write_all(if on { b"1" } else { b"0" }).is_ok() {
-                self.rumble_on = on;
-                self.rumble_at = Some(Instant::now());
-                return true;
+            if self.moto.is_none() {
+                if !self.rumble_warned {
+                    self.rumble_warned = true;
+                    util::log("rumble: motor device unavailable");
+                }
+                return false;
             }
+        }
+        use std::io::Write;
+        let wrote = self
+            .moto
+            .as_mut()
+            .is_some_and(|f| f.write_all(if on { b"1" } else { b"0" }).is_ok());
+        if wrote {
+            self.rumble_on = on;
+            self.rumble_at = Some(Instant::now());
+            return true;
+        }
+        if !self.rumble_warned {
+            self.rumble_warned = true;
+            util::log("rumble: cannot write motor state");
         }
         false
     }
@@ -1584,6 +1646,8 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
         rumble_low_at: None,
         rumble_armed: true,
         rumble_ok: true,
+        rumble_hold_until: None,
+        rumble_warned: false,
         disk: None,
         system: system_id.to_string(),
         rom: rom.to_string(),
@@ -2832,6 +2896,8 @@ fn play(system_id: &str, core_name: &str, rom: &str) -> Result<()> {
                 rewind_next = core_frames + every;
             }
         }
+
+        ctx().tick_rumble(Instant::now());
 
         // With a frame up, restore the hold-MENU auto state if one was
         // left for us; it is consumed on a successful read. A held when the
@@ -4797,7 +4863,7 @@ mod option_tests {
     #[test]
     fn psx_defaults_follow_the_handheld_setting() {
         for (key, value) in [
-            ("pcsx_rearmed_show_bios_bootlogo", "disabled"),
+            ("pcsx_rearmed_show_bios_bootlogo", "enabled"),
             ("pcsx_rearmed_dithering", "disabled"),
             ("pcsx_rearmed_frameskip_type", "auto_threshold"),
             ("pcsx_rearmed_frameskip_threshold", "15"),
@@ -4863,14 +4929,83 @@ mod option_tests {
         assert!(!super::pokemini_option_kept("Low Pass Filter"));
         assert!(!super::pokemini_option_kept("Low Pass Filter Level (%)"));
         assert!(!super::pokemini_option_kept("Turbo Button Period"));
+        for (key, value) in [
+            ("pokemini_video_scale", "6x"),
+            ("pokemini_lcdfilter", "none"),
+            ("pokemini_lcdmode", "analog"),
+            ("pokemini_lcdcontrast", "64"),
+            ("pokemini_lcdbright", "0"),
+            ("pokemini_palette", "LEDBacklight"),
+            ("pokemini_piezofilter", "enabled"),
+            ("pokemini_60hz_mode", "enabled"),
+        ] {
+            assert_eq!(
+                default_option("pokemini", "pokemini", key),
+                Some(value),
+                "{key}"
+            );
+        }
+    }
+
+    #[test]
+    fn pokemini_defaults_do_not_override_saved_choices() {
+        let filters = ["dotmatrix", "scanline", "none"].map(str::to_string);
         assert_eq!(
-            default_option("pokemini", "pokemini", "pokemini_video_scale"),
-            Some("6x")
+            chosen_index(
+                "pokemini",
+                "pokemini",
+                "pokemini_lcdfilter",
+                &filters,
+                None,
+                false
+            ),
+            2
         );
+        let saved = "dotmatrix".to_string();
         assert_eq!(
-            default_option("pokemini", "pokemini", "pokemini_60hz_mode"),
-            Some("enabled")
+            chosen_index(
+                "pokemini",
+                "pokemini",
+                "pokemini_lcdfilter",
+                &filters,
+                Some(&saved),
+                false
+            ),
+            0
         );
+
+        let palettes = ["Default", "LEDBacklight"].map(str::to_string);
+        assert_eq!(
+            chosen_index(
+                "pokemini",
+                "pokemini",
+                "pokemini_palette",
+                &palettes,
+                None,
+                false
+            ),
+            1
+        );
+        let saved = "Default".to_string();
+        assert_eq!(
+            chosen_index(
+                "pokemini",
+                "pokemini",
+                "pokemini_palette",
+                &palettes,
+                Some(&saved),
+                false
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn rumble_spike_filter_is_flycast_only() {
+        assert!(super::rumble_is_spike("flycast"));
+        assert!(!super::rumble_is_spike("pokemini"));
+        assert!(!super::rumble_is_spike("mgba"));
+        assert!(!super::rumble_is_spike("gambatte"));
     }
 
     #[test]

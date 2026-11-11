@@ -2,6 +2,15 @@
 
 All notable changes to MAGI are documented here.
 
+## [Unreleased]
+
+### Changes
+
+- Pokemon Mini:
+  - Improve the bezels
+  - Set new CORE defaults
+  - Fix rumble
+
 ## [1.3.0] - 2026-11-10
 
 ### NEW SYSTEMS ADDED
