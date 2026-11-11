@@ -26,8 +26,8 @@ echo   6  Push system payload over adb           (keeps card data)
 echo   7  Push a game folder to Games\
 echo   8  Pull logs from console
 echo   9  Pull screenshots from console
-echo   V  Prepare release: bump version, changelog, commit, tag
-echo   G  Publish release: push main + tag (CI publishes the release)
+echo   V  Prepare release: bump version + changelog (no commit/tag)
+echo   G  Publish release: commit, tag and push (CI publishes)
 echo   P  Device probe (frontend --probe)
 echo   S  adb shell
 echo   R  Reboot console

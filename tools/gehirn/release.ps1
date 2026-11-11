@@ -130,7 +130,6 @@ try {
 
     $CargoPath = Join-Path $Root "Cargo.toml"
     $ChangelogPath = Join-Path $Root "CHANGELOG.md"
-    $ReadmePath = Join-Path $Root "README.md"
 
     if (-not (Test-Path -LiteralPath $CargoPath)) {
         throw "Cargo.toml not found"
@@ -138,14 +137,11 @@ try {
     if (-not (Test-Path -LiteralPath $ChangelogPath)) {
         throw "CHANGELOG.md not found"
     }
-    if (-not (Test-Path -LiteralPath $ReadmePath)) {
-        throw "README.md not found"
-    }
 
-    Assert-Clean
     $current = Get-CurrentVersion
 
     if ($Action -eq "prepare") {
+        Assert-Clean
         $next = Get-NextVersion -Current $current
         if ([version]$next -le [version]$current) {
             throw "new version $next must be greater than $current"
@@ -163,7 +159,7 @@ try {
         if ($summary) {
             $entry += "$summary`n`n"
         }
-        $entry += "### Changes`n`n" + ($changes -join "`n") + "`n`n"
+        $entry += "### Commits`n`n" + ($changes -join "`n") + "`n`n"
 
         $changelog = Read-Text $ChangelogPath
         $marker = "`n## ["
@@ -173,13 +169,6 @@ try {
         } else {
             $changelog = $changelog.TrimEnd() + "`n`n" + $entry
         }
-
-        $readme = Read-Text $ReadmePath
-        $oldStatus = "**v$current**"
-        if ($readme.IndexOf($oldStatus) -lt 0) {
-            throw "README status line does not contain $oldStatus"
-        }
-        $readme = $readme.Replace($oldStatus, "**v$next**")
 
         $cargo = Read-Text $CargoPath
         $cargo = [regex]::Replace(
@@ -196,12 +185,11 @@ try {
         if ($DryRun) {
             Write-Host "`n--- CHANGELOG entry ---"
             Write-Host $entry
-            Write-Host "--- README / Cargo.toml would be updated; no commit or tag written ---"
+            Write-Host "--- CHANGELOG / Cargo.toml would be updated; no commit or tag written ---"
             return
         }
 
         Write-Text $ChangelogPath $changelog
-        Write-Text $ReadmePath $readme
         Write-Text $CargoPath $cargo
 
         Invoke-Tool "cargo" @("check", "--quiet")
@@ -209,12 +197,8 @@ try {
         Invoke-Tool "cargo" @("test", "--quiet")
         Invoke-Tool "cargo" @("run", "--quiet", "--", "--selftest")
 
-        Invoke-Git @("add", "CHANGELOG.md", "Cargo.toml", "Cargo.lock", "README.md")
-        Invoke-Git @("commit", "-m", "RELEASE v$next")
-        Invoke-Git @("tag", "-a", "v$next", "-m", "MAGI v$next")
-
-        Write-Host "`nMAGI v$next prepared and tagged locally."
-        Write-Host "Next: release.cmd option G to push main and the tag."
+        Write-Host "`nMAGI v$next prepared locally (no commit or tag)."
+        Write-Host "Review CHANGELOG.md, then use release.cmd option G to commit, tag and publish."
         return
     }
 
@@ -223,22 +207,65 @@ try {
         if ($branch -ne "main") {
             throw "publish must run from main (currently $branch)"
         }
-        $tag = "v$current"
-        $tagCommit = (Get-GitOutput @("rev-list", "-n", "1", $tag) | Select-Object -First 1)
-        if (-not $tagCommit) {
-            throw "$tag does not exist; prepare the release first"
+
+        $releaseFiles = @("CHANGELOG.md", "Cargo.toml", "Cargo.lock", "README.md")
+        $status = @(Get-GitOutput @("status", "--porcelain"))
+        if ($status.Count -gt 0) {
+            $allowed = '^.. (CHANGELOG\.md|Cargo\.toml|Cargo\.lock|README\.md)$'
+            $unexpected = @($status | Where-Object { $_ -notmatch $allowed })
+            if ($unexpected.Count -gt 0) {
+                throw "working tree has changes outside the release files:`n$($unexpected -join "`n")"
+            }
         }
-        $head = (Get-GitOutput @("rev-parse", "HEAD") | Select-Object -First 1).Trim()
-        if ($tagCommit.Trim() -ne $head) {
-            throw "$tag is not at HEAD; check out the release commit first"
+
+        $tag = "v$current"
+        $tagExists = $false
+        $tagCommit = $null
+        & git rev-parse -q --verify "refs/tags/$tag" *> $null
+        if ($LASTEXITCODE -eq 0) {
+            $tagExists = $true
+            $tagCommit = (Get-GitOutput @("rev-list", "-n", "1", $tag) | Select-Object -First 1).Trim()
         }
 
         Write-Host "publishing v$current from main"
         if ($DryRun) {
+            if ($status.Count -gt 0) {
+                Write-Host "would commit: $($releaseFiles -join ', ')"
+            }
+            if ($tagExists) {
+                Write-Host "would tag $tag at the release commit (replacing a local-only tag if needed)"
+            } else {
+                Write-Host "would create tag $tag"
+            }
             Write-Host "would run: git push --force-with-lease origin main"
             Write-Host "would run: git push --force origin $tag"
             return
         }
+
+        if ($status.Count -gt 0) {
+            Invoke-Git @("add", "CHANGELOG.md", "Cargo.toml", "Cargo.lock")
+            if ($status | Where-Object { $_ -match 'README\.md$' }) {
+                Invoke-Git @("add", "README.md")
+            }
+            Invoke-Git @("commit", "-m", "RELEASE v$current")
+        }
+
+        $head = (Get-GitOutput @("rev-parse", "HEAD") | Select-Object -First 1).Trim()
+        if ($tagExists -and $tagCommit -ne $head) {
+            $remoteTag = @(& git ls-remote --tags origin "refs/tags/$tag" 2>$null)
+            if ($LASTEXITCODE -ne 0) {
+                throw "cannot check origin for $tag"
+            }
+            if ($remoteTag.Count -gt 0) {
+                throw "$tag already exists on origin and is not at HEAD"
+            }
+            Invoke-Git @("tag", "-d", $tag)
+            $tagExists = $false
+        }
+        if (-not $tagExists) {
+            Invoke-Git @("tag", "-a", $tag, "-m", "MAGI v$current")
+        }
+
         # with-lease still refuses if the remote moved behind our back, and
         # covers a rewritten history (squashes, rebases).
         Invoke-Git @("push", "--force-with-lease", "origin", "main")
