@@ -885,22 +885,10 @@ impl Ui {
                     | "SCREENSHOT" | "SHOW BATTERY %" | "LID SLEEP" | "LID SHUTDOWN AFTER"
                     | "IDLE SHUTDOWN" | "BATTERY SHUTDOWN" | "CHARGE LIMIT" | "LED"
                     | "HDMI AUTO" => self.settings_adjust(1),
-                    "SHELF" => {
-                        self.settings.page = settings::Page::Shelf;
-                        self.settings.sel = 0;
-                    }
-                    "THEME" => {
-                        self.settings.page = settings::Page::Theme;
-                        self.settings.sel = 0;
-                    }
-                    "SYSTEM" => {
-                        self.settings.page = settings::Page::System;
-                        self.settings.sel = 0;
-                    }
-                    "POWER MANAGEMENT" => {
-                        self.settings.page = settings::Page::Power;
-                        self.settings.sel = 0;
-                    }
+                    "SHELF" => self.settings.open_page(settings::Page::Shelf),
+                    "THEME" => self.settings.open_page(settings::Page::Theme),
+                    "SYSTEM" => self.settings.open_page(settings::Page::System),
+                    "POWER MANAGEMENT" => self.settings.open_page(settings::Page::Power),
 
                     "CLOCK" => {
                         self.settings.clock = Some(ClockEdit::from_now());
@@ -912,13 +900,11 @@ impl Ui {
                     "ABOUT" => self.open_info(InfoKind::About),
                     _ => self.leave_settings(),
                 },
-                Action::Back => match self.settings.page {
-                    settings::Page::Main => self.leave_settings(),
-                    _ => {
-                        self.settings.page = settings::Page::Main;
-                        self.settings.sel = 0;
+                Action::Back => {
+                    if !self.settings.back_to_main() {
+                        self.leave_settings();
                     }
-                },
+                }
                 Action::Start | Action::Menu => self.leave_settings(),
                 Action::Screenshot => self.pending_screenshot = true,
                 _ => {}

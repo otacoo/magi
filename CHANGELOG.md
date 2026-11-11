@@ -11,6 +11,14 @@ All notable changes to MAGI are documented here.
   - Set new CORE defaults
   - Fix rumble
 
+- Settings menu:
+  - Improved the looks
+  - Added a bottom notice explaining the various options
+
+### Other changes & fixes
+- Fixed an issue that prevented rumble for all systems except Dreamcast
+- The SIMPLE shelf's system list now scrolls to keep the selected system visible
+
 ## [1.3.0] - 2026-11-10
 
 ### NEW SYSTEMS ADDED

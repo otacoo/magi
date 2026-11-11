@@ -472,6 +472,21 @@ pub fn run() -> Result<()> {
     }
     settings.page = crate::screens::settings::Page::Main;
 
+    // Network page: same header and wide rows as SETTINGS.
+    crate::screens::net::draw_index(&mut cv, &mut fonts, 0, "MAGI", 0.4);
+    let s = stats(&cv);
+    write_ppm(&out.join("network.ppm"), &cv)?;
+    println!(
+        "network: warm={} signal={} nonbg={} ({:.1}%)",
+        s.warm,
+        s.signal,
+        s.nonbg,
+        pct(&cv, &s)
+    );
+    if s.warm < 100 {
+        bail!("network page looks wrong (warm {})", s.warm);
+    }
+
     settings.clock = Some(crate::screens::settings::ClockEdit {
         v: [2026, 10, 17, 14, 3],
         field: 2,

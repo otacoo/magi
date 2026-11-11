@@ -68,13 +68,25 @@ pub const POWER_ROWS: [&str; 6] = [
     "CHARGE LIMIT",
 ];
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Page {
     Main,
     Shelf,
     Theme,
     System,
     Power,
+}
+
+impl Page {
+    fn subtitle(self) -> &'static str {
+        match self {
+            Page::Main => "SYSTEM CONFIGURATION",
+            Page::Shelf => "SHELF OPTIONS",
+            Page::Theme => "THEME AND DISPLAY",
+            Page::System => "SYSTEM OPTIONS",
+            Page::Power => "POWER MANAGEMENT",
+        }
+    }
 }
 
 /// The persisted preferences, shared between the settings screen, the shelf
@@ -237,6 +249,8 @@ impl ClockEdit {
 pub struct SettingsState {
     pub sel: usize,
     pub page: Page,
+    /// The main-page row to restore after leaving a sub-page.
+    pub main_sel: usize,
     pub clock: Option<ClockEdit>,
     pub prefs: Prefs,
 }
@@ -246,6 +260,7 @@ impl Default for SettingsState {
         Self {
             sel: 0,
             page: Page::Main,
+            main_sel: 0,
             clock: None,
             prefs: Prefs::default(),
         }
@@ -263,6 +278,69 @@ fn nearest_scale_idx(s: f32) -> usize {
         }
     }
     best
+}
+
+fn hint_lines(fonts: &mut Fonts, text: &str, px: f32, max_w: i32, max_lines: usize) -> Vec<String> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let mut lines = Vec::new();
+    let mut i = 0;
+    while i < words.len() && lines.len() < max_lines {
+        let mut line = words[i].to_string();
+        i += 1;
+        while i < words.len() {
+            let candidate = format!("{line} {}", words[i]);
+            if fonts.text_width(&candidate, px) > max_w {
+                break;
+            }
+            line = candidate;
+            i += 1;
+        }
+        lines.push(fonts.elide(&line, px, max_w));
+    }
+    if i < words.len() {
+        if let Some(last) = lines.last_mut() {
+            let rest = words[i..].join(" ");
+            *last = fonts.elide(&format!("{last} {rest}"), px, max_w);
+        }
+    }
+    lines
+}
+
+fn row_description(row: &str) -> &'static str {
+    match row {
+        "FAST FORWARD" => "Hold R2 to fast-forward. Double-tap R2 to latch it on.",
+        "FF SOUND" => "Keep game audio while fast-forwarding.",
+        "RUMBLE" => "Motor feedback for supported cores and games.",
+        "COLOUR THEME" => "Interface colour palette.",
+        "TEXT SIZE" => "Shelf and menu text scale.",
+        "BACKGROUND" => "Backdrop pattern behind the interface.",
+        "SHELF BACKGROUND" => "Show the backdrop behind the shelf.",
+        "ANIM BACKGROUND" => "Animate the backdrop.",
+        "GLOW FX" => "Neon glow on borders and selections.",
+        "INTERFACE" => "Simple list or cover-art shelf.",
+        "AUTO DOWNLOAD ART" => "Fetch missing covers when a system opens.",
+        "ART TYPE" => "Boxart, snap, title or logo.",
+        "ART BACKGROUND" => "Pick the type of art background.",
+        "LID SLEEP" => "Suspend when the lid closes.",
+        "LID SHUTDOWN AFTER" => "Power off after the lid has been closed.",
+        "IDLE SHUTDOWN" => "Power off after no input for this long.",
+        "SHOW BATTERY %" => "Show the battery percentage in the header.",
+        "BATTERY SHUTDOWN" => "Power off at this battery level.",
+        "CHARGE LIMIT" => "Stop charging at this percentage.",
+        "LED" => "Show power LED while the console is awake.",
+        "SCREENSHOT" => "Enable the SELECT+MENU+R1 screenshot hotkey.",
+        "SCREENSHOTS" => "Browse and delete screenshots.",
+        "HDMI AUTO" => "Enable HDMI out when cable is connected.",
+        "CLOCK" => "Set the date and time.",
+        "NETWORK" => "Wi-Fi, Bluetooth, SSH and NTP.",
+        "CHECK FOR UPDATES" => "Check for a new MAGI payload.",
+        "ABOUT" => "Version and build information.",
+        "SHELF" => "Game list and artwork options.",
+        "THEME" => "Colours, text and background options.",
+        "POWER MANAGEMENT" => "Battery and sleep options.",
+        "SYSTEM" => "Device, network and info options.",
+        _ => "",
+    }
 }
 
 impl SettingsState {
@@ -284,6 +362,25 @@ impl SettingsState {
             }
             Page::Power => &POWER_ROWS,
         }
+    }
+
+    /// Enter a sub-page, remembering the main row to restore.
+    pub fn open_page(&mut self, page: Page) {
+        if self.page == Page::Main {
+            self.main_sel = self.sel;
+        }
+        self.page = page;
+        self.sel = 0;
+    }
+
+    /// Return to the main page. Returns false when already there.
+    pub fn back_to_main(&mut self) -> bool {
+        if self.page == Page::Main {
+            return false;
+        }
+        self.page = Page::Main;
+        self.sel = self.main_sel;
+        true
     }
 
     pub fn from_prefs(prefs: Prefs) -> Self {
@@ -382,6 +479,11 @@ impl SettingsState {
         self.prefs.background = ((self.prefs.background as i32 + delta).rem_euclid(n)) as u8;
     }
 
+    /// One line of help for the selected row.
+    fn description(&self) -> &'static str {
+        row_description(self.rows()[self.sel.min(self.rows().len() - 1)])
+    }
+
     /// Right-hand value for a row: the text and whether L/R adjusts it.
     fn value_text(&self, row: &str, clock: &str) -> Option<(String, bool)> {
         let onoff = |b: bool| if b { "ON" } else { "OFF" };
@@ -462,14 +564,23 @@ impl SettingsState {
 
 pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &SettingsState, t: f32) {
     let (w, h) = (cv.w, cv.h);
+    let s = theme::ui_scale();
+    let p = |v: f32| (v * s).round() as i32;
     cv.clear(pal().bg0);
-    theme::background(cv, 12, 64, (w - 32) as u32, (h - 124) as u32, t);
+    theme::background(
+        cv,
+        p(10.0),
+        p(10.0),
+        (w - p(20.0)).max(1) as u32,
+        (h - p(20.0)).max(1) as u32,
+        t,
+    );
     theme::glow_border(
         cv,
-        8,
-        8,
-        (w - 16) as u32,
-        (h - 16) as u32,
+        p(8.0),
+        p(8.0),
+        (w - p(16.0)).max(1) as u32,
+        (h - p(16.0)).max(1) as u32,
         pal().border,
         pal().glow,
         t,
@@ -483,8 +594,21 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &SettingsState, t: f32) {
         Page::System => "MAGI // SYSTEM",
         Page::Power => "MAGI // POWER",
     };
-    fonts.draw_center(cv, w / 2, 42, title, 15.0, pal().title);
-    theme::hazard_bar(cv, w / 2 - 150, 56, 300, 5, t);
+    let left = 24;
+    let right = w - 24;
+    let title_base = 30;
+    fonts.draw_bold(cv, left, title_base, title, 15.0, pal().title);
+    fonts.draw(
+        cv,
+        left,
+        title_base + 18,
+        st.page.subtitle(),
+        9.0,
+        pal().text_faint,
+    );
+    let div_y = 60;
+    cv.hline(left, div_y, (right - left).max(1) as u32, pal().border);
+    cv.fill_rect(left, div_y, 160, 3, pal().accent);
 
     let clock = util::full_date()
         .map(|v| {
@@ -495,20 +619,23 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &SettingsState, t: f32) {
         })
         .unwrap_or_else(|| "--".into());
 
-    let x0 = w / 2 - 230;
-    let row_w = 460;
+    let x0 = 38;
+    let row_w = (w - 76).max(400);
     let rows = st.rows();
     let groups: &[(usize, &str)] = match st.page {
         Page::Main => &MAIN_GROUPS,
         _ => &NO_GROUPS,
     };
     let mut y = match st.page {
-        Page::Main => 84,
+        Page::Main => 96,
         _ => 108,
     };
     for (i, label) in rows.iter().enumerate() {
         for &(grow, gname) in groups {
             if grow == i {
+                if i > 0 {
+                    y += 14;
+                }
                 fonts.draw(cv, x0, y - 2, gname, 9.0, pal().text_faint);
                 y += 18;
             }
@@ -535,7 +662,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &SettingsState, t: f32) {
             label,
             12.0,
             if selected {
-                pal().accent
+                pal().signal
             } else {
                 pal().text_dim
             },
@@ -552,11 +679,45 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &SettingsState, t: f32) {
         y += 28;
     }
 
-    crate::status::draw_center(cv, fonts, h - 54);
+    let notice_w = (w - 280).clamp(320, 460);
+    let notice_x = w / 2 - notice_w / 2;
+    let notice_y = h - 100;
+    let notice_h = 42;
+    cv.fill_rect_a(
+        notice_x,
+        notice_y,
+        notice_w as u32,
+        notice_h as u32,
+        pal().bg2,
+        238,
+    );
+    cv.rect_outline(
+        notice_x,
+        notice_y,
+        notice_w as u32,
+        notice_h as u32,
+        theme::mix(pal().border, pal().accent, 0.45),
+    );
+    cv.fill_rect(notice_x, notice_y, 3, notice_h as u32, pal().accent);
+    let lines = hint_lines(fonts, st.description(), 9.0, notice_w - 20, 2);
+    let line_h = p(11.5);
+    let start = notice_y + (notice_h - line_h * lines.len() as i32) / 2 + p(9.0);
+    for (i, line) in lines.iter().enumerate() {
+        fonts.draw(
+            cv,
+            notice_x + 10,
+            start + i as i32 * line_h,
+            line,
+            9.0,
+            pal().text_dim,
+        );
+    }
+
+    crate::status::draw_center(cv, fonts, h - 44);
     fonts.draw_center(
         cv,
         w / 2,
-        h - 26,
+        h - 20,
         "U/D PICK   L/R CHANGE   A SELECT   B BACK",
         9.0,
         pal().text_faint,
@@ -711,6 +872,39 @@ mod tests {
         for row in THEME_ROWS {
             assert!(st.value_text(row, "--").is_some(), "{row} has no value");
         }
+    }
+
+    #[test]
+    fn every_settings_row_has_a_description() {
+        let mut st = SettingsState::default();
+        st.prefs.shot_chord = true;
+        for page in [
+            Page::Main,
+            Page::Shelf,
+            Page::Theme,
+            Page::System,
+            Page::Power,
+        ] {
+            st.page = page;
+            for row in st.rows() {
+                assert!(!row_description(row).is_empty(), "{row} has no description");
+            }
+        }
+    }
+
+    #[test]
+    fn leaving_a_subpage_restores_the_main_row() {
+        let mut st = SettingsState {
+            sel: 5,
+            ..Default::default()
+        };
+        st.open_page(Page::Shelf);
+        assert_eq!(st.page, Page::Shelf);
+        assert_eq!(st.sel, 0);
+        assert!(st.back_to_main());
+        assert_eq!(st.page, Page::Main);
+        assert_eq!(st.sel, 5);
+        assert!(!st.back_to_main(), "already on the main page");
     }
 
     #[test]

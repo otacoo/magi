@@ -5,11 +5,11 @@ use crate::font::Fonts;
 use crate::theme::{self, pal};
 use crate::util::{self, WifiNet};
 
-/// Shared chrome: frame, title plate, hazard divider.
+/// Shared chrome: frame, left-aligned title plate and subtitle.
 fn chrome(cv: &mut Canvas, fonts: &mut Fonts, title: &str, t: f32) -> (i32, i32) {
     let (w, h) = (cv.w, cv.h);
     cv.clear(pal().bg0);
-    theme::background(cv, 12, 62, (w - 32) as u32, (h - 122) as u32, t);
+    theme::background(cv, 12, 12, (w - 24) as u32, (h - 24) as u32, t);
     theme::glow_border(
         cv,
         8,
@@ -22,9 +22,26 @@ fn chrome(cv: &mut Canvas, fonts: &mut Fonts, title: &str, t: f32) -> (i32, i32)
         0.6,
     );
     let title_text = format!("MAGI // {title}");
-    fonts.draw_center(cv, w / 2, 42, &title_text, 15.0, pal().title);
-    theme::hazard_bar(cv, w / 2 - 150, 54, 300, 5, t);
+    fonts.draw_bold(cv, 24, 30, &title_text, 15.0, pal().title);
+    fonts.draw(cv, 24, 48, net_subtitle(title), 9.0, pal().text_faint);
+    cv.hline(24, 60, (w - 48).max(1) as u32, pal().border);
+    cv.fill_rect(24, 60, 160, 3, pal().accent);
     (w, h)
+}
+
+fn net_subtitle(title: &str) -> &'static str {
+    match title {
+        "NETWORK" => "WI-FI, BLUETOOTH, SSH AND NTP",
+        "WIFI" => "WIRELESS NETWORK",
+        "BLUETOOTH" => "CONTROLLER PAIRING",
+        "SSH" => "REMOTE SHELL",
+        "NTP" => "NETWORK TIME",
+        _ => "NETWORK",
+    }
+}
+
+fn row_geom(w: i32) -> (i32, i32) {
+    (38, (w - 76).max(400))
 }
 
 /// One settings-style row with an optional right value; returns the next y.
@@ -60,7 +77,7 @@ fn row(
         label,
         11.0,
         if selected {
-            pal().accent
+            pal().signal
         } else {
             pal().text_dim
         },
@@ -88,8 +105,7 @@ pub const INDEX_ROWS: [&str; 5] = ["WIFI", "BLUETOOTH", "SSH", "NTP", "HOSTNAME"
 
 pub fn draw_index(cv: &mut Canvas, fonts: &mut Fonts, sel: usize, hostname: &str, t: f32) {
     let (w, h) = chrome(cv, fonts, "NETWORK", t);
-    let x0 = w / 2 - 230;
-    let row_w = 460;
+    let (x0, row_w) = row_geom(w);
     let mut y = 108;
     for (i, label) in INDEX_ROWS.iter().enumerate() {
         let value = match *label {
@@ -115,8 +131,7 @@ pub fn draw_wifi(
     t: f32,
 ) {
     let (w, h) = chrome(cv, fonts, "WIFI", t);
-    let x0 = w / 2 - 230;
-    let row_w = 460;
+    let (x0, row_w) = row_geom(w);
 
     // The toggle is row 0, the network rows follow it.
     let mut y = row(
@@ -177,7 +192,7 @@ pub fn draw_wifi(
             );
         }
         let color = if selected {
-            pal().accent
+            pal().signal
         } else {
             pal().text_dim
         };
@@ -252,8 +267,7 @@ pub fn draw_bt(
     t: f32,
 ) {
     let (w, h) = chrome(cv, fonts, "BLUETOOTH", t);
-    let x0 = w / 2 - 230;
-    let row_w = 460;
+    let (x0, row_w) = row_geom(w);
 
     let mut y = row(
         cv,
@@ -325,7 +339,7 @@ pub fn draw_bt(
             &shown,
             11.0,
             if selected {
-                pal().accent
+                pal().signal
             } else {
                 pal().text_dim
             },
@@ -360,8 +374,7 @@ pub fn draw_toggle_page(
     t: f32,
 ) {
     let (w, h) = chrome(cv, fonts, title, t);
-    let x0 = w / 2 - 230;
-    let row_w = 460;
+    let (x0, row_w) = row_geom(w);
     let mut y = row(
         cv,
         fonts,
@@ -394,8 +407,7 @@ pub fn draw_ntp(
     t: f32,
 ) {
     let (w, h) = chrome(cv, fonts, "NTP", t);
-    let x0 = w / 2 - 230;
-    let row_w = 460;
+    let (x0, row_w) = row_geom(w);
     let mut y = row(
         cv,
         fonts,

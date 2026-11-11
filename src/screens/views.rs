@@ -187,11 +187,10 @@ fn draw_rail(
     let (_, top, rail_w, height) = area;
     let item_h = p(30.0);
     let y0 = top + p(20.0);
-    for (i, name) in names.iter().enumerate() {
-        let y = y0 + i as i32 * item_h;
-        if y > top + height - 8 {
-            break;
-        }
+    let max_rows = (((height - p(20.0) - p(8.0)) / item_h).max(1)) as usize;
+    let first = rail_first(names.len(), sel, max_rows);
+    for (i, name) in names.iter().enumerate().skip(first).take(max_rows) {
+        let y = y0 + (i - first) as i32 * item_h;
         let idx = format!("{:02}", i + 1);
         let iw = fonts.text_width(&idx, 9.0);
         let (label, size) = crate::screens::library::fit_title(
@@ -220,6 +219,36 @@ fn draw_rail(
             fonts.draw(cv, p(14.0), y, &label, size, pal().text_dim);
         }
         fonts.draw(cv, rail_w - 10 - iw, y, &idx, 9.0, pal().text_faint);
+    }
+    if names.len() > max_rows {
+        let track_top = y0 - p(12.0);
+        let track_h = max_rows as i32 * item_h;
+        cv.fill_rect(
+            rail_w - 4,
+            track_top,
+            2,
+            track_h as u32,
+            pal().scrollbar_track,
+        );
+        let thumb_h = (track_h * max_rows as i32 / names.len() as i32).max(p(8.0));
+        let span = (track_h - thumb_h).max(1);
+        let pos = first as i32 * span / (names.len() - max_rows).max(1) as i32;
+        cv.fill_rect(
+            rail_w - 4,
+            track_top + pos,
+            2,
+            thumb_h as u32,
+            pal().scrollbar,
+        );
+    }
+}
+
+fn rail_first(len: usize, sel: usize, max_rows: usize) -> usize {
+    if len <= max_rows {
+        0
+    } else {
+        sel.saturating_sub(max_rows.saturating_sub(1))
+            .min(len - max_rows)
     }
 }
 
@@ -549,6 +578,16 @@ mod tests {
             Some(Path::new("Covers/PS1/Final Fantasy VII.png"))
         );
         assert_eq!(cover_path_for("loose", 0), None);
+    }
+
+    #[test]
+    fn the_system_rail_scrolls_to_keep_the_selection_visible() {
+        assert_eq!(rail_first(5, 0, 10), 0);
+        assert_eq!(rail_first(12, 0, 10), 0);
+        assert_eq!(rail_first(12, 9, 10), 0);
+        assert_eq!(rail_first(12, 10, 10), 1);
+        assert_eq!(rail_first(12, 11, 10), 2);
+        assert_eq!(rail_first(12, 11, 1), 11);
     }
 
     #[test]
