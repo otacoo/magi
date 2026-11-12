@@ -2,7 +2,7 @@
 
 All notable changes to MAGI are documented here.
 
-## [Unreleased]
+## [1.3.1] - 2026-11-11
 
 ### Changes
 
@@ -17,7 +17,13 @@ All notable changes to MAGI are documented here.
 
 ### Other changes & fixes
 - Fixed an issue that prevented rumble for all systems except Dreamcast
-- The SIMPLE shelf's system list now scrolls to keep the selected system visible
+- SIMPLE shelf can now scroll to show all the systems
+
+### Commits
+
+- RELEASE FLOW (ec5bb19)
+- SETTINGS (036e3d1)
+- MINI (9e097b3)
 
 ## [1.3.0] - 2026-11-10
 
