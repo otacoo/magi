@@ -32,9 +32,7 @@ const NODES: [(f32, f32, f32); 16] = [
     (0.30, 5.60, 1.21),
 ];
 
-/// Draw the animated globe. `alpha` is the overall brightness (0..=1). Rows
-/// outside `[clip_top, clip_bottom)` are skipped, which gives the boot its
-/// top-to-bottom scan reveal.
+/// Draw the animated globe; rows outside the clip are skipped.
 pub fn draw(
     cv: &mut Canvas,
     cx: f32,
@@ -260,8 +258,7 @@ fn segment(
     }
 }
 
-/// A clipped floating-point line. `clip_top` is the first row drawn and
-/// `clip_bottom` the first row that is not.
+/// A clipped floating-point line.
 fn line(
     cv: &mut Canvas,
     mut x0: f32,

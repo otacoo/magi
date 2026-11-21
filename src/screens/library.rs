@@ -105,8 +105,7 @@ struct StateFile {
 }
 
 impl StateFile {
-    /// The stored values layered over `Prefs::default()`; anything the user
-    /// has not changed keeps the fresh-card default.
+    /// Saved prefs layered over the defaults.
     fn prefs(&self) -> Prefs {
         let mut p = Prefs::default();
         if let Some(v) = self.interface {
@@ -189,7 +188,7 @@ fn system_for_path<'a>(systems: &'a [SystemDef], path: &str) -> Option<&'a Syste
         .find(|s| path.starts_with(&format!("Games/{}/", s.folder())))
 }
 
-/// Favorites in catalogue order, ready for the virtual system.
+/// Favorites in catalogue order.
 fn gather_favorites(
     systems: &[SystemDef],
     games: &HashMap<String, Vec<GameEntry>>,
@@ -229,8 +228,7 @@ pub struct LibraryState {
     want_system: Option<String>,
     positions: HashMap<String, usize>,
     first_visible: usize,
-    /// True while the selected title is scrolling; the app loop then runs at
-    /// the animation rate instead of its idle tick.
+    /// True while the title marquee runs.
     marquee: bool,
     /// When the highlighted game last changed, for the title marquee.
     sel_since: Instant,
@@ -244,12 +242,14 @@ pub struct LibraryState {
     art_quiet: bool,
     /// Systems whose art was attempted this run, so auto never loops.
     art_done: HashSet<String>,
-    /// One log line each for the reasons auto art stays idle without saying so.
+    /// One log line per idle-art reason.
     art_wait_logged: bool,
     art_idle_logged: bool,
     volume_pct: Option<u32>,
     /// The last decoded cover, keyed by ROM path and art type.
     cover: Option<(String, u8, Option<Rc<crate::image::Image>>)>,
+    /// The decoded cover scaled for the ART pane, keyed by path, type and size.
+    cover_scaled: Option<(String, u8, u32, u32, Rc<crate::image::Image>)>,
     /// Per-system art type overrides, by system id.
     art_types: HashMap<String, u8>,
     /// Per-game play-time tracking, by ROM path.
@@ -339,6 +339,7 @@ impl LibraryState {
             art_idle_logged: false,
             volume_pct: state.volume,
             cover: None,
+            cover_scaled: None,
             prefs,
             state_dirty: false,
             save_failed: false,
@@ -368,8 +369,7 @@ impl LibraryState {
                 (s.id.clone(), s.folder(), exts)
             })
             .collect();
-        // The saved system is the one on screen: scan it first so the shelf
-        // has its list even if the card walk is slow on a cold boot.
+        // Scan the saved system first for a fast cold boot.
         if let Some(want) = self.want_system.clone() {
             if let Some(pos) = jobs.iter().position(|(id, _, _)| *id == want) {
                 let job = jobs.remove(pos);
@@ -416,8 +416,7 @@ impl LibraryState {
                 self.refresh_favorites();
             }
         }
-        // Art job news: progress for the shelf line, and a cache drop when a
-        // cover lands for the selected game.
+        // Art progress; drop a stale cover when it lands.
         if let Some(rx) = self.art_rx.take() {
             let mut keep = true;
             loop {
@@ -431,6 +430,7 @@ impl LibraryState {
                     Ok(art::Msg::Saved { rom }) => {
                         if self.cover.as_ref().is_some_and(|(key, _, _)| *key == rom) {
                             self.cover = None;
+                            self.cover_scaled = None;
                         }
                     }
                     Ok(art::Msg::Finished {
@@ -450,9 +450,7 @@ impl LibraryState {
                         } else if saved > 0 {
                             crate::status::show(&format!("ART {saved} SAVED"));
                         } else {
-                            // A job only starts when something is missing, so
-                            // zero saved is news even when the shelf asked for
-                            // it silently.
+                            // A zero save is news when a job runs.
                             crate::status::show("NO ART FOUND");
                         }
                     }
@@ -470,8 +468,7 @@ impl LibraryState {
             }
         }
         self.poll_status(now);
-        // Resolve the state file's system once its scan has landed, and keep
-        // the cursor inside the rail when systems come and go.
+        // Keep the saved system selected as scans land.
         if let Some(id) = self.want_system.clone() {
             let vis = self.visible_systems();
             if let Some(pos) = vis.iter().position(|s| s.id == id) {
@@ -492,8 +489,7 @@ impl LibraryState {
         self.maybe_fetch_art();
     }
 
-    /// Auto art: once per system per run, when the scan has landed and wifi
-    /// is up. A failed or empty attempt is not retried automatically.
+    /// Auto art: once per system per run, when scan and wifi are ready.
     fn maybe_fetch_art(&mut self) {
         if !self.prefs.auto_art || self.art_rx.is_some() {
             return;
@@ -574,8 +570,7 @@ impl LibraryState {
         };
         let path = self.cwd.join("Config/magi.json");
         let _ = std::fs::create_dir_all(self.cwd.join("Config"));
-        // Merge over the live file: keys owned by others (wifi_on, ssh_on,
-        // bt_on, ntp_server, ...) must survive our saves.
+        // Keep keys owned by other processes.
         let mut v: serde_json::Value = std::fs::read_to_string(&path)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
@@ -589,8 +584,7 @@ impl LibraryState {
         match serde_json::to_string_pretty(&v) {
             Ok(text) => {
                 if let Err(e) = util::write_file_fast(&path, text.as_bytes()) {
-                    // A read-only card must not make the shelf retry and log
-                    // every frame: wait out the debounce, and say it once.
+                    // Do not retry a read-only card every frame.
                     self.last_save = Instant::now();
                     if !self.save_failed {
                         self.save_failed = true;
@@ -615,9 +609,7 @@ impl LibraryState {
         self.clock = util::clock_hhmm();
         self.headphones = util::headphones_in();
         self.refresh_radio();
-        // BaseOS's boot udhcpc can miss the lease when it starts before the
-        // association. While the shelf is up, retry once there is an
-        // association but still no address.
+        // Retry DHCP after association without an address.
         let has_ip = util::wifi_has_ip();
         if has_ip != self.wifi_had_ip {
             util::log(&format!(
@@ -634,12 +626,10 @@ impl LibraryState {
             self.dhcp_retry = now;
             util::retry_dhcp();
         }
-        // `work_led` is write-only and the AXP can reassert it late; keep
-        // the user's choice authoritative while the shelf is up.
+        // Keep the saved LED choice authoritative.
         #[cfg(target_os = "linux")]
         util::set_led(self.prefs.led_on);
-        // Battery policy: the charge limit runs here too (a long shelf sit
-        // while plugged would otherwise top off unmanaged).
+        // Apply the charge limit on the shelf too.
         if util::battery_policy(
             self.prefs.bat_shutdown,
             self.prefs.charge_limit,
@@ -655,8 +645,7 @@ impl LibraryState {
     pub fn refresh_radio(&mut self) {
         self.wifi_on = util::wifi_up();
         self.bt_on = util::bt_on();
-        // BaseOS powers wlan0 up (and starts dropbear) at boot, possibly
-        // after we already applied a saved "off"; keep the choice enforced.
+        // Enforce the saved radio state.
         if self.wifi_on && !util::saved_radio_state("wifi_on").unwrap_or(Defaults::WIFI) {
             util::log("wifi: off by default or saved off; turning it back off");
             // Service commands can take a second; keep them off the UI thread.
@@ -681,8 +670,7 @@ impl LibraryState {
 
     // ----- accessors -----
 
-    /// The strip: FAVORITES first when it has entries, then the systems that
-    /// actually hold games. Folders with only a README never appear.
+    /// Systems with games, favorites first.
     pub fn visible_systems(&self) -> Vec<&SystemDef> {
         let mut list: Vec<&SystemDef> = Vec::new();
         if !self.fav_games.is_empty() {
@@ -698,7 +686,21 @@ impl LibraryState {
     }
 
     pub fn current(&self) -> Option<&SystemDef> {
-        self.visible_systems().get(self.sel_system).copied()
+        let has_fav = !self.fav_games.is_empty();
+        if has_fav && self.sel_system == 0 {
+            return Some(&self.fav_system);
+        }
+        let mut idx = usize::from(has_fav);
+        for sys in &self.catalogue.systems {
+            if !self.games.get(&sys.id).is_some_and(|g| !g.is_empty()) {
+                continue;
+            }
+            if idx == self.sel_system {
+                return Some(sys);
+            }
+            idx += 1;
+        }
+        None
     }
 
     pub fn current_id(&self) -> Option<String> {
@@ -706,13 +708,22 @@ impl LibraryState {
     }
 
     pub fn current_games(&self) -> &[GameEntry] {
-        let Some(id) = self.current_id() else {
-            return &[];
-        };
-        if id == FAV_ID {
-            return &self.fav_games;
+        match self.current() {
+            Some(sys) => self.games_for_id(&sys.id),
+            None => &[],
         }
-        self.games.get(&id).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
+    /// Games in one system.
+    pub fn games_for_id(&self, system_id: &str) -> &[GameEntry] {
+        if system_id == FAV_ID {
+            &self.fav_games
+        } else {
+            self.games
+                .get(system_id)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[])
+        }
     }
 
     /// The system a game path belongs to, by its `Games/<folder>`.
@@ -727,8 +738,7 @@ impl LibraryState {
         if let Some(pos) = self.positions.get_mut(FAV_ID) {
             *pos = (*pos).min(self.fav_games.len().saturating_sub(1));
         }
-        // The tabs may have moved under the cursor (FAVORITES comes and goes);
-        // keep the same system selected.
+        // Keep the same system selected after tabs move.
         let pos = {
             let vis = self.visible_systems();
             keep.as_deref()
@@ -739,17 +749,24 @@ impl LibraryState {
     }
 
     pub fn sel_game(&self) -> usize {
-        self.current_id()
-            .and_then(|id| self.positions.get(&id).copied())
+        self.current()
+            .map(|sys| self.sel_game_for(&sys.id))
             .unwrap_or(0)
     }
 
-    pub fn selected_game(&self) -> Option<GameEntry> {
-        self.current_games().get(self.sel_game()).cloned()
+    /// Saved cursor for one system.
+    pub fn sel_game_for(&self, system_id: &str) -> usize {
+        self.positions.get(system_id).copied().unwrap_or(0)
     }
 
-    /// Rename the ROM file in place (extension kept); refreshes the list and
-    /// keeps the renamed entry selected.
+    pub fn selected_game(&self) -> Option<GameEntry> {
+        let sys = self.current()?;
+        self.games_for_id(&sys.id)
+            .get(self.sel_game_for(&sys.id))
+            .cloned()
+    }
+
+    /// Rename the ROM in place and keep it selected.
     pub fn rename_game(&mut self, path: &str, new_stem: &str) -> Result<(), String> {
         let Some(stem) = games::sanitize_game_name(new_stem) else {
             return Err("NAME NOT ALLOWED".into());
@@ -800,8 +817,7 @@ impl LibraryState {
         Ok(())
     }
 
-    /// A native port is a folder around `rom.z64`; rename the folder and
-    /// keep the port's label (its shelf title) in step.
+    /// Rename a native port folder and its label.
     fn rename_n64(&mut self, path: &str, stem: &str, sys_id: &str) -> Result<(), String> {
         let rom = std::path::Path::new(path);
         let Some(folder) = rom.parent() else {
@@ -850,8 +866,7 @@ impl LibraryState {
         Ok(())
     }
 
-    /// Delete the ROM file from the card (saves are left alone). Native
-    /// port entries remove their whole game folder instead.
+    /// Delete the ROM; native ports remove the folder.
     pub fn delete_game(&mut self, path: &str) -> Result<(), String> {
         let Some(sys_id) = self.game_system(path).map(|s| s.id.clone()) else {
             return Err("DELETE FAILED".into());
@@ -900,8 +915,7 @@ impl LibraryState {
             .unwrap_or(false)
     }
 
-    /// True while any system's scan is still in flight; the app loop uses it
-    /// to keep polling even when the current list is not visible yet.
+    /// True while any scan is in flight.
     pub fn scan_pending(&self) -> bool {
         self.scan_rx.is_some() || !self.scanning.is_empty()
     }
@@ -996,8 +1010,7 @@ impl LibraryState {
         });
     }
 
-    /// The selected game's cover: decoded once per path and art type, then
-    /// reused.
+    /// The selected cover, decoded and cached.
     pub fn cover_for(&mut self, game_path: &str, art_type: u8) -> Option<Rc<crate::image::Image>> {
         if let Some((key, ty, img)) = &self.cover {
             if key == game_path && *ty == art_type {
@@ -1008,7 +1021,27 @@ impl LibraryState {
             .and_then(|path| crate::image::load_png(&path))
             .map(Rc::new);
         self.cover = Some((game_path.to_string(), art_type, img.clone()));
+        self.cover_scaled = None;
         img
+    }
+
+    /// The cover scaled for the ART pane.
+    pub fn cover_scaled_for(
+        &mut self,
+        game_path: &str,
+        art_type: u8,
+        w: u32,
+        h: u32,
+    ) -> Option<Rc<crate::image::Image>> {
+        if let Some((key, ty, cw, ch, img)) = &self.cover_scaled {
+            if key == game_path && *ty == art_type && *cw == w && *ch == h {
+                return Some(img.clone());
+            }
+        }
+        let img = self.cover_for(game_path, art_type)?;
+        let scaled = Rc::new(img.scaled(w, h));
+        self.cover_scaled = Some((game_path.to_string(), art_type, w, h, scaled.clone()));
+        Some(scaled)
     }
 
     /// The art type for a system: its CORE ART override, else the global one.
@@ -1029,6 +1062,7 @@ impl LibraryState {
         self.art_types.insert(id, next);
         self.state_dirty = true;
         self.cover = None;
+        self.cover_scaled = None;
     }
 
     /// The play-time entry for a game, if it has one.
@@ -1036,8 +1070,7 @@ impl LibraryState {
         self.play.get(path).copied().unwrap_or_default()
     }
 
-    /// The system's saved A/B swap. `None` for native cores, which cannot use
-    /// the libretro button mapping.
+    /// Saved A/B swap; `None` for native cores.
     pub fn game_swap_ab(&self, path: &str) -> Option<bool> {
         let sys = self.game_system(path)?;
         let core = sys.core.as_deref()?;
@@ -1098,8 +1131,7 @@ impl LibraryState {
         Some(on)
     }
 
-    /// The system's d-pad-as-left-stick choice. Exposed for Dreamcast and
-    /// PlayStation, the two libretro hosts with analog input.
+    /// Saved d-pad-as-left-stick choice; Dreamcast and PSX.
     pub fn game_analog_dpad(&self, path: &str) -> Option<bool> {
         let sys = self.game_system(path)?;
         if !matches!(sys.id.as_str(), "dc" | "psx") {
@@ -1124,8 +1156,7 @@ impl LibraryState {
         }
         let default = id == "dc";
         let on = !self.analog_dpad.get(&id).copied().unwrap_or(default);
-        // Keep the explicit choice: removing the key would restore the
-        // Dreamcast default (on) when the player turned it off.
+        // Keep the explicit choice even when it equals the default.
         self.analog_dpad.insert(id, on);
         self.state_dirty = true;
         Some(on)
@@ -1268,7 +1299,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
     cv.clear(pal().bg0);
     st.marquee = false;
 
-    // Top bar; its divider breathes with the glow theme.
+    // Top bar.
     cv.fill_rect(0, 0, w as u32, top_h as u32, pal().bg1);
     cv.hline(
         0,
@@ -1285,7 +1316,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
         pal().title,
     );
 
-    // The clock in NERV timer digits, with AM/PM in 12-hour mode.
+    // Clock.
     let mut clock = st.clock.clone().unwrap_or_else(|| "--:--".into());
     let mut pm = None;
     if st.prefs.clock_12h {
@@ -1320,7 +1351,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
         );
     }
 
-    // The radio icons, right next to the clock.
+    // Radio icons.
     let mut icons_x = clock_x - p(8.0);
     if st.headphones {
         crate::theme::headphone_icon(cv, icons_x - p(14.0), p(9.0), pal().accent);
@@ -1339,10 +1370,10 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
         crate::theme::wifi_icon(cv, icons_x - p(16.0), p(8.0), color, st.wifi_signal);
     }
 
-    // The interface decides where the systems, the header and the list sit.
+    // Layout.
     let lay = views::layout(view, w, h, top_h, bottom_bar, sc);
 
-    // Optionally the backdrop reaches the content pane too.
+    // Shelf backdrop.
     if crate::theme::shelf_bg() {
         let (sx, sy, sw, sh) = lay.systems;
         let (bx, by, bw, bh) = match view {
@@ -1353,12 +1384,21 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
     }
 
     {
-        let systems = st.visible_systems();
-        let names: Vec<&str> = systems.iter().map(|s| s.name.as_str()).collect();
+        let mut names: Vec<&str> = Vec::with_capacity(st.catalogue.systems.len() + 1);
+        if !st.fav_games.is_empty() {
+            names.push(st.fav_system.name.as_str());
+        }
+        names.extend(
+            st.catalogue
+                .systems
+                .iter()
+                .filter(|s| st.games.get(&s.id).is_some_and(|g| !g.is_empty()))
+                .map(|s| s.name.as_str()),
+        );
         views::draw_systems(cv, fonts, view, &names, st.sel_system, lay.systems, sc, t);
     }
 
-    // Game list pane.
+    // Game list.
     let px0 = lay.list_x;
     let pane_right = lay.list_right;
     let list_top = lay.list_top;
@@ -1366,12 +1406,16 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
     let row_h = (ROW_H as f32 * sc).round() as i32;
     let vis = ((list_bottom - list_top) / row_h).max(1) as usize;
 
-    if let Some(sys) = st.current().cloned() {
-        let total = st.current_games().len();
-        let sel = st.sel_game();
+    if let Some(sys) = st.current() {
+        let sys_id = sys.id.clone();
+        let sys_name = sys.name.clone();
+        let sys_folder = sys.folder();
+        let is_fav = sys_id == FAV_ID;
+        let total = st.games_for_id(&sys_id).len();
+        let sel = st.sel_game_for(&sys_id);
         if view == views::View::Simple {
             let (title, title_sz) =
-                fit_title(fonts, &sys.name, 20.0, 12.0, pane_right - p(14.0) - px0);
+                fit_title(fonts, &sys_name, 20.0, 12.0, pane_right - p(14.0) - px0);
             fonts.draw(cv, px0, lay.header_y, &title, title_sz, pal().title);
         }
 
@@ -1396,34 +1440,34 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
         if st.is_scanning() {
             fonts.draw(cv, px0, lay.subtitle_y, "SCANNING...", 10.0, pal().text_dim);
         } else {
-            let sub = if sys.id == FAV_ID {
+            let sub = if is_fav {
                 if view == views::View::Art {
                     "FAVORITES".to_string()
                 } else {
                     format!("{total} FAVORITE{}", if total == 1 { "" } else { "S" })
                 }
             } else if view == views::View::Art {
-                format!("Games/{}/", sys.folder())
+                format!("Games/{sys_folder}/")
             } else {
-                format!("Games/{}/   {total} GAMES", sys.folder())
+                format!("Games/{sys_folder}/   {total} GAMES")
             };
-            let sub = elide(fonts, &sub, 10.0, sub_max);
+            let sub = fonts.elide(&sub, 10.0, sub_max);
             fonts.draw(cv, px0, lay.subtitle_y, &sub, 10.0, pal().text_faint);
         }
 
         if total == 0 && !st.is_scanning() {
-            let (msg, hint) = if sys.id == FAV_ID {
+            let (msg, hint) = if is_fav {
                 ("NO FAVORITES".to_string(), "PRESS Y ON A GAME".to_string())
             } else {
                 (
                     "NO GAMES FOUND".to_string(),
-                    format!("COPY GAMES TO  Games/{}/", sys.folder()),
+                    format!("COPY GAMES TO  Games/{sys_folder}/"),
                 )
             };
             fonts.draw(cv, px0, list_top + p(42.0), &msg, 14.0, pal().text_dim);
             fonts.draw(cv, px0, list_top + p(68.0), &hint, 11.0, pal().text_faint);
         } else {
-            // Keep the selection visible with minimal scrolling.
+            // Keep the selection visible.
             if sel < st.first_visible {
                 st.first_visible = sel;
             } else if sel >= st.first_visible + vis {
@@ -1432,18 +1476,30 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
             let first = st.first_visible.min(total.saturating_sub(1));
 
             let sel_path = st
-                .current_games()
+                .games_for_id(&sys_id)
                 .get(sel)
                 .map(|g| g.path.clone())
                 .unwrap_or_default();
-            let sel_hold = st.selection_hold(&sys.id, &sel_path);
-            let art_type = st.art_type_for(&sys.id);
-            let cover = match view {
-                views::View::Art => st.cover_for(&sel_path, art_type),
-                views::View::Simple => None,
+            let sel_hold = st.selection_hold(&sys_id, &sel_path);
+            let art_type = st.art_type_for(&sys_id);
+            let art = lay.art.unwrap_or_default();
+            let card = st.prefs.art_bg > 0;
+            let cover = if view == views::View::Art {
+                if let Some(img) = st.cover_for(&sel_path, art_type) {
+                    if img.w > 0 && img.h > 0 {
+                        let (sw, sh) = views::cover_size(&img, art, card);
+                        st.cover_scaled_for(&sel_path, art_type, sw, sh)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
             };
             let list = views::List {
-                games: st.current_games(),
+                games: st.games_for_id(&sys_id),
                 sel,
                 first,
                 rows: vis,
@@ -1456,15 +1512,9 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
             };
             let scrolling = match view {
                 views::View::Simple => views::draw_simple(cv, fonts, &list, t),
-                views::View::Art => views::draw_art(
-                    cv,
-                    fonts,
-                    &list,
-                    lay.art.unwrap_or_default(),
-                    cover.as_deref(),
-                    st.prefs.art_bg > 0,
-                    t,
-                ),
+                views::View::Art => {
+                    views::draw_art(cv, fonts, &list, art, cover.as_deref(), card, t)
+                }
             };
             st.marquee = scrolling;
 
@@ -1482,7 +1532,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
         }
     }
 
-    // Bottom bar: battery, status line, art in flight and version.
+    // Bottom bar.
     cv.fill_rect(0, h - bottom_bar, w as u32, bottom_bar as u32, pal().bg1);
     cv.hline(
         0,
@@ -1510,7 +1560,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
         right -= p(14.0);
     }
 
-    // Info and errors live on this line instead of a floating box.
+    // Status line.
     crate::status::draw_bar(cv, fonts, battery_right, right, h - 8);
 
     if st.controls_open {
@@ -1690,7 +1740,7 @@ pub fn draw_game_menu(
     );
     menu_right_text(cv, fonts, right, title_base, &system, 9.5, pal().text_dim);
     let note_w = fonts.text_width("SHELF MENU", 9.0);
-    let name = elide(fonts, info.title, 10.0, right - left - note_w - p(16.0));
+    let name = fonts.elide(info.title, 10.0, right - left - note_w - p(16.0));
     fonts.draw(
         cv,
         left,
@@ -2181,15 +2231,17 @@ pub(crate) fn fit_title(
     min_px: f32,
     max_w: i32,
 ) -> (String, f32) {
-    let mut size = max_px;
+    let width = fonts.text_width(text, max_px);
+    if width <= max_w {
+        return (text.to_string(), max_px);
+    }
+    // Widths scale linearly; start just above the fit.
+    let fit = max_px * max_w as f32 / width as f32;
+    let mut size = ((fit * 2.0).ceil() / 2.0).clamp(min_px, max_px);
     while size > min_px && fonts.text_width(text, size) > max_w {
         size -= 0.5;
     }
-    (elide(fonts, text, size, max_w), size)
-}
-
-pub(crate) fn elide(fonts: &mut Fonts, text: &str, size: f32, max_w: i32) -> String {
-    fonts.elide(text, size, max_w)
+    (fonts.elide(text, size, max_w), size)
 }
 
 fn draw_battery(

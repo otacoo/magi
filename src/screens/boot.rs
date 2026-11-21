@@ -12,8 +12,7 @@ mod gehirn;
 
 const ROLE_NAMES: [&str; 3] = ["MELCHIOR-1", "BALTHASAR-2", "CASPER-3"];
 
-/// Phase boundaries, seconds. The three link times sit on the ignition
-/// track's strongest beats; the sync times fill the gap before nominal.
+/// Phase boundaries in seconds; links sit on ignition beats.
 const IGNITE_END: f32 = 1.5;
 const LINK_TIMES: [f32; 3] = [2.15, 2.40, 2.65];
 const SYNC_TIMES: [f32; 3] = [2.95, 3.20, 3.50];
@@ -511,8 +510,7 @@ fn dashed_line(
     }
 }
 
-/// Draw the background, globe and frame of the pre-boot splash, without the
-/// wordmark. Useful for mockups.
+/// Splash art without the wordmark.
 pub fn render_bootlogo_art(cv: &mut Canvas) {
     let w = cv.w;
     let h = cv.h;
@@ -522,8 +520,7 @@ pub fn render_bootlogo_art(cv: &mut Canvas) {
     cv.rect_outline(8, 8, (w - 16) as u32, (h - 16) as u32, pal().border);
 }
 
-/// Render the pre-boot logo BaseOS shows before the frontend (the card's
-/// `System/bootlogo-640x480.bmp`, drawn by the bootloader).
+/// The bootloader splash bitmap.
 pub fn render_bootlogo(cv: &mut Canvas, fonts: &mut Fonts) {
     render_bootlogo_art(cv);
     let w = cv.w;

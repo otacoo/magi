@@ -35,8 +35,7 @@ impl Fonts {
     }
 
     fn glyph(&mut self, c: char, px: f32) -> &Glyph {
-        // The UI text scale lives in the theme; applying it here means every
-        // draw and measurement honours it without call-site changes.
+        // Apply the UI text scale inside the font layer.
         let px = px * crate::theme::ui_scale();
         let key = (c, (px * 10.0).round() as u32);
         self.cache.entry(key).or_insert_with(|| {
@@ -65,15 +64,16 @@ impl Fonts {
         if self.text_width(text, px) <= max_w {
             return text.to_string();
         }
+        let ell_w = self.text_width("...", px) as f32;
         let mut out = String::new();
+        let mut w = 0.0f32;
         for c in text.chars() {
-            let mut candidate = out.clone();
-            candidate.push(c);
-            candidate.push_str("...");
-            if self.text_width(&candidate, px) > max_w {
+            let adv = self.glyph(c, px).advance;
+            if (w + adv + ell_w).round() as i32 > max_w {
                 break;
             }
             out.push(c);
+            w += adv;
         }
         out.push_str("...");
         out
@@ -92,8 +92,7 @@ impl Fonts {
         self.draw_alpha(cv, x, baseline, text, px, color, 255)
     }
 
-    /// One-pixel overstrike: a heavier weight without a second font face.
-    /// The UI sizes are small, so this reads as bold rather than blurry.
+    /// One-pixel overstrike for a heavier weight.
     pub fn draw_bold(
         &mut self,
         cv: &mut Canvas,
@@ -108,9 +107,7 @@ impl Fonts {
         advance + 1
     }
 
-    /// Like [`draw`](Self::draw), but pixels outside `x0..x1` are dropped.
-    /// The shelf's title marquee uses it so a sliding name cannot spill into
-    /// the scrollbar or the art pane.
+    /// Draw with pixels outside `x0..x1` dropped.
     pub fn draw_clipped(
         &mut self,
         cv: &mut Canvas,
@@ -125,8 +122,7 @@ impl Fonts {
         self.draw_alpha_clipped(cv, x, baseline, text, px, color, 255, x0, x1)
     }
 
-    /// Like [`draw`](Self::draw), but scales every glyph's coverage by
-    /// `alpha` — used for pulsing/fading text without extra passes.
+    /// Draw with glyph coverage scaled by `alpha`.
     pub fn draw_alpha(
         &mut self,
         cv: &mut Canvas,
@@ -200,6 +196,16 @@ mod tests {
         let mut f = Fonts::new(FONT_DATA).unwrap();
         assert!(f.text_width("MAGI", 12.0) > 0);
         assert!(f.text_width("MAGI", 24.0) > f.text_width("MAGI", 12.0));
+    }
+
+    #[test]
+    fn elided_text_fits_the_limit() {
+        let mut f = Fonts::new(FONT_DATA).unwrap();
+        let text = "A LONG GAME TITLE";
+        let max = f.text_width(text, 12.0) / 2;
+        let out = f.elide(text, 12.0, max);
+        assert!(out.ends_with("..."));
+        assert!(f.text_width(&out, 12.0) <= max);
     }
 
     #[test]

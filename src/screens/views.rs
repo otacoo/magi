@@ -1,5 +1,4 @@
-//! Shelf list layouts. The shelf hands over the rows and the geometry; the
-//! look lives here, so another interface is one more function.
+//! Shelf list layouts: SIMPLE rows and the ART cover pane.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -56,8 +55,7 @@ fn console_folder(game_path: &str) -> Option<&str> {
     parts.next().filter(|s| !s.is_empty())
 }
 
-/// The name a cover is filed under: the ROM's stem, or the game folder for a
-/// native port (`Games/N64/<Title>/rom.z64`).
+/// The name a cover is filed under: the ROM stem, or the port folder.
 fn cover_stem(game_path: &str) -> Option<&str> {
     let mut parts = game_path.split('/').skip(2);
     let first = parts.next()?;
@@ -68,8 +66,7 @@ fn cover_stem(game_path: &str) -> Option<&str> {
     }
 }
 
-/// The file for one art type. Boxart is the base name; snaps, titles and
-/// logos add a suffix.
+/// The file for one art type.
 pub fn cover_path_for(game_path: &str, art_type: u8) -> Option<PathBuf> {
     let suffix = ["", ".snap", ".title", ".logo"].get(art_type as usize)?;
     Some(
@@ -79,9 +76,7 @@ pub fn cover_path_for(game_path: &str, art_type: u8) -> Option<PathBuf> {
     )
 }
 
-/// Where each part of the shelf sits. SIMPLE keeps the system rail on the
-/// left; ART moves the systems into a strip along the top, which frees the
-/// full width for the list and the cover.
+/// Where each shelf part sits; ART moves systems to a top strip.
 pub struct Layout {
     /// System list area: (x, y, w, h).
     pub systems: (i32, i32, i32, i32),
@@ -112,16 +107,13 @@ pub fn layout(view: View, w: i32, h: i32, top: i32, bottom: i32, scale: f32) -> 
         View::Art => {
             let strip_h = p(26.0);
             let strip_y = top + 1;
-            // No system heading in ART: the path line sits right under the
-            // strip so the game list gets the extra height.
+            // ART puts the path line under the strip.
             let subtitle_y = strip_y + strip_h + p(20.0);
             let list_top = subtitle_y + p(14.0);
-            // The cover frame starts right under the strip, leaving the same
-            // margin at the top as above the bottom bar.
+            // Cover frame starts under the strip.
             let art_y = strip_y + strip_h + p(8.0);
             let art_h = (h - bottom - 8) - art_y;
-            // Box art is portrait; the frame keeps that ratio and grows with
-            // the pane.
+            // Portrait frame sized to the pane.
             let art_w = art_h * 3 / 4;
             let art_x = w - p(14.0) - art_w;
             Layout {
@@ -137,8 +129,7 @@ pub fn layout(view: View, w: i32, h: i32, top: i32, bottom: i32, scale: f32) -> 
     }
 }
 
-/// The system list: a rail down the left, or a strip along the top. The
-/// backing band and its divider belong to the interface, not the shelf.
+/// The system rail or top strip.
 pub fn draw_systems(
     cv: &mut Canvas,
     fonts: &mut Fonts,
@@ -255,8 +246,7 @@ fn rail_first(len: usize, sel: usize, max_rows: usize) -> usize {
 /// How many systems the strip shows at once.
 const STRIP_CHIPS: usize = 5;
 
-/// The strip divider and its selected tab share a phase so they breathe
-/// together instead of glowing at their own pace.
+/// Keep the strip divider and selected tab in phase.
 const STRIP_GLOW_PHASE: f32 = 0.45;
 
 fn draw_strip(
@@ -273,42 +263,36 @@ fn draw_strip(
     }
     let p = |v: f32| (v * scale).round() as i32;
     let (x, y, w, h) = area;
-    let first = (sel / STRIP_CHIPS) * STRIP_CHIPS;
-    let visible: Vec<&str> = names
-        .iter()
-        .skip(first)
-        .take(STRIP_CHIPS)
-        .copied()
-        .collect();
+    let first = ((sel / STRIP_CHIPS) * STRIP_CHIPS).min(names.len().saturating_sub(1));
+    let end = (first + STRIP_CHIPS).min(names.len());
+    let visible = &names[first..end];
     let has_prev = first > 0;
-    let has_next = first + visible.len() < names.len();
-    // The left gutter only exists while there is a page to go back to; the
-    // right one is always kept so the tabs do not jump on the last page.
-    // Both leave room for the selected tab's padding and the page triangle.
+    let has_next = end < names.len();
+    // Reserve the right gutter so tabs do not jump on the last page.
     let left_gutter = if has_prev { p(30.0) } else { 0 };
     let right_gutter = p(32.0);
     let avail = (w - left_gutter - right_gutter).max(p(80.0));
-    // One size for every tab: the largest at which the longest name still
-    // leaves a little air between the labels.
+    // One size for every tab; widths scale linearly.
     let min_gap = p(6.0);
     let max_gap = p(26.0);
-    let mut size = 10.0;
-    while size > 8.0 {
-        let total: i32 = visible.iter().map(|n| fonts.text_width(n, size)).sum();
-        if total + min_gap * (visible.len() as i32 + 1) <= avail {
-            break;
-        }
-        size -= 0.5;
-    }
+    let n = visible.len() as i32;
+    let total10: i32 = visible
+        .iter()
+        .map(|name| fonts.text_width(name, 10.0))
+        .sum();
+    let fit10 = if total10 == 0 {
+        10.0
+    } else {
+        (avail - min_gap * (n + 1)) as f32 * 10.0 / total10 as f32
+    };
+    let size = ((fit10 * 2.0).floor() / 2.0).clamp(8.0, 10.0);
     let labels: Vec<String> = visible
         .iter()
-        .map(|n| crate::screens::library::elide(fonts, n, size, avail / 2))
+        .map(|n| fonts.elide(n, size, avail / 2))
         .collect();
     let widths: Vec<i32> = labels.iter().map(|l| fonts.text_width(l, size)).collect();
     let total: i32 = widths.iter().sum();
-    let n = labels.len() as i32;
-    // Equal gaps, capped, with the whole row centred: tabs line up the same
-    // way whether two systems or five are on the page.
+    // Equal gaps, capped and centred.
     let gap = if n > 1 {
         ((avail - total) / (n + 1)).clamp(min_gap, max_gap)
     } else {
@@ -318,8 +302,7 @@ fn draw_strip(
     let baseline = y + h / 2 + 4;
     let start = x + left_gutter + (avail - group) / 2;
 
-    // The selected title is a folder tab: its top replaces the header rule
-    // and its sides run through the strip divider into the content below.
+    // Draw the selected tab through the strip divider.
     let title = crate::theme::glow_color(pal().accent, pal().glow, t, STRIP_GLOW_PHASE);
     if let Some(i) = (0..labels.len()).find(|&i| first + i == sel) {
         let pad = if n > 1 {
@@ -349,7 +332,7 @@ fn draw_strip(
         tx += widths[i] + gap;
     }
 
-    // A page triangle replaces the old 04/07 counter.
+    // Page triangle.
     let tri_h = p(10.0).max(7);
     let tri_w = (tri_h * 4 / 5).max(6);
     let tri_y = y + (h - tri_h) / 2;
@@ -369,8 +352,7 @@ fn draw_strip(
     }
 }
 
-/// A small filled page triangle, pointing right (or left when `right` is
-/// false). Supersampled so the short diagonal does not look stepped.
+/// A small supersampled page triangle.
 fn triangle(cv: &mut Canvas, x: i32, y: i32, h: i32, w: i32, right: bool, c: Color) {
     if h <= 0 || w <= 0 {
         return;
@@ -411,9 +393,7 @@ fn in_triangle(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32, cx: f32, cy
     !(neg && pos)
 }
 
-/// Horizontal offset for a selected title that does not fit: none until the
-/// two-second hold, then one slow scroll with a pause at the end. It stops
-/// after that pass, so a still shelf can go back to its idle tick.
+/// Scroll offset for a long selected title; `None` when idle.
 pub(crate) fn marquee_offset(full_w: i32, avail: i32, hold: f32) -> Option<i32> {
     let overflow = full_w - avail;
     if overflow <= 0 || hold < 2.0 {
@@ -470,8 +450,7 @@ fn draw_rows(cv: &mut Canvas, fonts: &mut Fonts, list: &List, right: i32, t: f32
         let mut shifted = None;
         if selected && full_w > avail {
             if list.sel_hold < 2.0 {
-                // Keep the loop at the animation rate so the scroll starts
-                // exactly when the hold expires.
+                // Keep the animation running until the scroll starts.
                 marquee = true;
             } else if let Some(off) = marquee_offset(full_w, avail, list.sel_hold) {
                 marquee = true;
@@ -481,7 +460,7 @@ fn draw_rows(cv: &mut Canvas, fonts: &mut Fonts, list: &List, right: i32, t: f32
         if let Some(off) = shifted {
             fonts.draw_clipped(cv, tx - off, y, &g.title, 12.0, color, tx, tx + avail);
         } else {
-            let title = crate::screens::library::elide(fonts, &g.title, 12.0, avail);
+            let title = fonts.elide(&g.title, 12.0, avail);
             fonts.draw(cv, tx, y, &title, 12.0, color);
         }
         scrolling |= marquee;
@@ -494,9 +473,23 @@ pub fn draw_simple(cv: &mut Canvas, fonts: &mut Fonts, list: &List, t: f32) -> b
     draw_rows(cv, fonts, list, list.right, t)
 }
 
-/// Text rows plus the selected game's cover in `art`. `card` draws the plate
-/// and border behind it; without one the cover floats on a drop shadow.
-/// Returns true while a title is scrolling.
+/// The fitted size of `img` inside the ART frame, matching `draw_art`.
+pub fn cover_size(img: &Image, art: (i32, i32, i32, i32), card: bool) -> (u32, u32) {
+    if img.w == 0 || img.h == 0 {
+        return (1, 1);
+    }
+    let (_, _, w, h) = art;
+    let inset = if card { 5 } else { 9 };
+    let bw = (w - inset * 2).max(1) as f32;
+    let bh = (h - inset * 2).max(1) as f32;
+    let ratio = (bw / img.w as f32).min(bh / img.h as f32);
+    (
+        ((img.w as f32 * ratio) as u32).max(1),
+        ((img.h as f32 * ratio) as u32).max(1),
+    )
+}
+
+/// Text rows plus the ART cover; returns true while scrolling.
 pub fn draw_art(
     cv: &mut Canvas,
     fonts: &mut Fonts,
@@ -515,18 +508,13 @@ pub fn draw_art(
     }
     match cover {
         Some(img) if img.w > 0 && img.h > 0 => {
-            let inset = if card { 5 } else { 9 };
-            let (bw, bh) = (w - inset * 2, h - inset * 2);
-            let ratio = (bw as f32 / img.w as f32).min(bh as f32 / img.h as f32);
-            let sw = ((img.w as f32 * ratio) as u32).max(1);
-            let sh = ((img.h as f32 * ratio) as u32).max(1);
-            let ix = x + (w - sw as i32) / 2;
-            let iy = y + (h - sh as i32) / 2;
+            let (sw, sh) = (img.w as i32, img.h as i32);
+            let ix = x + (w - sw) / 2;
+            let iy = y + (h - sh) / 2;
             if !card {
-                drop_shadow(cv, ix, iy, sw as i32, sh as i32);
+                drop_shadow(cv, ix, iy, sw, sh);
             }
-            let scaled = img.scaled(sw, sh);
-            scaled.draw(cv, ix, iy, 255);
+            img.draw(cv, ix, iy, 255);
         }
         _ => {
             let cx = x + w / 2;
@@ -535,17 +523,16 @@ pub fn draw_art(
             let name = list
                 .games
                 .get(list.sel)
-                .map(|g| g.title.clone())
+                .map(|g| g.title.as_str())
                 .unwrap_or_default();
-            let name = crate::screens::library::elide(fonts, &name, 9.0, w - 20);
+            let name = fonts.elide(name, 9.0, w - 20);
             fonts.draw_center(cv, cx, cy + 20, &name, 9.0, pal().text_dim);
         }
     }
     scrolling
 }
 
-/// A soft shadow under a floating cover: translucent rings widen the falloff
-/// without a blur pass or blending the area the cover covers anyway.
+/// Soft shadow under a floating cover.
 fn drop_shadow(cv: &mut Canvas, x: i32, y: i32, w: i32, h: i32) {
     let black = crate::theme::Color::rgb(0, 0, 0);
     for i in (0..8).rev() {
@@ -581,6 +568,16 @@ mod tests {
     }
 
     #[test]
+    fn covers_fit_the_frame() {
+        let img = Image {
+            w: 100,
+            h: 200,
+            px: vec![0; 20_000],
+        };
+        assert_eq!(cover_size(&img, (0, 0, 300, 400), false), (191, 382));
+    }
+
+    #[test]
     fn the_system_rail_scrolls_to_keep_the_selection_visible() {
         assert_eq!(rail_first(5, 0, 10), 0);
         assert_eq!(rail_first(12, 0, 10), 0);
@@ -597,8 +594,6 @@ mod tests {
         assert_eq!(marquee_offset(160, 100, 2.0), Some(0));
         let off = marquee_offset(160, 100, 3.0).expect("scrolling");
         assert!(off > 0 && off < 60, "offset {off}");
-        // The pass ends after the scroll and its pause, then the row reverts
-        // to the elided title and the shelf can idle again.
         assert_eq!(marquee_offset(160, 100, 5.4), Some(60));
         assert_eq!(marquee_offset(160, 100, 5.5), None);
     }

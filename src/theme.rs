@@ -29,11 +29,7 @@ impl Color {
     }
 }
 
-/// A colour palette. Every theme fills one of these; the painters below and
-/// every screen read it through [`pal`], so a theme is a pure data change.
-///
-/// Roles are named after what they paint, not after a hue, so a theme can move
-/// a colour without the name lying about it.
+/// Palette roles; themes are pure data changes.
 #[derive(Clone, Copy)]
 pub struct Palette {
     // Surfaces, darkest first.
@@ -42,7 +38,6 @@ pub struct Palette {
     pub bg2: Color,
     pub bg3: Color,
 
-    // Type.
     /// Page, panel and shelf titles.
     pub title: Color,
     /// Body text, values and status messages.
@@ -52,7 +47,6 @@ pub struct Palette {
     /// Hints, captions and disabled text.
     pub text_faint: Color,
 
-    // Chrome and state.
     /// Selection text, active tab, ratios and hazard bars.
     pub accent: Color,
     /// Static frame and divider lines.
@@ -62,7 +56,6 @@ pub struct Palette {
     /// Errors, warnings and low-battery state.
     pub alert: Color,
 
-    // Individual elements.
     /// The seven-segment clock and the clock wizard.
     pub clock: Color,
     /// A healthy battery fill (and its percentage).
@@ -189,8 +182,7 @@ pub static UNIT02: Theme = Theme {
 
 pub static BUILTIN: [&Theme; 3] = [&NERV, &UNIT01, &UNIT02];
 
-/// Built-in themes first, then user themes from `Themes/*.ini` (file-name
-/// order). Initialised once, before the first `set_theme_index` call.
+/// Built-in themes, then user themes in file-name order.
 static THEMES: std::sync::OnceLock<&'static [&'static Theme]> = std::sync::OnceLock::new();
 
 static THEME: AtomicPtr<Theme> = AtomicPtr::new(std::ptr::null_mut());
@@ -233,8 +225,7 @@ const MAX_USER_THEMES: usize = 8;
 /// Refuse anything much larger than the template.
 const MAX_THEME_BYTES: usize = 16 * 1024;
 
-/// Create `Themes/` and its template when missing. The template is skipped by
-/// the loader because its name starts with `_`.
+/// Create `Themes/` and its template when missing.
 pub fn ensure_user_themes(dir: &Path) {
     if let Err(e) = std::fs::create_dir_all(dir) {
         crate::util::log(&format!("theme: cannot create {}: {e}", dir.display()));
@@ -248,8 +239,7 @@ pub fn ensure_user_themes(dir: &Path) {
     }
 }
 
-/// Load `Themes/*.ini` after the built-ins, in file-name order. Call once at
-/// start-up, before the saved theme index is applied.
+/// Load `Themes/*.ini` after the built-ins, in file-name order.
 pub fn load_user_themes(dir: &Path) {
     static LOADED: OnceLock<()> = OnceLock::new();
     if LOADED.set(()).is_err() {
@@ -316,8 +306,7 @@ fn theme_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// One `key = value` per line. Every key left out keeps the NERV colour, so a
-/// theme file may set two colours or all of them.
+/// Parse `key = value` lines; missing keys keep NERV colours.
 fn parse_theme(text: &str, stem: &str) -> Theme {
     let mut palette = NERV.palette;
     let mut name: Option<String> = None;
@@ -412,8 +401,7 @@ fn parse_heat(value: &str) -> Option<[Color; 5]> {
     Some(heat)
 }
 
-/// UI text scale, set by the TEXT SIZE setting (1.0 = normal). Applied
-/// inside the font layer, so every draw call honours it.
+/// UI text scale, applied inside the font layer.
 static UI_SCALE: AtomicU32 = AtomicU32::new(1000);
 
 pub fn ui_scale() -> f32 {
@@ -424,8 +412,7 @@ pub fn set_ui_scale(scale: f32) {
     UI_SCALE.store((scale.clamp(0.5, 2.0) * 1000.0) as u32, Ordering::Relaxed);
 }
 
-/// THEME FX: animated backgrounds (the scanner lattice and friends) and
-/// pulsing glow on borders. Both can be switched off in settings.
+/// THEME FX: animated backdrops and pulsing borders.
 static ANIM_BG: AtomicBool = AtomicBool::new(true);
 static GLOW: AtomicBool = AtomicBool::new(true);
 
@@ -473,8 +460,7 @@ pub fn bg_styles() -> &'static [&'static str] {
     &["GRID", "HONEYCOMB", "TOPO"]
 }
 
-/// Warm (blue-reducing) tint for the whole screen, adjusted in-game with
-/// SELECT+LEFT/RIGHT. 0 is the identity.
+/// Warm tint strength; 0 is identity.
 static WARMTH: AtomicU8 = AtomicU8::new(0);
 
 pub fn warmth() -> u8 {
@@ -500,8 +486,7 @@ pub fn warmth_tables(w: u8) -> ([u8; 256], [u8; 256], [u8; 256]) {
     (r, g, b)
 }
 
-/// Apply the warm tint to a whole canvas, just before it is presented, so
-/// the shelf, menus and games all share the same screen hue.
+/// Apply the screen warmth to a whole canvas.
 pub fn apply_warmth(cv: &mut Canvas) {
     let w = warmth();
     if w == 0 {
@@ -517,8 +502,7 @@ pub fn apply_warmth(cv: &mut Canvas) {
     }
 }
 
-/// The backdrop for a region: whichever pattern BACKGROUND selects. The
-/// motion stops (calm, static pattern) when ANIM BACKGROUND is off.
+/// The selected backdrop pattern for a region.
 pub fn background(cv: &mut Canvas, x: i32, y: i32, w: u32, h: u32, t: f32) {
     match bg_style() {
         BG_GRID => grid_pattern(cv, x, y, w, h, 40, pal().bg2, t),
@@ -564,8 +548,23 @@ fn grid_pattern(cv: &mut Canvas, x: i32, y: i32, w: u32, h: u32, cell: i32, tint
     }
 }
 
-/// A topographic contour map: level lines of a few drifting sine planes
-/// filling the whole region (the TOPO backdrop).
+/// Approximate sine for backdrop patterns.
+fn sin_lut(x: f32) -> f32 {
+    const STEPS: usize = 1024;
+    static TABLE: OnceLock<[f32; STEPS]> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let mut t = [0.0; STEPS];
+        for (i, v) in t.iter_mut().enumerate() {
+            *v = (i as f32 / STEPS as f32 * std::f32::consts::TAU).sin();
+        }
+        t
+    });
+    let i = (x.rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU * STEPS as f32) as usize
+        & (STEPS - 1);
+    table[i]
+}
+
+/// The TOPO backdrop: drifting sine contour lines.
 fn noise_pattern(cv: &mut Canvas, x: i32, y: i32, w: u32, h: u32, t: f32) {
     if w == 0 || h == 0 {
         return;
@@ -583,12 +582,11 @@ fn noise_pattern(cv: &mut Canvas, x: i32, y: i32, w: u32, h: u32, t: f32) {
     let mut py = y0;
     while py < y1 {
         let yf = py as f32;
+        let sy = sin_lut(yf * 0.013 - tt * 0.38);
         let mut px = x0;
         while px < x1 {
             let xf = px as f32;
-            let v = (xf * 0.011 + tt * 0.50).sin()
-                + (yf * 0.013 - tt * 0.38).sin()
-                + ((xf + yf) * 0.007 + tt * 0.62).sin();
+            let v = sin_lut(xf * 0.011 + tt * 0.50) + sy + sin_lut((xf + yf) * 0.007 + tt * 0.62);
             let band = (v * 1.3).rem_euclid(1.0);
             if band < 0.14 {
                 let c = if band < 0.06 { lit } else { dim };
@@ -601,9 +599,7 @@ fn noise_pattern(cv: &mut Canvas, x: i32, y: i32, w: u32, h: u32, t: f32) {
     }
 }
 
-/// The EVA-style shutdown countdown (both hosts draw it): bordered panel,
-/// "TIME REMAINING TO SHUTDOWN", a draining bar, SS,mmm in the clock's
-/// seven-segment digits and the warning line below.
+/// The EVA-style shutdown countdown.
 pub fn draw_shutdown(
     cv: &mut Canvas,
     fonts: &mut Fonts,
@@ -691,8 +687,7 @@ pub fn mix(a: Color, b: Color, f: f32) -> Color {
     Color::rgb(m(a.r, b.r), m(a.g, b.g), m(a.b, b.b))
 }
 
-/// A border colour that breathes between `base` and `peak` (static when
-/// GLOW FX is off).
+/// Border colour that breathes between `base` and `peak`.
 pub fn glow_color(base: Color, peak: Color, t: f32, phase: f32) -> Color {
     if glow() {
         mix(base, peak, pulse01(t, 5.0, phase))
@@ -701,8 +696,7 @@ pub fn glow_color(base: Color, peak: Color, t: f32, phase: f32) -> Color {
     }
 }
 
-/// A border that breathes between `base` and `peak` (static when GLOW FX is
-/// off).
+/// Border that breathes between `base` and `peak`.
 pub fn glow_border(
     cv: &mut Canvas,
     x: i32,
@@ -854,8 +848,7 @@ fn speaker_icon(cv: &mut Canvas, x: i32, y: i32, color: Color) {
     cv.fill_rect(x + 14, y + 2, 2, 10, color);
 }
 
-/// A horizontal bar filled with the heat ramp: each column takes the
-/// colour of its position along the full width (blue -> green -> red).
+/// A horizontal bar filled with the heat ramp.
 fn heat_bar(cv: &mut Canvas, x: i32, y: i32, w: i32, h: u32, ratio: f32) {
     let full = w.max(2);
     let fill_w = ((full as f32 * ratio.clamp(0.0, 1.0)).round() as i32).max(1);
@@ -865,8 +858,7 @@ fn heat_bar(cv: &mut Canvas, x: i32, y: i32, w: i32, h: u32, ratio: f32) {
     }
 }
 
-/// The volume/brightness/temperature overlay: a heat bar at the top centre
-/// on a soft translucent strip. The volume bar reads icon, level, bar.
+/// The volume/brightness/temperature overlay.
 pub fn bar_hud(cv: &mut Canvas, fonts: &mut Fonts, icon: BarIcon, ratio: f32) {
     let (bar_w, icon_w, gap) = (220i32, 14i32, 10i32);
     let ratio = ratio.clamp(0.0, 1.0);
@@ -892,8 +884,7 @@ pub fn bar_hud(cv: &mut Canvas, fonts: &mut Fonts, icon: BarIcon, ratio: f32) {
     cv.rect_outline(x - 3, y - 3, (bar_w + 6) as u32, 20, pal().border);
     heat_bar(cv, x, y, bar_w, 14, ratio);
 }
-/// The scanner pattern: a faint hexagonal lattice across a rect, with dim
-/// red blips breathing in and out — slowly (the animation can be off).
+/// The HONEYCOMB backdrop: a faint lattice with slow red blips.
 pub fn hex_grid(cv: &mut Canvas, x: i32, y: i32, w: u32, h: u32, cell: i32, tint: Color, t: f32) {
     if cell < 6 || w == 0 || h == 0 {
         return;
@@ -989,8 +980,16 @@ fn line_clip(cv: &mut Canvas, x0: i32, y0: i32, x1: i32, y1: i32, c: Color, clip
     let sy = if y0 < y1 { 1 } else { -1 };
     let mut err = dx + dy;
     let (mut x, mut y) = (x0, y0);
+    let inside = x0 >= cx0
+        && x1 >= cx0
+        && x0 < cx1
+        && x1 < cx1
+        && y0 >= cy0
+        && y1 >= cy0
+        && y0 < cy1
+        && y1 < cy1;
     loop {
-        if x >= cx0 && x < cx1 && y >= cy0 && y < cy1 {
+        if inside || (x >= cx0 && x < cx1 && y >= cy0 && y < cy1) {
             cv.put(x, y, c);
         }
         if x == x1 && y == y1 {
@@ -1118,6 +1117,14 @@ pub fn seven_segment(cv: &mut Canvas, x: i32, y: i32, h: i32, text: &str, color:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sine_lut_tracks_std() {
+        for i in 0..100 {
+            let x = i as f32 * 0.31 - 15.0;
+            assert!((sin_lut(x) - x.sin()).abs() < 0.01);
+        }
+    }
 
     #[test]
     fn a_user_theme_parses_and_keeps_defaults() {
