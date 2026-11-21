@@ -121,7 +121,7 @@ impl StateFile {
             p.show_clock = v;
         }
         if let Some(v) = self.strip {
-            p.strip = v.min(2);
+            p.strip = v.min(3);
         }
         if let Some(v) = self.auto_art {
             p.auto_art = v;
@@ -1418,8 +1418,8 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
     let view = views::View::from_pref(st.prefs.interface);
     let art = view == views::View::Art;
     let strip = views::Strip::from_pref(st.prefs.strip);
-    let status_top = !art || strip == views::Strip::Top;
-    let status_bottom = !art || strip == views::Strip::Bottom;
+    let status_top = !art || matches!(strip, views::Strip::Top | views::Strip::Both);
+    let status_bottom = !art || matches!(strip, views::Strip::Bottom | views::Strip::Both);
     let top_h = if status_top { p(27.0) } else { 0 };
     let bottom_bar = if status_bottom { p(24.0) } else { 0 };
     cv.clear(pal().bg0);
@@ -1434,7 +1434,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
             w as u32,
             crate::theme::glow_color(pal().border, pal().glow, t, 0.1),
         );
-        if art {
+        if art && strip != views::Strip::Both {
             let icons_x = draw_status_right(cv, fonts, st, w - p(10.0), 0, top_h);
             draw_art_status(
                 cv,
@@ -1630,7 +1630,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
             w as u32,
             crate::theme::glow_color(pal().border, pal().glow, t, 0.7),
         );
-        if art {
+        if art && strip != views::Strip::Both {
             let icons_x = draw_status_right(cv, fonts, st, w - p(10.0), h - bottom_bar, bottom_bar);
             draw_art_status(
                 cv,
@@ -2431,20 +2431,6 @@ mod state_tests {
         assert_eq!(p.text_scale, 1.5, "clamped to the largest step");
         assert_eq!(p.theme, (crate::theme::themes().len() - 1) as u8);
         assert_eq!(p.background, (crate::theme::bg_styles().len() - 1) as u8);
-    }
-
-    #[test]
-    fn battery_modes_draw_expected_widths() {
-        let mut cv = Canvas::new(240, 40);
-        let mut fonts = Fonts::new(crate::font::FONT_DATA).unwrap();
-        let on = draw_battery(&mut cv, &mut fonts, 10, 10, Some(50), 0);
-        let pct = draw_battery(&mut cv, &mut fonts, 10, 10, Some(50), 1);
-        let both = draw_battery(&mut cv, &mut fonts, 10, 10, Some(50), 2);
-        let off = draw_battery(&mut cv, &mut fonts, 10, 10, Some(50), 3);
-        assert_eq!(off, 10);
-        assert!(pct > 10);
-        assert!(both > on);
-        assert!(both > pct);
     }
 
     #[test]

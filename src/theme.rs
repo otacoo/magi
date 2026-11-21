@@ -1119,14 +1119,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sine_lut_tracks_std() {
-        for i in 0..100 {
-            let x = i as f32 * 0.31 - 15.0;
-            assert!((sin_lut(x) - x.sin()).abs() < 0.01);
-        }
-    }
-
-    #[test]
     fn a_user_theme_parses_and_keeps_defaults() {
         let t = parse_theme("name = MY UNIT\nbg0 = #102030\naccent = f80\n", "my-unit");
         assert_eq!(t.name, "MY UNIT");

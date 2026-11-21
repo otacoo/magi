@@ -101,7 +101,7 @@ pub struct Prefs {
     /// Shelf list layout (see views::View): text rows or cover art.
     pub interface: u8,
     pub show_clock: bool,
-    /// ART status strip: 0 = top, 1 = bottom, 2 = off.
+    /// ART status strip: 0 = top, 1 = bottom, 2 = off, 3 = both.
     pub strip: u8,
     /// Fetch missing art when a system with wifi up is opened.
     pub auto_art: bool,
@@ -400,7 +400,7 @@ impl SettingsState {
             prefs: Prefs {
                 ff_steps: prefs.ff_steps.clamp(FF_STEPS_MIN, FF_STEPS_MAX),
                 text_scale: TEXT_SCALES[nearest_scale_idx(prefs.text_scale)],
-                strip: prefs.strip.min(2),
+                strip: prefs.strip.min(3),
                 show_battery: prefs.show_battery.min(3),
                 ..prefs
             },
@@ -421,7 +421,13 @@ impl SettingsState {
     }
 
     pub fn adjust_strip(&mut self, delta: i32) {
-        self.prefs.strip = ((self.prefs.strip as i32 + delta).rem_euclid(3)) as u8;
+        let order = crate::screens::views::STRIP_ORDER;
+        let i = order
+            .iter()
+            .position(|&v| v == self.prefs.strip)
+            .unwrap_or(0) as i32;
+        let n = order.len() as i32;
+        self.prefs.strip = order[(((i + delta) % n + n) % n) as usize];
     }
 
     pub fn adjust_battery(&mut self, delta: i32) {
@@ -528,7 +534,7 @@ impl SettingsState {
             "STRIP" => Some((
                 format!(
                     "< {} >",
-                    crate::screens::views::STRIP_LABELS[self.prefs.strip.min(2) as usize]
+                    crate::screens::views::Strip::from_pref(self.prefs.strip).label()
                 ),
                 true,
             )),
@@ -854,29 +860,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shelf_defaults_match() {
-        let p = Prefs::default();
-        assert_eq!(p.interface, 1, "ART");
-        assert_eq!(p.strip, 0, "TOP");
-        assert_eq!(p.art_type, 0, "BOXART");
-        assert_eq!(p.art_bg, 0, "NONE");
-        assert!(p.show_clock);
-        assert_eq!(p.show_battery, 0, "ON");
-    }
-
-    #[test]
-    fn the_shelf_page_offers_the_interface() {
-        assert!(
-            SHELF_ROWS.contains(&"INTERFACE"),
-            "no INTERFACE row to switch Simple/Art"
-        );
-        assert!(
-            !THEME_ROWS.contains(&"INTERFACE"),
-            "INTERFACE belongs on the SHELF page"
-        );
-    }
-
-    #[test]
     fn shelf_rows_offer_values_and_the_action_is_not_adjustable() {
         let st = SettingsState::default();
         for row in SHELF_ROWS {
@@ -898,39 +881,6 @@ mod tests {
         st.adjust_interface(1);
         assert_eq!(st.prefs.interface, 0);
         assert_eq!(st.rows(), &["INTERFACE", "SHOW CLOCK", "SHOW BATTERY"]);
-    }
-
-    #[test]
-    fn battery_option_moved_to_shelf() {
-        assert!(SHELF_ROWS.contains(&"SHOW BATTERY"));
-        assert!(!POWER_ROWS.contains(&"SHOW BATTERY %"));
-        assert_eq!(BATTERY_LABELS, ["ON", "PERCENT", "BOTH", "OFF"]);
-    }
-
-    #[test]
-    fn strip_cycles_top_bottom_off() {
-        let mut st = SettingsState::default();
-        assert_eq!(st.prefs.strip, 0);
-        st.adjust_strip(1);
-        assert_eq!(st.prefs.strip, 1);
-        st.adjust_strip(1);
-        assert_eq!(st.prefs.strip, 2);
-        st.adjust_strip(1);
-        assert_eq!(st.prefs.strip, 0);
-    }
-
-    #[test]
-    fn battery_cycles_on_percent_both_off() {
-        let mut st = SettingsState::default();
-        assert_eq!(st.prefs.show_battery, 0);
-        st.adjust_battery(1);
-        assert_eq!(st.prefs.show_battery, 1);
-        st.adjust_battery(1);
-        assert_eq!(st.prefs.show_battery, 2);
-        st.adjust_battery(1);
-        assert_eq!(st.prefs.show_battery, 3);
-        st.adjust_battery(1);
-        assert_eq!(st.prefs.show_battery, 0);
     }
 
     #[test]

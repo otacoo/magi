@@ -97,7 +97,7 @@ MAGI will recreate missing folders at boot.
 
 ## System Specs
 
-**GEHIRN · shared — One binary:** SDL2 and the font are linked in. The complete frontend is `System/frontend` on the card.
+**GEHIRN · One binary**. The complete frontend is `System/frontend` on the card.
 
 
 | **MELCHIOR-1** | **BALTHASAR-2** | **CASPER-3** |

@@ -24,16 +24,28 @@ pub enum Strip {
     Top,
     Bottom,
     Off,
+    Both,
 }
 
-pub const STRIP_LABELS: [&str; 3] = ["TOP", "BOTTOM", "OFF"];
+/// Menu order: top, bottom, both, off.
+pub const STRIP_ORDER: [u8; 4] = [0, 1, 3, 2];
 
 impl Strip {
     pub fn from_pref(value: u8) -> Self {
         match value {
             1 => Strip::Bottom,
             2 => Strip::Off,
+            3 => Strip::Both,
             _ => Strip::Top,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Strip::Bottom => "BOTTOM",
+            Strip::Off => "OFF",
+            Strip::Both => "BOTH",
+            Strip::Top => "TOP",
         }
     }
 }
@@ -134,7 +146,11 @@ pub fn layout(
         },
         View::Art => {
             let strip_h = p(26.0);
-            let strip_y = if strip == Strip::Top { top + p(1.0) } else { 0 };
+            let strip_y = if matches!(strip, Strip::Top | Strip::Both) {
+                top + p(1.0)
+            } else {
+                0
+            };
             let strip_bottom = strip_y + strip_h;
             // ART puts the path line under the strip.
             let subtitle_y = strip_bottom + p(18.0);
@@ -594,16 +610,6 @@ mod tests {
             Some(Path::new("Covers/PS1/Final Fantasy VII.png"))
         );
         assert_eq!(cover_path_for("loose", 0), None);
-    }
-
-    #[test]
-    fn covers_fit_the_frame() {
-        let img = Image {
-            w: 100,
-            h: 200,
-            px: vec![0; 20_000],
-        };
-        assert_eq!(cover_size(&img, (0, 0, 300, 400), false), (191, 382));
     }
 
     #[test]

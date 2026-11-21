@@ -267,6 +267,22 @@ pub fn run() -> Result<()> {
     );
     lib.prefs.strip = 0;
 
+    // STRIP BOTH: original top and bottom bars.
+    lib.prefs.strip = 3;
+    crate::theme::set_shelf_bg(true);
+    library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
+    crate::theme::set_shelf_bg(false);
+    let s = stats(&cv);
+    write_ppm(&out.join("library-strip-both.ppm"), &cv)?;
+    println!(
+        "library-strip-both: warm={} signal={} nonbg={} ({:.1}%)",
+        s.warm,
+        s.signal,
+        s.nonbg,
+        pct(&cv, &s)
+    );
+    lib.prefs.strip = 0;
+
     // STRIP OFF: no status strip; notices float.
     lib.prefs.strip = 2;
     crate::status::show("STRIP OFF");

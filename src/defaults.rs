@@ -8,8 +8,8 @@ impl Defaults {
     pub const FF_STEPS: u32 = 4;
     /// Shelf interface: 0 = Simple, 1 = Art (cover preview).
     pub const INTERFACE: u8 = 1;
-    /// ART status strip: 0 = top, 1 = bottom, 2 = off.
-    pub const STRIP: u8 = 0;
+    /// ART status strip: 0 = top, 1 = bottom, 2 = off, 3 = both.
+    pub const STRIP: u8 = 3;
     /// Fetch missing art when a system with wifi up is opened.
     pub const AUTO_ART: bool = false;
     /// ART TYPE: 0 = boxart, 1 = snap, 2 = title, 3 = logo.
