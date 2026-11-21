@@ -8,7 +8,7 @@ impl Defaults {
     pub const FF_STEPS: u32 = 4;
     /// Shelf interface: 0 = Simple, 1 = Art (cover preview).
     pub const INTERFACE: u8 = 1;
-    /// ART status strip: 0 = top, 1 = bottom.
+    /// ART status strip: 0 = top, 1 = bottom, 2 = off.
     pub const STRIP: u8 = 0;
     /// Fetch missing art when a system with wifi up is opened.
     pub const AUTO_ART: bool = false;
@@ -29,7 +29,8 @@ impl Defaults {
     /// 24-hour clock by default; the CLOCK page toggles 12-hour.
     pub const CLOCK_12H: bool = false;
     pub const SHOW_CLOCK: bool = true;
-    pub const BATTERY_PCT: bool = false;
+    /// Battery display: 0 = on, 1 = percent, 2 = off.
+    pub const SHOW_BATTERY: u8 = 0;
     pub const LID_SLEEP: bool = true;
     pub const SHUTDOWN_MIN: u32 = 5;
     pub const IDLE_MIN: u32 = 15;

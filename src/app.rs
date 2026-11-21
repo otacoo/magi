@@ -383,6 +383,7 @@ impl Ui {
         match self.settings.rows()[self.settings.sel] {
             "INTERFACE" => self.settings.adjust_interface(delta),
             "SHOW CLOCK" => self.settings.prefs.show_clock = !self.settings.prefs.show_clock,
+            "SHOW BATTERY" => self.settings.adjust_battery(delta),
             "STRIP" => self.settings.adjust_strip(delta),
             "AUTO DOWNLOAD ART" => self.settings.toggle_auto_art(),
             "ART TYPE" => self.settings.adjust_art_type(delta),
@@ -414,7 +415,6 @@ impl Ui {
                 self.settings.prefs.shot_chord = !self.settings.prefs.shot_chord;
                 input::set_shot_chord(self.settings.prefs.shot_chord);
             }
-            "SHOW BATTERY %" => self.settings.prefs.battery_pct = !self.settings.prefs.battery_pct,
             "LED" => {
                 self.settings.prefs.led_on = !self.settings.prefs.led_on;
                 util::set_led(self.settings.prefs.led_on);
@@ -884,7 +884,7 @@ impl Ui {
                     "INTERFACE" | "SHOW CLOCK" | "STRIP" | "AUTO DOWNLOAD ART" | "ART TYPE"
                     | "ART BACKGROUND" | "FAST FORWARD" | "FF SOUND" | "RUMBLE"
                     | "COLOUR THEME" | "TEXT SIZE" | "BACKGROUND" | "SHELF BACKGROUND"
-                    | "ANIM BACKGROUND" | "GLOW FX" | "SCREENSHOT" | "SHOW BATTERY %"
+                    | "ANIM BACKGROUND" | "GLOW FX" | "SCREENSHOT" | "SHOW BATTERY"
                     | "LID SLEEP" | "LID SHUTDOWN AFTER" | "IDLE SHUTDOWN" | "BATTERY SHUTDOWN"
                     | "CHARGE LIMIT" | "LED" | "HDMI AUTO" => self.settings_adjust(1),
                     "SHELF" => self.settings.open_page(settings::Page::Shelf),

@@ -70,6 +70,41 @@ pub fn draw_center(cv: &mut Canvas, fonts: &mut Fonts, y: i32) {
     fonts.draw_alpha(cv, (cv.w - tw) / 2, y, &msg, 11.0, pal().text, alpha);
 }
 
+/// A floating notice box for screens without a status bar.
+pub fn draw_toast(cv: &mut Canvas, fonts: &mut Fonts) {
+    let Some((msg, alpha)) = live() else {
+        return;
+    };
+    let s = crate::theme::ui_scale();
+    let p = |v: f32| (v * s).round() as i32;
+    let w = (cv.w - p(160.0)).clamp(p(280.0), p(460.0));
+    let h = p(38.0);
+    let x = (cv.w - w) / 2;
+    let y = cv.h - h - p(14.0);
+    cv.fill_rect_a(
+        x,
+        y,
+        w as u32,
+        h as u32,
+        pal().bg2,
+        (alpha as u16 * 238 / 255) as u8,
+    );
+    let border = crate::theme::mix(pal().bg0, pal().border, alpha as f32 / 255.0);
+    cv.rect_outline(x, y, w as u32, h as u32, border);
+    let accent = crate::theme::mix(pal().bg0, pal().accent, alpha as f32 / 255.0);
+    cv.fill_rect(x, y, p(3.0).max(2) as u32, h as u32, accent);
+    let text = fonts.elide(&msg, 9.5, w - p(20.0));
+    fonts.draw_alpha(
+        cv,
+        x + p(10.0),
+        y + h / 2 + p(4.0),
+        &text,
+        9.5,
+        pal().text,
+        alpha,
+    );
+}
+
 /// The hint line of a sub-page, which a notice takes over while it is up.
 pub fn hint_or_notice(cv: &mut Canvas, fonts: &mut Fonts, y: i32, hint: &str) {
     if live().is_some() {

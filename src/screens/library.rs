@@ -83,6 +83,8 @@ struct StateFile {
     #[serde(default)]
     battery_pct: Option<bool>,
     #[serde(default)]
+    show_battery: Option<u8>,
+    #[serde(default)]
     lid_sleep: Option<bool>,
     #[serde(default)]
     shutdown_min: Option<u32>,
@@ -119,7 +121,7 @@ impl StateFile {
             p.show_clock = v;
         }
         if let Some(v) = self.strip {
-            p.strip = v.min(1);
+            p.strip = v.min(2);
         }
         if let Some(v) = self.auto_art {
             p.auto_art = v;
@@ -160,8 +162,10 @@ impl StateFile {
         if let Some(v) = self.clock_12h {
             p.clock_12h = v;
         }
-        if let Some(v) = self.battery_pct {
-            p.battery_pct = v;
+        if let Some(v) = self.show_battery {
+            p.show_battery = v.min(3);
+        } else if let Some(v) = self.battery_pct {
+            p.show_battery = if v { 2 } else { 0 };
         }
         if let Some(v) = self.lid_sleep {
             p.lid_sleep = v;
@@ -566,7 +570,8 @@ impl LibraryState {
             theme: Some(self.prefs.theme),
             shot_chord: Some(self.prefs.shot_chord),
             clock_12h: Some(self.prefs.clock_12h),
-            battery_pct: Some(self.prefs.battery_pct),
+            battery_pct: Some(matches!(self.prefs.show_battery, 1 | 2)),
+            show_battery: Some(self.prefs.show_battery),
             lid_sleep: Some(self.prefs.lid_sleep),
             shutdown_min: Some(self.prefs.shutdown_min),
             idle_min: Some(self.prefs.idle_min),
@@ -1388,7 +1393,7 @@ fn draw_art_status(
         left,
         baseline - 11,
         st.battery,
-        st.prefs.battery_pct,
+        st.prefs.show_battery,
     );
     let mut end = right;
     if st.is_fetching_art() {
@@ -1479,17 +1484,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
                 .filter(|s| st.games.get(&s.id).is_some_and(|g| !g.is_empty()))
                 .map(|s| s.name.as_str()),
         );
-        views::draw_systems(
-            cv,
-            fonts,
-            view,
-            &names,
-            st.sel_system,
-            lay.systems,
-            sc,
-            t,
-            status_top,
-        );
+        views::draw_systems(cv, fonts, view, &names, st.sel_system, lay.systems, sc, t);
     }
 
     // Game list.
@@ -1649,7 +1644,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
             );
         } else {
             let battery_right =
-                draw_battery(cv, fonts, 10, h - 19, st.battery, st.prefs.battery_pct);
+                draw_battery(cv, fonts, 10, h - 19, st.battery, st.prefs.show_battery);
 
             let v = format!("MAGI v{}", env!("CARGO_PKG_VERSION"));
             let vw = fonts.text_width(&v, 9.0);
@@ -1672,6 +1667,10 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
             // Status line.
             crate::status::draw_bar(cv, fonts, battery_right, right, h - 8);
         }
+    }
+
+    if art && strip == views::Strip::Off {
+        crate::status::draw_toast(cv, fonts);
     }
 
     if st.controls_open {
@@ -2355,30 +2354,50 @@ pub(crate) fn fit_title(
     (fonts.elide(text, size, max_w), size)
 }
 
+fn battery_color(pct: Option<u32>) -> Color {
+    match pct {
+        Some(p) => {
+            let f = p.min(100) as f32 / 100.0;
+            if f < 0.5 {
+                crate::theme::mix(pal().alert, pal().accent, f * 2.0)
+            } else {
+                crate::theme::mix(pal().accent, pal().battery, (f - 0.5) * 2.0)
+            }
+        }
+        None => pal().text_dim,
+    }
+}
+
 fn draw_battery(
     cv: &mut Canvas,
     fonts: &mut Fonts,
     left: i32,
     y: i32,
     pct: Option<u32>,
-    show_pct: bool,
+    mode: u8,
 ) -> i32 {
-    cv.rect_outline(left, y, 24, 12, pal().battery_shell);
-    cv.fill_rect(left + 24, y + 3, 2, 6, pal().battery_shell);
-    let (col, txt) = match pct {
-        Some(p) if p <= 15 => (pal().alert, format!("{p}%")),
-        Some(p) => (pal().battery, format!("{p}%")),
-        None => (pal().text_dim, "--%".into()),
-    };
-    if let Some(p) = pct {
-        let fill_w = 20 * p.min(100) / 100;
-        cv.fill_rect(left + 2, y + 2, fill_w, 8, col);
+    if mode == 3 {
+        return left;
     }
-    let mut right = left + 26;
-    if show_pct {
+    let col = battery_color(pct);
+    let txt = pct.map(|p| format!("{p}%")).unwrap_or_else(|| "--%".into());
+    let show_icon = mode == 0 || mode == 2;
+    let show_text = mode == 1 || mode == 2;
+    let mut right = left;
+    if show_icon {
+        cv.rect_outline(left, y, 24, 12, pal().battery_shell);
+        cv.fill_rect(left + 24, y + 3, 2, 6, pal().battery_shell);
+        if let Some(p) = pct {
+            let fill_w = 20 * p.min(100) / 100;
+            cv.fill_rect(left + 2, y + 2, fill_w, 8, col);
+        }
+        right = left + 26;
+    }
+    if show_text {
         let tw = fonts.text_width(&txt, 10.0);
-        fonts.draw(cv, right + 6, y + 11, &txt, 10.0, col);
-        right += 6 + tw;
+        let tx = if show_icon { right + 6 } else { left };
+        fonts.draw(cv, tx, y + 11, &txt, 10.0, col);
+        right = tx + tw;
     }
     right
 }
@@ -2395,18 +2414,37 @@ mod state_tests {
         assert_eq!(empty.prefs().charge_limit, Defaults::CHARGE_LIMIT);
         assert_eq!(empty.prefs().show_clock, Defaults::SHOW_CLOCK);
         assert_eq!(empty.prefs().strip, Defaults::STRIP);
+        assert_eq!(empty.prefs().show_battery, Defaults::SHOW_BATTERY);
 
         let stored: StateFile = serde_json::from_str(
-            r#"{"ff_sound":false,"text_scale":9.0,"theme":99,"background":9,"show_clock":false,"strip":1}"#,
+            r#"{"ff_sound":false,"text_scale":9.0,"theme":99,"background":9,"show_clock":false,"strip":1,"show_battery":2}"#,
         )
         .unwrap();
         let p = stored.prefs();
         assert!(!p.ff_sound, "explicit value wins");
         assert!(!p.show_clock, "explicit value wins");
         assert_eq!(p.strip, 1);
+        assert_eq!(p.show_battery, 2);
+
+        let legacy: StateFile = serde_json::from_str(r#"{"battery_pct":true}"#).unwrap();
+        assert_eq!(legacy.prefs().show_battery, 2, "legacy percent setting");
         assert_eq!(p.text_scale, 1.5, "clamped to the largest step");
         assert_eq!(p.theme, (crate::theme::themes().len() - 1) as u8);
         assert_eq!(p.background, (crate::theme::bg_styles().len() - 1) as u8);
+    }
+
+    #[test]
+    fn battery_modes_draw_expected_widths() {
+        let mut cv = Canvas::new(240, 40);
+        let mut fonts = Fonts::new(crate::font::FONT_DATA).unwrap();
+        let on = draw_battery(&mut cv, &mut fonts, 10, 10, Some(50), 0);
+        let pct = draw_battery(&mut cv, &mut fonts, 10, 10, Some(50), 1);
+        let both = draw_battery(&mut cv, &mut fonts, 10, 10, Some(50), 2);
+        let off = draw_battery(&mut cv, &mut fonts, 10, 10, Some(50), 3);
+        assert_eq!(off, 10);
+        assert!(pct > 10);
+        assert!(both > on);
+        assert!(both > pct);
     }
 
     #[test]

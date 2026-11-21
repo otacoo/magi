@@ -128,11 +128,11 @@ pub fn run() -> Result<()> {
         s.nonbg,
         pct(&cv, &s)
     );
-    if s.warm < 300 || s.signal < 50 {
+    if s.warm < 300 || s.nonbg < 5000 {
         bail!(
-            "library frame looks wrong (warm {}, signal {})",
+            "library frame looks wrong (warm {}, nonbg {})",
             s.warm,
-            s.signal
+            s.nonbg
         );
     }
     if lib.catalogue.systems.is_empty() {
@@ -229,6 +229,28 @@ pub fn run() -> Result<()> {
     );
     lib.prefs.show_clock = true;
 
+    // Battery display modes.
+    for (mode, name) in [
+        (1, "library-battery-percent"),
+        (2, "library-battery-both"),
+        (3, "library-battery-off"),
+    ] {
+        lib.prefs.show_battery = mode;
+        crate::theme::set_shelf_bg(true);
+        library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
+        crate::theme::set_shelf_bg(false);
+        let s = stats(&cv);
+        write_ppm(&out.join(format!("{name}.ppm")), &cv)?;
+        println!(
+            "{name}: warm={} signal={} nonbg={} ({:.1}%)",
+            s.warm,
+            s.signal,
+            s.nonbg,
+            pct(&cv, &s)
+        );
+    }
+    lib.prefs.show_battery = 0;
+
     // STRIP BOTTOM: status bar at the bottom, no top bar.
     lib.prefs.strip = 1;
     crate::theme::set_shelf_bg(true);
@@ -238,6 +260,23 @@ pub fn run() -> Result<()> {
     write_ppm(&out.join("library-strip-bottom.ppm"), &cv)?;
     println!(
         "library-strip-bottom: warm={} signal={} nonbg={} ({:.1}%)",
+        s.warm,
+        s.signal,
+        s.nonbg,
+        pct(&cv, &s)
+    );
+    lib.prefs.strip = 0;
+
+    // STRIP OFF: no status strip; notices float.
+    lib.prefs.strip = 2;
+    crate::status::show("STRIP OFF");
+    crate::theme::set_shelf_bg(true);
+    library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
+    crate::theme::set_shelf_bg(false);
+    let s = stats(&cv);
+    write_ppm(&out.join("library-strip-off.ppm"), &cv)?;
+    println!(
+        "library-strip-off: warm={} signal={} nonbg={} ({:.1}%)",
         s.warm,
         s.signal,
         s.nonbg,

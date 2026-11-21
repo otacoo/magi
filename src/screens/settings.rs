@@ -21,19 +21,22 @@ pub const MAIN_ROWS: [&str; 8] = [
 const MAIN_GROUPS: [(usize, &str); 2] = [(0, "CONFIGS"), (3, "GENERAL")];
 const NO_GROUPS: [(usize, &str); 0] = [];
 
-pub const SHELF_ROWS: [&str; 6] = [
+pub const SHELF_ROWS: [&str; 7] = [
     "INTERFACE",
-    "SHOW CLOCK",
     "STRIP",
     "AUTO DOWNLOAD ART",
     "ART TYPE",
     "ART BACKGROUND",
+    "SHOW CLOCK",
+    "SHOW BATTERY",
 ];
 /// SIMPLE keeps only the shared rows.
-const SHELF_ROWS_SIMPLE: [&str; 2] = ["INTERFACE", "SHOW CLOCK"];
+const SHELF_ROWS_SIMPLE: [&str; 3] = ["INTERFACE", "SHOW CLOCK", "SHOW BATTERY"];
 
 /// ART BACKGROUND values.
 pub const ART_BG_LABELS: [&str; 2] = ["NONE", "CARD"];
+/// SHOW BATTERY values.
+pub const BATTERY_LABELS: [&str; 4] = ["ON", "PERCENT", "BOTH", "OFF"];
 
 pub const THEME_ROWS: [&str; 6] = [
     "COLOUR THEME",
@@ -61,11 +64,10 @@ const SYSTEM_ROWS_NO_SHOTS: [&str; 6] = [
     "ABOUT",
 ];
 
-pub const POWER_ROWS: [&str; 6] = [
+pub const POWER_ROWS: [&str; 5] = [
     "LID SLEEP",
     "LID SHUTDOWN AFTER",
     "IDLE SHUTDOWN",
-    "SHOW BATTERY %",
     "BATTERY SHUTDOWN",
     "CHARGE LIMIT",
 ];
@@ -99,7 +101,7 @@ pub struct Prefs {
     /// Shelf list layout (see views::View): text rows or cover art.
     pub interface: u8,
     pub show_clock: bool,
-    /// ART status strip: 0 = top, 1 = bottom.
+    /// ART status strip: 0 = top, 1 = bottom, 2 = off.
     pub strip: u8,
     /// Fetch missing art when a system with wifi up is opened.
     pub auto_art: bool,
@@ -117,7 +119,8 @@ pub struct Prefs {
     pub shot_chord: bool,
     /// Show the shelf clock and CLOCK page in 12-hour form.
     pub clock_12h: bool,
-    pub battery_pct: bool,
+    /// Battery display: 0 = on, 1 = percent, 2 = off.
+    pub show_battery: u8,
     pub lid_sleep: bool,
     pub shutdown_min: u32,
     pub idle_min: u32,
@@ -174,7 +177,7 @@ impl Default for Prefs {
             theme: Defaults::THEME,
             shot_chord: Defaults::SHOT_CHORD,
             clock_12h: Defaults::CLOCK_12H,
-            battery_pct: Defaults::BATTERY_PCT,
+            show_battery: Defaults::SHOW_BATTERY,
             lid_sleep: Defaults::LID_SLEEP,
             shutdown_min: Defaults::SHUTDOWN_MIN,
             idle_min: Defaults::IDLE_MIN,
@@ -326,6 +329,7 @@ fn row_description(row: &str) -> &'static str {
         "GLOW FX" => "Neon glow on borders and selections.",
         "INTERFACE" => "Simple list or cover-art shelf.",
         "SHOW CLOCK" => "Show the clock in the top bar.",
+        "SHOW BATTERY" => "Battery icon, icon with percent, or hidden.",
         "STRIP" => "Put the ART status strip at the top or bottom.",
         "AUTO DOWNLOAD ART" => "Fetch missing covers when a system opens.",
         "ART TYPE" => "Boxart, snap, title or logo.",
@@ -333,7 +337,6 @@ fn row_description(row: &str) -> &'static str {
         "LID SLEEP" => "Suspend when the lid closes.",
         "LID SHUTDOWN AFTER" => "Power off after the lid has been closed.",
         "IDLE SHUTDOWN" => "Power off after no input for this long.",
-        "SHOW BATTERY %" => "Show the battery percentage in the header.",
         "BATTERY SHUTDOWN" => "Power off at this battery level.",
         "CHARGE LIMIT" => "Stop charging at this percentage.",
         "LED" => "Show power LED while the console is awake.",
@@ -397,7 +400,8 @@ impl SettingsState {
             prefs: Prefs {
                 ff_steps: prefs.ff_steps.clamp(FF_STEPS_MIN, FF_STEPS_MAX),
                 text_scale: TEXT_SCALES[nearest_scale_idx(prefs.text_scale)],
-                strip: prefs.strip.min(1),
+                strip: prefs.strip.min(2),
+                show_battery: prefs.show_battery.min(3),
                 ..prefs
             },
             ..Self::default()
@@ -417,7 +421,11 @@ impl SettingsState {
     }
 
     pub fn adjust_strip(&mut self, delta: i32) {
-        self.prefs.strip = ((self.prefs.strip as i32 + delta).rem_euclid(2)) as u8;
+        self.prefs.strip = ((self.prefs.strip as i32 + delta).rem_euclid(3)) as u8;
+    }
+
+    pub fn adjust_battery(&mut self, delta: i32) {
+        self.prefs.show_battery = ((self.prefs.show_battery as i32 + delta).rem_euclid(4)) as u8;
     }
 
     pub fn toggle_auto_art(&mut self) {
@@ -510,10 +518,17 @@ impl SettingsState {
                 true,
             )),
             "SHOW CLOCK" => Some((format!("< {} >", onoff(self.prefs.show_clock)), true)),
+            "SHOW BATTERY" => Some((
+                format!(
+                    "< {} >",
+                    BATTERY_LABELS[self.prefs.show_battery.min(3) as usize]
+                ),
+                true,
+            )),
             "STRIP" => Some((
                 format!(
                     "< {} >",
-                    crate::screens::views::STRIP_LABELS[self.prefs.strip.min(1) as usize]
+                    crate::screens::views::STRIP_LABELS[self.prefs.strip.min(2) as usize]
                 ),
                 true,
             )),
@@ -556,7 +571,6 @@ impl SettingsState {
             "ANIM BACKGROUND" => Some((format!("< {} >", onoff(self.prefs.anim_bg)), true)),
             "GLOW FX" => Some((format!("< {} >", onoff(self.prefs.glow)), true)),
             "SCREENSHOT" => Some((format!("< {} >", onoff(self.prefs.shot_chord)), true)),
-            "SHOW BATTERY %" => Some((format!("< {} >", onoff(self.prefs.battery_pct)), true)),
             "RUMBLE" => Some((format!("< {} >", onoff(self.prefs.rumble)), true)),
             "LED" => Some((format!("< {} >", onoff(self.prefs.led_on)), true)),
             "HDMI AUTO" => Some((format!("< {} >", onoff(self.prefs.hdmi_auto)), true)),
@@ -872,17 +886,40 @@ mod tests {
         assert_eq!(st.rows().len(), SHELF_ROWS.len());
         st.adjust_interface(1);
         assert_eq!(st.prefs.interface, 0);
-        assert_eq!(st.rows(), &["INTERFACE", "SHOW CLOCK"]);
+        assert_eq!(st.rows(), &["INTERFACE", "SHOW CLOCK", "SHOW BATTERY"]);
     }
 
     #[test]
-    fn strip_toggles_top_and_bottom() {
+    fn battery_option_moved_to_shelf() {
+        assert!(SHELF_ROWS.contains(&"SHOW BATTERY"));
+        assert!(!POWER_ROWS.contains(&"SHOW BATTERY %"));
+        assert_eq!(BATTERY_LABELS, ["ON", "PERCENT", "BOTH", "OFF"]);
+    }
+
+    #[test]
+    fn strip_cycles_top_bottom_off() {
         let mut st = SettingsState::default();
         assert_eq!(st.prefs.strip, 0);
         st.adjust_strip(1);
         assert_eq!(st.prefs.strip, 1);
         st.adjust_strip(1);
+        assert_eq!(st.prefs.strip, 2);
+        st.adjust_strip(1);
         assert_eq!(st.prefs.strip, 0);
+    }
+
+    #[test]
+    fn battery_cycles_on_percent_both_off() {
+        let mut st = SettingsState::default();
+        assert_eq!(st.prefs.show_battery, 0);
+        st.adjust_battery(1);
+        assert_eq!(st.prefs.show_battery, 1);
+        st.adjust_battery(1);
+        assert_eq!(st.prefs.show_battery, 2);
+        st.adjust_battery(1);
+        assert_eq!(st.prefs.show_battery, 3);
+        st.adjust_battery(1);
+        assert_eq!(st.prefs.show_battery, 0);
     }
 
     #[test]
@@ -894,7 +931,7 @@ mod tests {
         };
         st.adjust_interface(1);
         assert_eq!(st.prefs.interface, 0);
-        assert_eq!(st.rows()[st.sel], "SHOW CLOCK");
+        assert_eq!(st.rows()[st.sel], "SHOW BATTERY");
     }
 
     #[test]

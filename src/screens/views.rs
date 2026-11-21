@@ -23,16 +23,17 @@ pub const LABELS: [&str; 2] = ["SIMPLE", "ART"];
 pub enum Strip {
     Top,
     Bottom,
+    Off,
 }
 
-pub const STRIP_LABELS: [&str; 2] = ["TOP", "BOTTOM"];
+pub const STRIP_LABELS: [&str; 3] = ["TOP", "BOTTOM", "OFF"];
 
 impl Strip {
     pub fn from_pref(value: u8) -> Self {
-        if value == 1 {
-            Strip::Bottom
-        } else {
-            Strip::Top
+        match value {
+            1 => Strip::Bottom,
+            2 => Strip::Off,
+            _ => Strip::Top,
         }
     }
 }
@@ -136,7 +137,7 @@ pub fn layout(
             let strip_y = if strip == Strip::Top { top + p(1.0) } else { 0 };
             let strip_bottom = strip_y + strip_h;
             // ART puts the path line under the strip.
-            let subtitle_y = strip_bottom + p(8.0);
+            let subtitle_y = strip_bottom + p(18.0);
             let list_top = subtitle_y + p(8.0);
             // Cover frame starts under the strip.
             let art_y = strip_bottom + p(6.0);
@@ -167,7 +168,6 @@ pub fn draw_systems(
     area: (i32, i32, i32, i32),
     scale: f32,
     t: f32,
-    divider: bool,
 ) {
     let (_, y, w, h) = area;
     match view {
@@ -183,14 +183,12 @@ pub fn draw_systems(
         }
         View::Art => {
             cv.fill_rect(0, y, w as u32, h as u32, pal().bg1);
-            if divider {
-                cv.hline(
-                    0,
-                    y + h,
-                    w as u32,
-                    crate::theme::glow_color(pal().border, pal().glow, t, STRIP_GLOW_PHASE),
-                );
-            }
+            cv.hline(
+                0,
+                y + h,
+                w as u32,
+                crate::theme::glow_color(pal().border, pal().glow, t, STRIP_GLOW_PHASE),
+            );
             draw_strip(cv, fonts, names, sel, area, scale, t);
         }
     }
@@ -345,7 +343,7 @@ fn draw_strip(
         let tab_w = widths[i] + pad * 2;
         let tab_x = (start + before - pad).min(x + w - tab_w).max(x);
         let tab_y = (y - 1).max(0);
-        let tab_h = h + 2;
+        let tab_h = y + h - tab_y + 1;
         let edge = crate::theme::glow_color(pal().border, pal().glow, t, STRIP_GLOW_PHASE);
         cv.fill_rect(tab_x, tab_y, tab_w as u32, tab_h as u32, pal().bg1);
         cv.fill_rect(tab_x, tab_y, tab_w as u32, p(3.0).max(2) as u32, title);
