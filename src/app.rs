@@ -1853,9 +1853,10 @@ pub fn run() -> Result<()> {
 }
 
 /// Holding POWER this long starts the shutdown countdown; a shorter press
-/// sleeps. The countdown itself is five seconds.
+/// sleeps. The countdown itself is one and a half seconds, then `poweroff`
+/// adds the OS shutdown time.
 const POWER_HOLD: Duration = Duration::from_millis(800);
-const SHUTDOWN_TOTAL: Duration = Duration::from_millis(2500);
+const SHUTDOWN_TOTAL: Duration = Duration::from_millis(1500);
 
 /// Holding a d-pad direction repeats it, as the evdev reader does for the
 /// stock pad.

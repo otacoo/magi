@@ -42,7 +42,7 @@ use crate::theme::pal;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const POWER_HOLD: Duration = Duration::from_millis(800);
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-const SHUTDOWN_TOTAL: Duration = Duration::from_millis(2500);
+const SHUTDOWN_TOTAL: Duration = Duration::from_millis(1500);
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const SHUTDOWN_PAGE_REFRESH: Duration = Duration::from_millis(80);
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]

@@ -27,9 +27,16 @@ const GLOBE_TOP: i32 = 116;
 const GLOBE_CENTER_Y: i32 = 238;
 const GLOBE_R: f32 = 98.0;
 
-/// Boot art is a fixed composition; the interface text scale must not resize it.
+/// Boot art is fixed and must not follow the interface text setting.
 fn art_px(px: f32) -> f32 {
     px / crate::theme::ui_scale()
+}
+
+/// Boot body text is pinned to the M step; the wordmark and status stay at S.
+const MID_TEXT_SCALE: f32 = crate::screens::settings::TEXT_SCALES[1];
+
+fn mid_px(px: f32) -> f32 {
+    px * MID_TEXT_SCALE / crate::theme::ui_scale()
 }
 
 const BOX_W: i32 = 168;
@@ -283,11 +290,11 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, t: f32) {
             x + 10,
             y_top + 16,
             &format!("0{}", i + 1),
-            art_px(8.0),
+            mid_px(8.0),
             pal().text_faint,
         );
         let text = if on { pal().text } else { pal().text_faint };
-        fonts.draw(cv, x + 10, y_top + 40, name, art_px(13.0), text);
+        fonts.draw(cv, x + 10, y_top + 40, name, mid_px(13.0), text);
 
         let (state, state_col) = if t < t_on {
             ("OFFLINE", pal().text_faint)
@@ -298,7 +305,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, t: f32) {
         } else {
             ("ONLINE", pal().signal)
         };
-        fonts.draw(cv, x + 10, y_top + 55, state, art_px(8.0), state_col);
+        fonts.draw(cv, x + 10, y_top + 55, state, mid_px(8.0), state_col);
 
         let lx = x + BOX_W - 20;
         let ly = y_top + 32;
@@ -362,14 +369,14 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, t: f32) {
         14,
         h - 20,
         &format!("MAGI v{}", env!("CARGO_PKG_VERSION")),
-        art_px(9.0),
+        mid_px(9.0),
         pal().text_faint,
     );
     if t > NOMINAL {
         let a = (128.0 + 100.0 * (t * 2.4).sin()) as u8;
         let hint = approval();
-        let hx = w - 14 - fonts.text_width(hint, art_px(10.0));
-        fonts.draw_alpha(cv, hx, h - 20, hint, art_px(10.0), pal().text_dim, a);
+        let hx = w - 14 - fonts.text_width(hint, mid_px(10.0));
+        fonts.draw_alpha(cv, hx, h - 20, hint, mid_px(10.0), pal().text_dim, a);
     }
 
     // Fade back to the shelf.

@@ -3395,10 +3395,11 @@ const MENU_HOLD_EXIT: Duration = Duration::from_secs(2);
 const MENU_HOLD_HINT: Duration = Duration::from_millis(800);
 const MENU_ALIAS: Duration = Duration::from_millis(150);
 
-/// Holding POWER this long starts the shutdown countdown (two and a half
-/// seconds, abortable by releasing); a shorter press sleeps.
+/// Holding POWER this long starts the shutdown countdown (one and a half
+/// seconds, abortable by releasing); a shorter press sleeps. `poweroff` adds
+/// the OS shutdown time after the countdown.
 const POWER_HOLD: Duration = Duration::from_millis(800);
-const SHUTDOWN_TOTAL: Duration = Duration::from_millis(2500);
+const SHUTDOWN_TOTAL: Duration = Duration::from_millis(1500);
 
 /// The rewind ring: one state every this many frames, memory-bounded.
 const REWIND_EVERY: u64 = 6;
