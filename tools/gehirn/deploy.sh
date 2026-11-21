@@ -40,11 +40,6 @@ case "$TARGET" in
             "$ADB" push "$src" "$SD/System/bootlogo-$panel.bmp.new"
             "$ADB" shell "mv -f '$SD/System/bootlogo-$panel.bmp.new' '$SD/System/bootlogo-$panel.bmp'"
         done
-        src="$ROOT/assets/boot/gehirn.png"
-        if [ -f "$src" ]; then
-            "$ADB" push "$src" "$SD/System/magi/assets/boot/gehirn.png.new"
-            "$ADB" shell "mv -f '$SD/System/magi/assets/boot/gehirn.png.new' '$SD/System/magi/assets/boot/gehirn.png'"
-        fi
         "$ADB" push "$BIN" "$SD/System/frontend.new"
         "$ADB" shell "mv -f '$SD/System/frontend.new' '$SD/System/frontend' && sync"
         "$ADB" reboot
@@ -57,11 +52,6 @@ case "$TARGET" in
             scp "$src" "$TARGET:$SD/System/bootlogo-$panel.bmp.new"
             ssh "$TARGET" "mv -f '$SD/System/bootlogo-$panel.bmp.new' '$SD/System/bootlogo-$panel.bmp'"
         done
-        src="$ROOT/assets/boot/gehirn.png"
-        if [ -f "$src" ]; then
-            scp "$src" "$TARGET:$SD/System/magi/assets/boot/gehirn.png.new"
-            ssh "$TARGET" "mv -f '$SD/System/magi/assets/boot/gehirn.png.new' '$SD/System/magi/assets/boot/gehirn.png'"
-        fi
         scp "$BIN" "$TARGET:$SD/System/frontend.new"
         ssh "$TARGET" "mv -f '$SD/System/frontend.new' '$SD/System/frontend' && sync && reboot"
         echo "GEHIRN: pushed to $TARGET; the console is rebooting into the new build."

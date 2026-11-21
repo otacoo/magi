@@ -1,13 +1,14 @@
 //! The MELCHIOR boot sequence: GEHIRN ignites in the centre, pulses hard,
 //! fades into the backplate, then the three MAGI units light up and their
-//! links to the brain draw in. `ignition.wav` plays underneath.
+//! links to the core draw in. `ignition.wav` plays underneath.
 
 use std::sync::OnceLock;
 
 use crate::canvas::Canvas;
 use crate::font::Fonts;
-use crate::image::{self, Image};
 use crate::theme::pal;
+
+mod gehirn;
 
 const ROLE_NAMES: [&str; 3] = ["MELCHIOR-1", "BALTHASAR-2", "CASPER-3"];
 
@@ -21,13 +22,15 @@ const NOMINAL: f32 = 4.0;
 /// The splash lasts this long before the shelf appears.
 pub const BOOT_SECS: f32 = 5.0;
 
-/// The brain occupies a fixed block between the status line and the units.
-const BRAIN_TOP: i32 = 116;
-const BRAIN_H: u32 = 244;
-const BRAIN_CENTER_Y: i32 = 238;
+/// The globe occupies a fixed block between the status line and the units.
+const GLOBE_TOP: i32 = 116;
+const GLOBE_CENTER_Y: i32 = 238;
+const GLOBE_R: f32 = 98.0;
 
-/// The static bootloader splash uses a larger version of the same brain.
-const SPLASH_H: u32 = 300;
+/// Boot art is a fixed composition; the interface text scale must not resize it.
+fn art_px(px: f32) -> f32 {
+    px / crate::theme::ui_scale()
+}
 
 const BOX_W: i32 = 168;
 const BOX_H: i32 = 62;
@@ -35,95 +38,6 @@ const BOX_GAP: i32 = 22;
 
 /// Rings are clipped below the top HUD so they never wash over the wordmark.
 const RING_TOP: i32 = 112;
-
-/// The brain art, loaded once from the payload (or the repo during dev).
-fn brain() -> Option<&'static Image> {
-    static IMG: OnceLock<Option<Image>> = OnceLock::new();
-    IMG.get_or_init(|| {
-        for p in [
-            "System/magi/assets/boot/gehirn.png",
-            "assets/boot/gehirn.png",
-        ] {
-            if let Some(img) = image::load_png(std::path::Path::new(p)) {
-                return Some(img);
-            }
-        }
-        None
-    })
-    .as_ref()
-}
-
-/// The animated boot brain, cropped to its alpha bounds and graded once.
-fn boot_brain() -> Option<&'static Image> {
-    static IMG: OnceLock<Option<Image>> = OnceLock::new();
-    IMG.get_or_init(|| build_graded_brain(BRAIN_H)).as_ref()
-}
-
-/// The static bootloader splash brain, a larger version of the same art.
-fn splash_brain() -> Option<&'static Image> {
-    static IMG: OnceLock<Option<Image>> = OnceLock::new();
-    IMG.get_or_init(|| build_graded_brain(SPLASH_H)).as_ref()
-}
-
-fn build_graded_brain(target_h: u32) -> Option<Image> {
-    let src = brain()?;
-    let (x0, y0, x1, y1) = alpha_bounds(src)?;
-    let (cw, ch) = (x1 - x0, y1 - y0);
-    if cw == 0 || ch == 0 {
-        return None;
-    }
-    let target_w = (cw as f32 * target_h as f32 / ch as f32).round().max(1.0) as u32;
-    let mut px = vec![0u32; (target_w * target_h) as usize];
-    for y in 0..target_h {
-        let sy = y0 + y * ch / target_h;
-        for x in 0..target_w {
-            let sx = x0 + x * cw / target_w;
-            let p = src.px[(sy * src.w + sx) as usize];
-            px[(y * target_w + x) as usize] = grade_pixel(p);
-        }
-    }
-    Some(Image {
-        w: target_w,
-        h: target_h,
-        px,
-    })
-}
-
-fn alpha_bounds(img: &Image) -> Option<(u32, u32, u32, u32)> {
-    let (mut x0, mut y0, mut x1, mut y1) = (img.w, img.h, 0, 0);
-    for y in 0..img.h {
-        for x in 0..img.w {
-            if img.px[(y * img.w + x) as usize] >> 24 > 8 {
-                x0 = x0.min(x);
-                y0 = y0.min(y);
-                x1 = x1.max(x + 1);
-                y1 = y1.max(y + 1);
-            }
-        }
-    }
-    (x1 > x0 && y1 > y0).then_some((x0, y0, x1, y1))
-}
-
-/// Pull the anatomical colours toward the NERV palette without flattening
-/// the tissue into a single orange.
-fn grade_pixel(p: u32) -> u32 {
-    let a = p >> 24;
-    if a == 0 {
-        return 0;
-    }
-    let r = ((p >> 16) & 0xff) as f32;
-    let g = ((p >> 8) & 0xff) as f32;
-    let b = (p & 0xff) as f32;
-    let lum = 0.299 * r + 0.587 * g + 0.114 * b;
-    let mut r = (0.82 * r + 0.18 * lum) * 1.04;
-    let mut g = (0.82 * g + 0.18 * lum) * 0.95;
-    let mut b = (0.82 * b + 0.18 * lum) * 0.72;
-    let hi = (lum / 255.0).powi(2);
-    r += (255.0 - r) * 0.08 * hi;
-    g += (122.0 - g) * 0.08 * hi;
-    b -= b * 0.12 * hi;
-    a << 24 | (r as u32).min(255) << 16 | (g as u32).min(255) << 8 | (b as u32).min(255)
-}
 
 /// `t` is seconds since the boot splash start; drives the whole animation.
 pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, t: f32) {
@@ -133,155 +47,179 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, t: f32) {
 
     hex_backdrop(cv, t);
 
-    // Frame, corner accents and the boot progress along the bottom edge.
+    // Frame.
     cv.rect_outline(8, 8, (w - 16) as u32, (h - 16) as u32, pal().border);
-    let corners = [
-        (8, 8, 1, 1),
-        (w - 9, 8, -1, 1),
-        (8, h - 9, 1, -1),
-        (w - 9, h - 9, -1, -1),
-    ];
-    for (cx, cy, dx, dy) in corners {
-        for i in 0..14 {
-            cv.put(cx + i * dx, cy, pal().accent);
-            cv.put(cx, cy + i * dy, pal().accent);
-        }
-    }
 
-    // Wordmark.
     let fade = (t / 0.4).min(1.0);
-    let tw = fonts.text_width("M A G I", 26.0);
+    let title_px = art_px(42.0);
+    let sub_px = art_px(8.4);
+    let tw = fonts.text_width("M A G I", title_px);
+    let tx = (w - tw) / 2;
     fonts.draw_alpha(
         cv,
-        (w - tw) / 2,
+        tx + 2,
+        62,
+        "M A G I",
+        title_px,
+        pal().bg0,
+        (fade * 200.0) as u8,
+    );
+    fonts.draw_alpha(
+        cv,
+        tx,
         60,
         "M A G I",
-        26.0,
+        title_px,
         pal().accent,
         (fade * 235.0) as u8,
     );
     fonts.draw_center(
         cv,
         w / 2,
-        78,
+        76,
         "MULTI ARCHITECTURE GAMING INTERFACE",
-        9.0,
+        sub_px,
         pal().text_dim,
     );
-    let line_w = (120.0 * (t / 0.6).min(1.0)) as u32;
+    let line_w = (fonts.text_width("MULTI ARCHITECTURE GAMING INTERFACE", sub_px) as f32
+        * (t / 0.6).min(1.0)) as u32;
     if line_w > 2 {
         cv.hline(
             w / 2 - line_w as i32 / 2,
-            90,
+            88,
             line_w,
             crate::theme::mix(pal().bg0, pal().border, 0.8),
         );
     }
 
-    // GEHIRN: a top-down reveal on two heartbeat beats, then a slow ring.
-    let center = (w / 2, BRAIN_CENTER_Y);
+    // GEHIRN: a top-down scan reveal on the heartbeat, then a slow spin.
+    let center = (w / 2, GLOBE_CENTER_Y);
     let beat = heartbeat(t);
     let breathe = 0.5 + 0.5 * crate::theme::pulse01(t, 5.5, 0.2);
-    if let Some(brain) = boot_brain() {
-        let bx = (w - brain.w as i32) / 2;
-        let brain_bottom = BRAIN_TOP + brain.h as i32;
-        let scan = (t / IGNITE_END).clamp(0.0, 1.0);
-        let scan_y = BRAIN_TOP + ((h - BRAIN_TOP) as f32 * scan) as i32;
-        let reveal_y = scan_y.min(brain_bottom);
-        let scan_fade = if scan_y <= brain_bottom {
-            1.0
+    let globe_bottom = GLOBE_CENTER_Y + GLOBE_R as i32;
+    let scan = (t / IGNITE_END).clamp(0.0, 1.0);
+    let scan_y = GLOBE_TOP + ((h - GLOBE_TOP) as f32 * scan) as i32;
+    let scan_fade = if scan_y <= globe_bottom {
+        1.0
+    } else {
+        (1.0 - (scan_y - globe_bottom) as f32 / (h - globe_bottom) as f32 * 0.85).clamp(0.0, 1.0)
+    };
+    if t < IGNITE_END {
+        // Ghost the whole globe, then reveal it under a scanline.
+        let ghost = 0.18 * (0.3 + 0.7 * beat);
+        let bright = 0.55 + 0.45 * beat;
+        gehirn::draw(
+            cv,
+            center.0 as f32,
+            center.1 as f32,
+            GLOBE_R,
+            t,
+            ghost,
+            RING_TOP,
+            i32::MAX,
+        );
+        gehirn::draw(
+            cv,
+            center.0 as f32,
+            center.1 as f32,
+            GLOBE_R,
+            t,
+            bright,
+            RING_TOP,
+            scan_y,
+        );
+        let half = (GLOBE_R * 1.45) as i32;
+        let scan_col = if scan_y <= globe_bottom {
+            pal().glow
         } else {
-            (1.0 - (scan_y - brain_bottom) as f32 / (h - brain_bottom) as f32 * 0.85)
-                .clamp(0.0, 1.0)
+            crate::theme::mix(pal().bg0, pal().glow, 0.85 * scan_fade)
         };
-        let mul = if t < IGNITE_END {
-            (70.0 + 185.0 * beat.max(0.15)) as u8
-        } else {
-            (80.0 + 32.0 * breathe) as u8
-        };
-        if t < IGNITE_END {
-            // A faint ghost of the whole brain, then the bright revealed
-            // part and a scanline: the panel is being scanned in, not cut.
-            brain.draw(cv, bx, BRAIN_TOP, (mul as f32 * 0.18) as u8);
-            brain.draw_clipped(cv, bx, BRAIN_TOP, mul, reveal_y);
-            let scan_col = if scan_y <= brain_bottom {
-                pal().glow
-            } else {
-                crate::theme::mix(pal().bg0, pal().glow, 0.85 * scan_fade)
-            };
-            cv.hline(bx, scan_y, brain.w, scan_col);
-            let below = crate::theme::mix(pal().bg0, pal().glow, 0.45 * scan_fade);
-            let above = crate::theme::mix(pal().bg0, pal().glow, 0.30 * scan_fade);
-            cv.hline(bx, scan_y + 1, brain.w, below);
-            cv.hline(bx, scan_y.saturating_sub(1), brain.w, above);
-            cv.hline(
-                10,
-                scan_y,
-                (w - 20) as u32,
-                crate::theme::mix(pal().bg0, pal().glow, 0.10 * scan_fade),
-            );
-        } else {
-            brain.draw(cv, bx, BRAIN_TOP, mul);
-        }
+        cv.hline(center.0 - half, scan_y, (half * 2) as u32, scan_col);
+        let below = crate::theme::mix(pal().bg0, pal().glow, 0.45 * scan_fade);
+        let above = crate::theme::mix(pal().bg0, pal().glow, 0.30 * scan_fade);
+        cv.hline(center.0 - half, scan_y + 1, (half * 2) as u32, below);
+        cv.hline(
+            center.0 - half,
+            scan_y.saturating_sub(1),
+            (half * 2) as u32,
+            above,
+        );
+        cv.hline(
+            10,
+            scan_y,
+            (w - 20) as u32,
+            crate::theme::mix(pal().bg0, pal().glow, 0.10 * scan_fade),
+        );
+    } else {
+        gehirn::draw(
+            cv,
+            center.0 as f32,
+            center.1 as f32,
+            GLOBE_R,
+            t,
+            0.50 + 0.10 * breathe,
+            RING_TOP,
+            i32::MAX,
+        );
+    }
 
-        for start in [0.9, 1.4] {
-            let dt = t - start;
-            if (0.0..0.60).contains(&dt) {
-                let a = ((1.0 - dt / 0.60) * 120.0) as u8;
+    for start in [0.9, 1.4] {
+        let dt = t - start;
+        if (0.0..0.60).contains(&dt) {
+            let a = ((1.0 - dt / 0.60) * 120.0) as u8;
+            hex_ring(
+                cv,
+                center.0,
+                center.1,
+                (36.0 + dt * 420.0) as i32,
+                pal().glow,
+                a,
+            );
+            if dt > 0.10 {
+                let a2 = (a as f32 * 0.55) as u8;
                 hex_ring(
                     cv,
                     center.0,
                     center.1,
-                    (36.0 + dt * 420.0) as i32,
+                    (30.0 + (dt - 0.10) * 420.0) as i32,
                     pal().glow,
-                    a,
+                    a2,
                 );
-                if dt > 0.10 {
-                    let a2 = (a as f32 * 0.55) as u8;
-                    hex_ring(
-                        cv,
-                        center.0,
-                        center.1,
-                        (30.0 + (dt - 0.10) * 420.0) as i32,
-                        pal().glow,
-                        a2,
-                    );
-                }
             }
         }
-        let lock = t - 1.9;
-        if (0.0..0.55).contains(&lock) {
-            hex_ring(
-                cv,
-                center.0,
-                center.1,
-                (44.0 + lock * 380.0) as i32,
-                pal().accent,
-                ((1.0 - lock / 0.55) * 110.0) as u8,
-            );
-        }
-        if t >= IGNITE_END {
-            let ph = (t * 0.22) % 1.0;
-            hex_ring(
-                cv,
-                center.0,
-                center.1,
-                (118.0 + ph * 90.0) as i32,
-                pal().glow,
-                ((1.0 - ph) * 44.0) as u8,
-            );
-        }
-        let final_ring = t - NOMINAL;
-        if (0.0..0.80).contains(&final_ring) {
-            hex_ring(
-                cv,
-                center.0,
-                center.1,
-                (50.0 + final_ring * 380.0) as i32,
-                pal().signal,
-                ((1.0 - final_ring / 0.80) * 140.0) as u8,
-            );
-        }
+    }
+    let lock = t - 1.9;
+    if (0.0..0.55).contains(&lock) {
+        hex_ring(
+            cv,
+            center.0,
+            center.1,
+            (44.0 + lock * 380.0) as i32,
+            pal().accent,
+            ((1.0 - lock / 0.55) * 110.0) as u8,
+        );
+    }
+    if t >= IGNITE_END {
+        let ph = (t * 0.22) % 1.0;
+        hex_ring(
+            cv,
+            center.0,
+            center.1,
+            (118.0 + ph * 90.0) as i32,
+            pal().glow,
+            ((1.0 - ph) * 44.0) as u8,
+        );
+    }
+    let final_ring = t - NOMINAL;
+    if (0.0..0.80).contains(&final_ring) {
+        hex_ring(
+            cv,
+            center.0,
+            center.1,
+            (50.0 + final_ring * 380.0) as i32,
+            pal().signal,
+            ((1.0 - final_ring / 0.80) * 140.0) as u8,
+        );
     }
 
     // Links: draw in, then send the handshake reply back to the unit.
@@ -314,7 +252,6 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, t: f32) {
         }
     }
 
-    // The MAGI units.
     for (i, name) in ROLE_NAMES.iter().enumerate() {
         let x = box_left(w) + i as i32 * (BOX_W + BOX_GAP);
         let t_on = LINK_TIMES[i];
@@ -346,11 +283,11 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, t: f32) {
             x + 10,
             y_top + 16,
             &format!("0{}", i + 1),
-            8.0,
+            art_px(8.0),
             pal().text_faint,
         );
         let text = if on { pal().text } else { pal().text_faint };
-        fonts.draw(cv, x + 10, y_top + 40, name, 13.0, text);
+        fonts.draw(cv, x + 10, y_top + 40, name, art_px(13.0), text);
 
         let (state, state_col) = if t < t_on {
             ("OFFLINE", pal().text_faint)
@@ -361,7 +298,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, t: f32) {
         } else {
             ("ONLINE", pal().signal)
         };
-        fonts.draw(cv, x + 10, y_top + 55, state, 8.0, state_col);
+        fonts.draw(cv, x + 10, y_top + 55, state, art_px(8.0), state_col);
 
         let lx = x + BOX_W - 20;
         let ly = y_top + 32;
@@ -396,7 +333,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, t: f32) {
         }
     }
 
-    // Status line, on the beats.
+    // Status line.
     let (status, status_col) = if t < IGNITE_END {
         (
             format!(
@@ -418,25 +355,24 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, t: f32) {
     } else {
         ("ALL SYSTEMS NOMINAL".into(), pal().signal)
     };
-    fonts.draw_center(cv, w / 2, 108, &status, 12.0, status_col);
+    fonts.draw_center(cv, w / 2, 108, &status, art_px(12.0), status_col);
 
-    // Footer.
     fonts.draw(
         cv,
         14,
         h - 20,
         &format!("MAGI v{}", env!("CARGO_PKG_VERSION")),
-        9.0,
+        art_px(9.0),
         pal().text_faint,
     );
     if t > NOMINAL {
         let a = (128.0 + 100.0 * (t * 2.4).sin()) as u8;
         let hint = approval();
-        let hx = w - 14 - fonts.text_width(hint, 10.0);
-        fonts.draw_alpha(cv, hx, h - 20, hint, 10.0, pal().text_dim, a);
+        let hx = w - 14 - fonts.text_width(hint, art_px(10.0));
+        fonts.draw_alpha(cv, hx, h - 20, hint, art_px(10.0), pal().text_dim, a);
     }
 
-    // Hand the panel back to the shelf on a clean fade.
+    // Fade back to the shelf.
     let progress = (t / BOOT_SECS).clamp(0.0, 1.0);
     let pw = ((w - 16) as f32 * progress) as u32;
     if pw > 0 {
@@ -489,14 +425,13 @@ fn approval() -> &'static str {
     HINT.get_or_init(|| format!("APPROVAL: {} ONLY", crate::device::detect().short_name()))
 }
 
-/// A sparse honeycomb backplate: faint lattice, a handful of cells glowing a
-/// muted red, the whole field gaining presence over the boot.
 fn hash(x: i32, y: i32) -> u32 {
     let mut v = (x as u32).wrapping_mul(73_856_093) ^ (y as u32).wrapping_mul(19_349_663);
     v ^= v >> 13;
     v.wrapping_mul(1_274_126_177) ^ (v >> 16)
 }
 
+/// A sparse honeycomb backplate that gains presence over the boot.
 fn hex_backdrop(cv: &mut Canvas, t: f32) {
     let cell = 34;
     let dx = cell * 2;
@@ -504,7 +439,7 @@ fn hex_backdrop(cv: &mut Canvas, t: f32) {
     let rows = (cv.h + cell) / dy.max(1) + 1;
     let ramp = (t / BOOT_SECS).clamp(0.0, 1.0);
     let clip = (0, 0, cv.w, cv.h);
-    let (cx0, cy0) = (cv.w as f32 / 2.0, BRAIN_CENTER_Y as f32);
+    let (cx0, cy0) = (cv.w as f32 / 2.0, GLOBE_CENTER_Y as f32);
     let beat = heartbeat(t);
     let breathe = 0.5 + 0.5 * crate::theme::pulse01(t, 5.5, 0.2);
     let pulse = 0.55 + 0.45 * beat.max(breathe);
@@ -569,33 +504,62 @@ fn dashed_line(
     }
 }
 
-/// Render the pre-boot logo BaseOS shows before the frontend (the card's
-/// `System/bootlogo-640x480.bmp`, drawn by the bootloader).
-pub fn render_bootlogo(cv: &mut Canvas, fonts: &mut Fonts) {
+/// Draw the background, globe and frame of the pre-boot splash, without the
+/// wordmark. Useful for mockups.
+pub fn render_bootlogo_art(cv: &mut Canvas) {
     let w = cv.w;
     let h = cv.h;
     cv.clear(pal().bg0);
     hex_backdrop(cv, 0.0);
-    if let Some(brain) = splash_brain() {
-        brain.draw(cv, (w - brain.w as i32) / 2, (h - brain.h as i32) / 2, 80);
-    }
-    let tw = fonts.text_width("M A G I", 34.0);
+    gehirn::draw_splash(cv, w as f32 / 2.0, GLOBE_CENTER_Y as f32, GLOBE_R, 0.28);
+    cv.rect_outline(8, 8, (w - 16) as u32, (h - 16) as u32, pal().border);
+}
+
+/// Render the pre-boot logo BaseOS shows before the frontend (the card's
+/// `System/bootlogo-640x480.bmp`, drawn by the bootloader).
+pub fn render_bootlogo(cv: &mut Canvas, fonts: &mut Fonts) {
+    render_bootlogo_art(cv);
+    let w = cv.w;
+    let title_baseline = GLOBE_CENTER_Y + 16;
+    let title_px = art_px(62.0);
+    let sub_px = art_px(12.0);
+    let tw = fonts.text_width("M A G I", title_px);
+    let tx = (w - tw) / 2;
     fonts.draw_alpha(
         cv,
-        (w - tw) / 2,
-        h / 2 + 4,
+        tx + 2,
+        title_baseline + 2,
         "M A G I",
-        34.0,
+        title_px,
+        pal().bg0,
+        200,
+    );
+    fonts.draw_alpha(
+        cv,
+        tx,
+        title_baseline,
+        "M A G I",
+        title_px,
         pal().accent,
         235,
     );
+    let sub_baseline = title_baseline + 18;
+    for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1), (1, 1)] {
+        fonts.draw_center(
+            cv,
+            w / 2 + dx,
+            sub_baseline + dy,
+            "MULTI ARCHITECTURE GAMING INTERFACE",
+            sub_px,
+            pal().bg0,
+        );
+    }
     fonts.draw_center(
         cv,
         w / 2,
-        h / 2 + 24,
+        sub_baseline,
         "MULTI ARCHITECTURE GAMING INTERFACE",
-        9.0,
+        sub_px,
         pal().text_dim,
     );
-    cv.rect_outline(8, 8, (w - 16) as u32, (h - 16) as u32, pal().border);
 }

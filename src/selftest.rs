@@ -53,6 +53,21 @@ pub fn run() -> Result<()> {
         bail!("boot role lights look wrong (signal {})", s.signal);
     }
 
+    // The bootloader splash: the same linework at the larger size, with the
+    // wordmark over it.
+    boot::render_bootlogo(&mut cv, &mut fonts);
+    let s = stats(&cv);
+    write_ppm(&out.join("bootlogo.ppm"), &cv)?;
+    println!(
+        "bootlogo: warm={} nonbg={} ({:.1}%)",
+        s.warm,
+        s.nonbg,
+        pct(&cv, &s)
+    );
+    if s.warm < 400 || s.nonbg < 3000 {
+        bail!("bootlogo looks blank (warm {}, nonbg {})", s.warm, s.nonbg);
+    }
+
     // The read-only card alert and its repair hint.
     card::draw(
         &mut cv,

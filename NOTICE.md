@@ -9,16 +9,6 @@ Copyright (c) 2026, otacoo. All rights reserved.
 - **JetBrains Mono** (`assets/fonts/JetBrainsMono-Regular.ttf`) is licensed
   under the SIL Open Font License 1.1. See `assets/fonts/OFL.txt`. JetBrains
   Mono is a trademark of JetBrains s.r.o.
-- **GEHIRN boot art** (`assets/boot/gehirn.png`) is "the human brain" by Crean
-  Quaner, published in the Brain Art gallery of The Neuro Bureau (June 8,
-  2018): <https://www.neurobureau.org/abstract_the-human-brain_by_crean-quaner/>.
-  It is licensed under Creative Commons Attribution-ShareAlike 4.0
-  International (CC BY-SA 4.0):
-  <https://creativecommons.org/licenses/by-sa/4.0/>. The copy shipped here is
-  modified for MAGI's boot sequence (640x480, transparent background,
-  alpha-composited); the derivative remains under CC BY-SA 4.0. See
-  `assets/boot/SOURCE.md`. The boot and README images that contain this art
-  are covered by the same license.
 - **Perfect Overlays** (`assets/overlays/`) comes from
   <https://github.com/ourigen/Perfect_Overlays> (640x480 overlays for
   handhelds), derived from the work of 1playerinsertcoin, with bezels by

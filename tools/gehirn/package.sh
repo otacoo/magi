@@ -54,10 +54,8 @@ if [ "$PANEL" = 640x480 ]; then
 fi
 printf '%s\n' "$PANEL" > "$OUT/System/magi/panel"
 mkdir -p "$OUT/System/magi/assets/boot"
-cp "$ROOT/assets/boot/gehirn.png" "$OUT/System/magi/assets/boot/gehirn.png"
 cp "$ROOT/assets/boot/ignition.wav" "$OUT/System/magi/assets/boot/ignition.wav"
 cp "$ROOT/assets/boot/naoko.wav" "$OUT/System/magi/assets/boot/naoko.wav"
-cp "$ROOT/assets/boot/SOURCE.md" "$OUT/System/magi/assets/boot/SOURCE.md"
 # SDL's community controller database (loaded explicitly by pads.rs).
 mkdir -p "$OUT/System/magi/controllers"
 cp "$ROOT/assets/controllers/gamecontrollerdb.txt" "$OUT/System/magi/controllers/gamecontrollerdb.txt"

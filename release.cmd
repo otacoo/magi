@@ -31,10 +31,12 @@ echo   G  Publish release: commit, tag and push (CI publishes)
 echo   P  Device probe (frontend --probe)
 echo   S  adb shell
 echo   R  Reboot console
+echo   B  Boot animation loop              (SPACE pauses, ESC quits)
 echo   0  Exit
 echo.
-choice /c 123456789VGPSR0 /n /m "choose: "
-if errorlevel 15 exit /b 0
+choice /c 123456789VGPSRB0 /n /m "choose: "
+if errorlevel 16 exit /b 0
+if errorlevel 15 goto boot_preview
 if errorlevel 14 goto reboot
 if errorlevel 13 goto shell
 if errorlevel 12 goto probe
@@ -107,6 +109,13 @@ goto menu
 
 :run_harness
 cargo run
+pause
+goto menu
+
+:boot_preview
+set "MAGI_SCALE=1"
+cargo run --quiet -- --boot-preview
+set "MAGI_SCALE="
 pause
 goto menu
 
@@ -183,15 +192,11 @@ if exist "assets\boot\bootlogo-720x480.bmp" (
     "%ADB%" push "assets\boot\bootlogo-720x480.bmp" "%SD%/System/bootlogo-720x480.bmp.new"
     if errorlevel 1 exit /b 1
 )
-if exist "assets\boot\gehirn.png" (
-    "%ADB%" push "assets\boot\gehirn.png" "%SD%/System/magi/assets/boot/gehirn.png.new"
-    if errorlevel 1 exit /b 1
-)
 if exist "assets\boot\naoko.wav" (
     "%ADB%" push "assets\boot\naoko.wav" "%SD%/System/magi/assets/boot/naoko.wav.new"
     if errorlevel 1 exit /b 1
 )
-"%ADB%" shell "mv -f %SD%/System/bootlogo-640x480.bmp.new %SD%/System/bootlogo-640x480.bmp; mv -f %SD%/System/bootlogo-720x480.bmp.new %SD%/System/bootlogo-720x480.bmp; mv -f %SD%/System/magi/assets/boot/gehirn.png.new %SD%/System/magi/assets/boot/gehirn.png; mv -f %SD%/System/magi/assets/boot/naoko.wav.new %SD%/System/magi/assets/boot/naoko.wav; sync"
+"%ADB%" shell "mv -f %SD%/System/bootlogo-640x480.bmp.new %SD%/System/bootlogo-640x480.bmp; mv -f %SD%/System/bootlogo-720x480.bmp.new %SD%/System/bootlogo-720x480.bmp; mv -f %SD%/System/magi/assets/boot/naoko.wav.new %SD%/System/magi/assets/boot/naoko.wav; sync"
 if errorlevel 1 exit /b 1
 exit /b 0
 
@@ -299,12 +304,26 @@ goto menu
 call :need_adb
 if errorlevel 1 goto menu
 "%ADB%" wait-for-device
-"%ADB%" pull %SD%/Screenshots .\Screenshots\ 2>nul
+set "SHOT_TMP=%TEMP%\magi-screenshots"
+if exist "%SHOT_TMP%" rd /s /q "%SHOT_TMP%"
+"%ADB%" pull %SD%/Screenshots "%SHOT_TMP%" 2>nul
 if errorlevel 1 (
+    if exist "%SHOT_TMP%" rd /s /q "%SHOT_TMP%"
     echo   no screenshots on the card yet — press SELECT+MENU+R1 to take one.
     pause
     goto menu
 )
+set "SHOT_SRC=%SHOT_TMP%"
+if exist "%SHOT_TMP%\Screenshots" set "SHOT_SRC=%SHOT_TMP%\Screenshots"
+if not exist ".\Screenshots" mkdir ".\Screenshots"
+xcopy /e /i /y "%SHOT_SRC%\*" ".\Screenshots\" >nul
+if errorlevel 1 (
+    if exist "%SHOT_TMP%" rd /s /q "%SHOT_TMP%"
+    echo   no screenshots on the card yet — press SELECT+MENU+R1 to take one.
+    pause
+    goto menu
+)
+rd /s /q "%SHOT_TMP%"
 echo.
 echo   screenshots in .\Screenshots\
 pause

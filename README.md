@@ -127,7 +127,7 @@ MAGI will recreate missing folders at boot.
 
 MAGI is released under the **BSD 2-Clause License**. See [LICENSE.md](LICENSE.md).
 
-Bundled assets and libraries keep their own licenses: JetBrains Mono (OFL), GEHIRN boot art (CC BY-SA 4.0), Perfect Overlays, the SDL controller database and SDL 1.2/2 (zlib). Full attributions are in [NOTICE.md](NOTICE.md). libretro cores and N64 ports are separate components with their own licenses.
+Bundled assets and libraries keep their own licenses: JetBrains Mono (OFL), Perfect Overlays, the SDL controller database and SDL 1.2/2 (zlib). Full attributions are in [NOTICE.md](NOTICE.md). libretro cores and N64 ports are separate components with their own licenses.
 
 ## Credits
 
@@ -136,7 +136,6 @@ Bundled assets and libraries keep their own licenses: JetBrains Mono (OFL), GEHI
 - [libretro](https://www.libretro.com/) and every core maintainer.
 - [SDL](https://www.libsdl.org/) and the SDL Game Controller DB community.
 - [JetBrains Mono](https://www.jetbrains.com/lp/mono/) by JetBrains.
-- ["the human brain"](https://www.neurobureau.org/abstract_the-human-brain_by_crean-quaner/) by Crean Quaner, The Neuro Bureau (CC BY-SA 4.0).
 - [Perfect Overlays](https://github.com/ourigen/Perfect_Overlays) by ourigen, 1playerinsertcoin, mugwomp_93 and drkhrse.
 
 <p align="center"><sub><i>Â̶̢̧͚͎̺͎̮̩̮̝̳̼̟͖͑̈͆̈́̍̕͝L̶̢̡̥̲̹̙̣͖͎̩̰̣̜͌̓́̂̽̒̽͗͐̕͠Ļ̷̹͕̻͖͚̪̩̖͍͋͋̐̉̃͆̍̽̅̅́́͆̕̚ ̸̡̊́̋́͆̊̊̔S̸͔̀̾́̍͌͠͝YSTEMS N̵̩͓̎͑͗́͘O̵͓͉̪̪̜͒͒ͅḾ̴͖̩̰͈̫̊̚͜͠Ḭ̵̡͆͆͂̔͠N̵͕̮̠͚̼̄͊̄̀AL.</i></sub></p>
