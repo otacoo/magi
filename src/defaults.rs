@@ -29,7 +29,7 @@ impl Defaults {
     /// 24-hour clock by default; the CLOCK page toggles 12-hour.
     pub const CLOCK_12H: bool = false;
     pub const SHOW_CLOCK: bool = true;
-    /// Battery display: 0 = on, 1 = percent, 2 = off.
+    /// Battery display: 0 = on, 1 = percent, 2 = both, 3 = off.
     pub const SHOW_BATTERY: u8 = 0;
     pub const LID_SLEEP: bool = true;
     pub const SHUTDOWN_MIN: u32 = 5;

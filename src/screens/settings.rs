@@ -119,7 +119,7 @@ pub struct Prefs {
     pub shot_chord: bool,
     /// Show the shelf clock and CLOCK page in 12-hour form.
     pub clock_12h: bool,
-    /// Battery display: 0 = on, 1 = percent, 2 = off.
+    /// Battery display: 0 = on, 1 = percent, 2 = both, 3 = off.
     pub show_battery: u8,
     pub lid_sleep: bool,
     pub shutdown_min: u32,
@@ -852,6 +852,17 @@ pub fn draw_clock(cv: &mut Canvas, fonts: &mut Fonts, ce: &ClockEdit, clock_12h:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shelf_defaults_match() {
+        let p = Prefs::default();
+        assert_eq!(p.interface, 1, "ART");
+        assert_eq!(p.strip, 0, "TOP");
+        assert_eq!(p.art_type, 0, "BOXART");
+        assert_eq!(p.art_bg, 0, "NONE");
+        assert!(p.show_clock);
+        assert_eq!(p.show_battery, 0, "ON");
+    }
 
     #[test]
     fn the_shelf_page_offers_the_interface() {

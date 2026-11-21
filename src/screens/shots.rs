@@ -228,7 +228,7 @@ fn draw_zoom(cv: &mut Canvas, fonts: &mut Fonts, st: &ShotsState) {
 fn draw_list(cv: &mut Canvas, fonts: &mut Fonts, st: &ShotsState, t: f32) {
     let (w, h) = (cv.w, cv.h);
     cv.clear(pal().bg0);
-    theme::background(cv, 12, 64, (w - 32) as u32, (h - 124) as u32, t);
+    theme::background(cv, 12, 12, (w - 24) as u32, (h - 24) as u32, t);
     theme::glow_border(
         cv,
         8,
@@ -240,8 +240,11 @@ fn draw_list(cv: &mut Canvas, fonts: &mut Fonts, st: &ShotsState, t: f32) {
         t,
         0.0,
     );
-    fonts.draw_center(cv, w / 2, 42, "MAGI // SCREENSHOTS", 15.0, pal().title);
-    theme::hazard_bar(cv, w / 2 - 150, 56, 300, 5, t);
+    fonts.draw_bold(cv, 24, 36, "MAGI // SCREENSHOTS", 15.0, pal().title);
+    let count = format!("{} SHOTS   NEWEST FIRST", st.paths.len());
+    fonts.draw(cv, 24, 54, &count, 9.0, pal().text_faint);
+    cv.hline(24, 66, (w - 48).max(1) as u32, pal().border);
+    cv.fill_rect(24, 66, 160, 3, pal().accent);
 
     if st.paths.is_empty() {
         fonts.draw_center(cv, w / 2, h / 2 - 8, "NO SCREENSHOTS", 15.0, pal().text_dim);
@@ -256,9 +259,6 @@ fn draw_list(cv: &mut Canvas, fonts: &mut Fonts, st: &ShotsState, t: f32) {
         crate::status::hint_or_notice(cv, fonts, h - 26, "B BACK");
         return;
     }
-
-    let count = format!("{} SHOTS   NEWEST FIRST", st.paths.len());
-    fonts.draw_center(cv, w / 2, 80, &count, 9.0, pal().text_faint);
 
     let bottom = h - 62;
     let list_x = 24;

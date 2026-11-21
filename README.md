@@ -25,7 +25,7 @@
 ## Status 
 
 > [!NOTE] 
-> **v1.3.1** is stable and targets BaseOS 1.5.x. All the same devices as baseOS should be supported.\
+> **v1.4.0** is stable and targets BaseOS 1.5.x. All the same devices as baseOS should be supported.\
 > Netplay (beta) and devices other than 35XXSP are still untested.
 
 
@@ -132,7 +132,7 @@ Bundled assets and libraries keep their own licenses: JetBrains Mono (OFL), Perf
 ## Credits
 
 - The geniuses at Gainax / Khara, by which MAGI is inspired.
-- [BaseOS](https://github.com/pvaibhav/BaseOS) for the H700 platform.
+- [BaseOS](https://github.com/pvaibhav/BaseOS) by pvaibhav for the H700 platform.
 - [libretro](https://www.libretro.com/) and every core maintainer.
 - [SDL](https://www.libsdl.org/) and the SDL Game Controller DB community.
 - [JetBrains Mono](https://www.jetbrains.com/lp/mono/) by JetBrains.
