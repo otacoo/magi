@@ -229,6 +229,22 @@ pub fn run() -> Result<()> {
     );
     lib.prefs.show_clock = true;
 
+    // STRIP BOTTOM: status bar at the bottom, no top bar.
+    lib.prefs.strip = 1;
+    crate::theme::set_shelf_bg(true);
+    library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
+    crate::theme::set_shelf_bg(false);
+    let s = stats(&cv);
+    write_ppm(&out.join("library-strip-bottom.ppm"), &cv)?;
+    println!(
+        "library-strip-bottom: warm={} signal={} nonbg={} ({:.1}%)",
+        s.warm,
+        s.signal,
+        s.nonbg,
+        pct(&cv, &s)
+    );
+    lib.prefs.strip = 0;
+
     // The FAVORITES tab: the virtual system gathering starred games.
     lib.move_system(-1);
     library::draw(&mut cv, &mut fonts, &mut lib, 0.0);

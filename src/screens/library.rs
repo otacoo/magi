@@ -51,6 +51,8 @@ struct StateFile {
     #[serde(default)]
     show_clock: Option<bool>,
     #[serde(default)]
+    strip: Option<u8>,
+    #[serde(default)]
     auto_art: Option<bool>,
     #[serde(default)]
     art_type: Option<u8>,
@@ -115,6 +117,9 @@ impl StateFile {
         }
         if let Some(v) = self.show_clock {
             p.show_clock = v;
+        }
+        if let Some(v) = self.strip {
+            p.strip = v.min(1);
         }
         if let Some(v) = self.auto_art {
             p.auto_art = v;
@@ -546,6 +551,7 @@ impl LibraryState {
             volume: self.volume_pct,
             interface: Some(self.prefs.interface),
             show_clock: Some(self.prefs.show_clock),
+            strip: Some(self.prefs.strip),
             auto_art: Some(self.prefs.auto_art),
             art_type: Some(self.prefs.art_type),
             art_bg: Some(self.prefs.art_bg),
@@ -1294,36 +1300,18 @@ impl LibraryState {
     }
 }
 
-pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
-    let w = cv.w;
-    let h = cv.h;
-    let sc = crate::theme::ui_scale();
-    let p = |v: f32| (v * sc).round() as i32;
-    let top_h = p(27.0);
-    let bottom_bar = p(24.0);
-    let view = views::View::from_pref(st.prefs.interface);
-    cv.clear(pal().bg0);
-    st.marquee = false;
-
-    // Top bar.
-    cv.fill_rect(0, 0, w as u32, top_h as u32, pal().bg1);
-    cv.hline(
-        0,
-        top_h,
-        w as u32,
-        crate::theme::glow_color(pal().border, pal().glow, t, 0.1),
-    );
-    fonts.draw(
-        cv,
-        p(10.0),
-        top_h - p(8.0),
-        "MAGI // SYSTEM-01",
-        10.0,
-        pal().title,
-    );
-
-    // Clock.
-    let mut icons_x = w - p(12.0);
+/// Clock and radio icons, right-aligned in a status strip.
+fn draw_status_right(
+    cv: &mut Canvas,
+    fonts: &mut Fonts,
+    st: &LibraryState,
+    right: i32,
+    y: i32,
+    h: i32,
+) -> i32 {
+    let s = crate::theme::ui_scale();
+    let p = |v: f32| (v * s).round() as i32;
+    let mut icons_x = right;
     if st.prefs.show_clock {
         let mut clock = st.clock.clone().unwrap_or_else(|| "--:--".into());
         let mut pm = None;
@@ -1339,11 +1327,11 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
         let suffix_w = suffix
             .map(|s| fonts.text_width(s, 9.0) + p(3.0))
             .unwrap_or(0);
-        let clock_x = w - p(12.0) - suffix_w - cw;
+        let clock_x = right - suffix_w - cw;
         crate::theme::seven_segment(
             cv,
             clock_x,
-            (top_h - clock_h) / 2,
+            y + (h - clock_h) / 2,
             clock_h,
             &clock,
             pal().clock,
@@ -1352,7 +1340,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
             fonts.draw(
                 cv,
                 clock_x + cw + p(3.0),
-                top_h / 2 + 4,
+                y + h / 2 + 4,
                 suffix,
                 9.0,
                 pal().clock,
@@ -1360,14 +1348,13 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
         }
         icons_x = clock_x - p(8.0);
     }
-
-    // Radio icons.
+    let icon_y = y + (h - p(10.0)) / 2;
     if st.headphones {
-        crate::theme::headphone_icon(cv, icons_x - p(14.0), p(9.0), pal().accent);
+        crate::theme::headphone_icon(cv, icons_x - p(14.0), icon_y, pal().accent);
         icons_x -= p(16.0);
     }
     if st.bt_on {
-        crate::theme::bt_icon(cv, icons_x - p(12.0), p(9.0), pal().link);
+        crate::theme::bt_icon(cv, icons_x - p(12.0), icon_y, pal().link);
         icons_x -= p(16.0);
     }
     if st.wifi_on {
@@ -1376,11 +1363,99 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
         } else {
             pal().text_faint
         };
-        crate::theme::wifi_icon(cv, icons_x - p(16.0), p(8.0), color, st.wifi_signal);
+        crate::theme::wifi_icon(cv, icons_x - p(16.0), icon_y, color, st.wifi_signal);
+        icons_x -= p(16.0);
+    }
+    icons_x
+}
+
+/// Battery and status line, left-aligned in the ART status strip.
+fn draw_art_status(
+    cv: &mut Canvas,
+    fonts: &mut Fonts,
+    st: &LibraryState,
+    t: f32,
+    left: i32,
+    baseline: i32,
+    center_y: i32,
+    right: i32,
+) {
+    let s = crate::theme::ui_scale();
+    let p = |v: f32| (v * s).round() as i32;
+    let battery_right = draw_battery(
+        cv,
+        fonts,
+        left,
+        baseline - 11,
+        st.battery,
+        st.prefs.battery_pct,
+    );
+    let mut end = right;
+    if st.is_fetching_art() {
+        if let Some((_, done, total)) = &st.art_progress {
+            let label = format!("ART {done}/{total}");
+            let lw = fonts.text_width(&label, 9.0);
+            end -= p(12.0);
+            fonts.draw(cv, end - lw, baseline, &label, 9.0, pal().accent);
+            end -= lw + p(8.0);
+        }
+        crate::theme::spinner(cv, end - p(4.0), center_y, t, pal().signal);
+        end -= p(14.0);
+    }
+    crate::status::draw_bar(cv, fonts, battery_right, end, baseline);
+}
+
+pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
+    let w = cv.w;
+    let h = cv.h;
+    let sc = crate::theme::ui_scale();
+    let p = |v: f32| (v * sc).round() as i32;
+    let view = views::View::from_pref(st.prefs.interface);
+    let art = view == views::View::Art;
+    let strip = views::Strip::from_pref(st.prefs.strip);
+    let status_top = !art || strip == views::Strip::Top;
+    let status_bottom = !art || strip == views::Strip::Bottom;
+    let top_h = if status_top { p(27.0) } else { 0 };
+    let bottom_bar = if status_bottom { p(24.0) } else { 0 };
+    cv.clear(pal().bg0);
+    st.marquee = false;
+
+    // Top bar.
+    if status_top {
+        cv.fill_rect(0, 0, w as u32, top_h as u32, pal().bg1);
+        cv.hline(
+            0,
+            top_h,
+            w as u32,
+            crate::theme::glow_color(pal().border, pal().glow, t, 0.1),
+        );
+        if art {
+            let icons_x = draw_status_right(cv, fonts, st, w - p(10.0), 0, top_h);
+            draw_art_status(
+                cv,
+                fonts,
+                st,
+                t,
+                p(10.0),
+                top_h - p(8.0),
+                top_h / 2,
+                icons_x - p(8.0),
+            );
+        } else {
+            fonts.draw(
+                cv,
+                p(10.0),
+                top_h - p(8.0),
+                "MAGI // SYSTEM-01",
+                10.0,
+                pal().title,
+            );
+            draw_status_right(cv, fonts, st, w - p(12.0), 0, top_h);
+        }
     }
 
     // Layout.
-    let lay = views::layout(view, w, h, top_h, bottom_bar, sc);
+    let lay = views::layout(view, w, h, top_h, bottom_bar, sc, strip);
 
     // Shelf backdrop.
     if crate::theme::shelf_bg() {
@@ -1404,7 +1479,17 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
                 .filter(|s| st.games.get(&s.id).is_some_and(|g| !g.is_empty()))
                 .map(|s| s.name.as_str()),
         );
-        views::draw_systems(cv, fonts, view, &names, st.sel_system, lay.systems, sc, t);
+        views::draw_systems(
+            cv,
+            fonts,
+            view,
+            &names,
+            st.sel_system,
+            lay.systems,
+            sc,
+            t,
+            status_top,
+        );
     }
 
     // Game list.
@@ -1542,35 +1627,52 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
     }
 
     // Bottom bar.
-    cv.fill_rect(0, h - bottom_bar, w as u32, bottom_bar as u32, pal().bg1);
-    cv.hline(
-        0,
-        h - bottom_bar,
-        w as u32,
-        crate::theme::glow_color(pal().border, pal().glow, t, 0.7),
-    );
-    let battery_right = draw_battery(cv, fonts, 10, h - 19, st.battery, st.prefs.battery_pct);
+    if status_bottom {
+        cv.fill_rect(0, h - bottom_bar, w as u32, bottom_bar as u32, pal().bg1);
+        cv.hline(
+            0,
+            h - bottom_bar,
+            w as u32,
+            crate::theme::glow_color(pal().border, pal().glow, t, 0.7),
+        );
+        if art {
+            let icons_x = draw_status_right(cv, fonts, st, w - p(10.0), h - bottom_bar, bottom_bar);
+            draw_art_status(
+                cv,
+                fonts,
+                st,
+                t,
+                p(10.0),
+                h - p(8.0),
+                h - bottom_bar / 2,
+                icons_x - p(8.0),
+            );
+        } else {
+            let battery_right =
+                draw_battery(cv, fonts, 10, h - 19, st.battery, st.prefs.battery_pct);
 
-    let v = format!("MAGI v{}", env!("CARGO_PKG_VERSION"));
-    let vw = fonts.text_width(&v, 9.0);
-    let version_x = w - 10 - vw;
-    fonts.draw(cv, version_x, h - 8, &v, 9.0, pal().text_faint);
+            let v = format!("MAGI v{}", env!("CARGO_PKG_VERSION"));
+            let vw = fonts.text_width(&v, 9.0);
+            let version_x = w - 10 - vw;
+            fonts.draw(cv, version_x, h - 8, &v, 9.0, pal().text_faint);
 
-    let mut right = version_x;
-    if st.is_fetching_art() {
-        if let Some((_, done, total)) = &st.art_progress {
-            let label = format!("ART {done}/{total}");
-            let lw = fonts.text_width(&label, 9.0);
-            right -= p(12.0);
-            fonts.draw(cv, right - lw, h - 8, &label, 9.0, pal().accent);
-            right -= lw + p(8.0);
+            let mut right = version_x;
+            if st.is_fetching_art() {
+                if let Some((_, done, total)) = &st.art_progress {
+                    let label = format!("ART {done}/{total}");
+                    let lw = fonts.text_width(&label, 9.0);
+                    right -= p(12.0);
+                    fonts.draw(cv, right - lw, h - 8, &label, 9.0, pal().accent);
+                    right -= lw + p(8.0);
+                }
+                crate::theme::spinner(cv, right - p(4.0), h - bottom_bar / 2, t, pal().signal);
+                right -= p(14.0);
+            }
+
+            // Status line.
+            crate::status::draw_bar(cv, fonts, battery_right, right, h - 8);
         }
-        crate::theme::spinner(cv, right - p(4.0), h - bottom_bar / 2, t, pal().signal);
-        right -= p(14.0);
     }
-
-    // Status line.
-    crate::status::draw_bar(cv, fonts, battery_right, right, h - 8);
 
     if st.controls_open {
         draw_controls(cv, fonts, t);
@@ -2292,14 +2394,16 @@ mod state_tests {
         assert_eq!(empty.prefs().ff_sound, Defaults::FF_SOUND);
         assert_eq!(empty.prefs().charge_limit, Defaults::CHARGE_LIMIT);
         assert_eq!(empty.prefs().show_clock, Defaults::SHOW_CLOCK);
+        assert_eq!(empty.prefs().strip, Defaults::STRIP);
 
         let stored: StateFile = serde_json::from_str(
-            r#"{"ff_sound":false,"text_scale":9.0,"theme":99,"background":9,"show_clock":false}"#,
+            r#"{"ff_sound":false,"text_scale":9.0,"theme":99,"background":9,"show_clock":false,"strip":1}"#,
         )
         .unwrap();
         let p = stored.prefs();
         assert!(!p.ff_sound, "explicit value wins");
         assert!(!p.show_clock, "explicit value wins");
+        assert_eq!(p.strip, 1);
         assert_eq!(p.text_scale, 1.5, "clamped to the largest step");
         assert_eq!(p.theme, (crate::theme::themes().len() - 1) as u8);
         assert_eq!(p.background, (crate::theme::bg_styles().len() - 1) as u8);

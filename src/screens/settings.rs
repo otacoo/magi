@@ -21,9 +21,10 @@ pub const MAIN_ROWS: [&str; 8] = [
 const MAIN_GROUPS: [(usize, &str); 2] = [(0, "CONFIGS"), (3, "GENERAL")];
 const NO_GROUPS: [(usize, &str); 0] = [];
 
-pub const SHELF_ROWS: [&str; 5] = [
+pub const SHELF_ROWS: [&str; 6] = [
     "INTERFACE",
     "SHOW CLOCK",
+    "STRIP",
     "AUTO DOWNLOAD ART",
     "ART TYPE",
     "ART BACKGROUND",
@@ -98,6 +99,8 @@ pub struct Prefs {
     /// Shelf list layout (see views::View): text rows or cover art.
     pub interface: u8,
     pub show_clock: bool,
+    /// ART status strip: 0 = top, 1 = bottom.
+    pub strip: u8,
     /// Fetch missing art when a system with wifi up is opened.
     pub auto_art: bool,
     /// ART TYPE: 0 = boxart, 1 = snap, 2 = title, 3 = logo.
@@ -158,6 +161,7 @@ impl Default for Prefs {
             ff_steps: Defaults::FF_STEPS,
             interface: Defaults::INTERFACE,
             show_clock: Defaults::SHOW_CLOCK,
+            strip: Defaults::STRIP,
             auto_art: Defaults::AUTO_ART,
             art_type: Defaults::ART_TYPE,
             art_bg: Defaults::ART_BG,
@@ -322,6 +326,7 @@ fn row_description(row: &str) -> &'static str {
         "GLOW FX" => "Neon glow on borders and selections.",
         "INTERFACE" => "Simple list or cover-art shelf.",
         "SHOW CLOCK" => "Show the clock in the top bar.",
+        "STRIP" => "Put the ART status strip at the top or bottom.",
         "AUTO DOWNLOAD ART" => "Fetch missing covers when a system opens.",
         "ART TYPE" => "Boxart, snap, title or logo.",
         "ART BACKGROUND" => "Pick the type of art background.",
@@ -392,6 +397,7 @@ impl SettingsState {
             prefs: Prefs {
                 ff_steps: prefs.ff_steps.clamp(FF_STEPS_MIN, FF_STEPS_MAX),
                 text_scale: TEXT_SCALES[nearest_scale_idx(prefs.text_scale)],
+                strip: prefs.strip.min(1),
                 ..prefs
             },
             ..Self::default()
@@ -408,6 +414,10 @@ impl SettingsState {
             as u8;
         // SIMPLE hides the art rows; keep the cursor on one that exists.
         self.sel = self.sel.min(self.rows().len() - 1);
+    }
+
+    pub fn adjust_strip(&mut self, delta: i32) {
+        self.prefs.strip = ((self.prefs.strip as i32 + delta).rem_euclid(2)) as u8;
     }
 
     pub fn toggle_auto_art(&mut self) {
@@ -500,6 +510,13 @@ impl SettingsState {
                 true,
             )),
             "SHOW CLOCK" => Some((format!("< {} >", onoff(self.prefs.show_clock)), true)),
+            "STRIP" => Some((
+                format!(
+                    "< {} >",
+                    crate::screens::views::STRIP_LABELS[self.prefs.strip.min(1) as usize]
+                ),
+                true,
+            )),
             "AUTO DOWNLOAD ART" => Some((format!("< {} >", onoff(self.prefs.auto_art)), true)),
             "ART TYPE" => {
                 let i = self.prefs.art_type.min(crate::art::LABELS.len() as u8 - 1) as usize;
@@ -856,6 +873,16 @@ mod tests {
         st.adjust_interface(1);
         assert_eq!(st.prefs.interface, 0);
         assert_eq!(st.rows(), &["INTERFACE", "SHOW CLOCK"]);
+    }
+
+    #[test]
+    fn strip_toggles_top_and_bottom() {
+        let mut st = SettingsState::default();
+        assert_eq!(st.prefs.strip, 0);
+        st.adjust_strip(1);
+        assert_eq!(st.prefs.strip, 1);
+        st.adjust_strip(1);
+        assert_eq!(st.prefs.strip, 0);
     }
 
     #[test]

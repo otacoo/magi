@@ -18,6 +18,25 @@ pub enum View {
 
 pub const LABELS: [&str; 2] = ["SIMPLE", "ART"];
 
+/// Where the ART status strip sits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Strip {
+    Top,
+    Bottom,
+}
+
+pub const STRIP_LABELS: [&str; 2] = ["TOP", "BOTTOM"];
+
+impl Strip {
+    pub fn from_pref(value: u8) -> Self {
+        if value == 1 {
+            Strip::Bottom
+        } else {
+            Strip::Top
+        }
+    }
+}
+
 impl View {
     pub fn from_pref(value: u8) -> Self {
         if value == 1 {
@@ -91,7 +110,15 @@ pub struct Layout {
     pub art: Option<(i32, i32, i32, i32)>,
 }
 
-pub fn layout(view: View, w: i32, h: i32, top: i32, bottom: i32, scale: f32) -> Layout {
+pub fn layout(
+    view: View,
+    w: i32,
+    h: i32,
+    top: i32,
+    bottom: i32,
+    scale: f32,
+    strip: Strip,
+) -> Layout {
     let p = |v: f32| (v * scale).round() as i32;
     let rail_w = p(150.0);
     match view {
@@ -106,12 +133,13 @@ pub fn layout(view: View, w: i32, h: i32, top: i32, bottom: i32, scale: f32) -> 
         },
         View::Art => {
             let strip_h = p(26.0);
-            let strip_y = top + 1;
+            let strip_y = if strip == Strip::Top { top + p(1.0) } else { 0 };
+            let strip_bottom = strip_y + strip_h;
             // ART puts the path line under the strip.
-            let subtitle_y = strip_y + strip_h + p(20.0);
-            let list_top = subtitle_y + p(14.0);
+            let subtitle_y = strip_bottom + p(8.0);
+            let list_top = subtitle_y + p(8.0);
             // Cover frame starts under the strip.
-            let art_y = strip_y + strip_h + p(8.0);
+            let art_y = strip_bottom + p(6.0);
             let art_h = (h - bottom - 8) - art_y;
             // Portrait frame sized to the pane.
             let art_w = art_h * 3 / 4;
@@ -139,6 +167,7 @@ pub fn draw_systems(
     area: (i32, i32, i32, i32),
     scale: f32,
     t: f32,
+    divider: bool,
 ) {
     let (_, y, w, h) = area;
     match view {
@@ -154,12 +183,14 @@ pub fn draw_systems(
         }
         View::Art => {
             cv.fill_rect(0, y, w as u32, h as u32, pal().bg1);
-            cv.hline(
-                0,
-                y + h,
-                w as u32,
-                crate::theme::glow_color(pal().border, pal().glow, t, STRIP_GLOW_PHASE),
-            );
+            if divider {
+                cv.hline(
+                    0,
+                    y + h,
+                    w as u32,
+                    crate::theme::glow_color(pal().border, pal().glow, t, STRIP_GLOW_PHASE),
+                );
+            }
             draw_strip(cv, fonts, names, sel, area, scale, t);
         }
     }
@@ -313,7 +344,7 @@ fn draw_strip(
         let before: i32 = widths[..i].iter().sum::<i32>() + gap * i as i32;
         let tab_w = widths[i] + pad * 2;
         let tab_x = (start + before - pad).min(x + w - tab_w).max(x);
-        let tab_y = y - 1;
+        let tab_y = (y - 1).max(0);
         let tab_h = h + 2;
         let edge = crate::theme::glow_color(pal().border, pal().glow, t, STRIP_GLOW_PHASE);
         cv.fill_rect(tab_x, tab_y, tab_w as u32, tab_h as u32, pal().bg1);
