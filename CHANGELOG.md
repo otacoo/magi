@@ -2,6 +2,36 @@
 
 All notable changes to MAGI are documented here.
 
+## [1.4.0] - 2026-11-21
+
+### Changes
+
+- Updated the boot animation sequence and splash art
+- **New option:** Add a SHELF option to hide the CLOCK
+- **New option:** Add a SHELF option for battery display offering ON / PERCENT / BOTH / OFF options
+- ART shelf mode gains a STRIP TOP/BOTTOM/BOTH/OFF option
+  - Pick to combine the strips into a top or bottom one, or disable it altogether
+  - With STRIP OFF, radio icons are hidden and notices appear as a toast
+- Improve animation performance, shelf animations and animated backdrops use less CPU
+- POWER-button shutdown countdown is one second shorter
+- The S interface font size is just *slightly* bigger
+- Updated style of NETWORK, ABOUT, CONTROLS and SCREENSHOTS pages to match the UI overhaul
+- **Fixed:** Save states from before the Flycast (DC) core addition can load again
+
+### Commits
+
+- TEST (4b77b08)
+- SHOTS (8a2fb70)
+- BATTERY (6606287)
+- STRIP (aa6a82f)
+- CLOCK (e69c1cd)
+- OPTIM (7ead59e)
+- SHUTDOWN (583f8d3)
+- MENU (479f155)
+- SAVE STATE (949b867)
+- GEHIRN (f3d80aa)
+- ASSETS (cd2c7d0)
+
 ## [1.3.1] - 2026-11-11
 
 ### Changes
