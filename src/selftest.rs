@@ -203,6 +203,32 @@ pub fn run() -> Result<()> {
         );
     }
 
+    // SHOW CLOCK OFF removes the top-bar clock.
+    let clock_color = pal().clock.to_u32();
+    let top = cv.w as usize * 40;
+    let clock_on = cv.px[..top].iter().filter(|&&p| p == clock_color).count();
+    if clock_on == 0 {
+        bail!("clock missing before hiding it");
+    }
+    lib.prefs.show_clock = false;
+    crate::theme::set_shelf_bg(true);
+    library::draw(&mut cv, &mut fonts, &mut lib, 0.0);
+    crate::theme::set_shelf_bg(false);
+    let clock_off = cv.px[..top].iter().filter(|&&p| p == clock_color).count();
+    if clock_off != 0 {
+        bail!("clock pixels remain after hiding it ({clock_off})");
+    }
+    let s = stats(&cv);
+    write_ppm(&out.join("library-no-clock.ppm"), &cv)?;
+    println!(
+        "library-no-clock: warm={} signal={} nonbg={} ({:.1}%)",
+        s.warm,
+        s.signal,
+        s.nonbg,
+        pct(&cv, &s)
+    );
+    lib.prefs.show_clock = true;
+
     // The FAVORITES tab: the virtual system gathering starred games.
     lib.move_system(-1);
     library::draw(&mut cv, &mut fonts, &mut lib, 0.0);

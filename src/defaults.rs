@@ -26,6 +26,7 @@ impl Defaults {
     pub const SHOT_CHORD: bool = false;
     /// 24-hour clock by default; the CLOCK page toggles 12-hour.
     pub const CLOCK_12H: bool = false;
+    pub const SHOW_CLOCK: bool = true;
     pub const BATTERY_PCT: bool = false;
     pub const LID_SLEEP: bool = true;
     pub const SHUTDOWN_MIN: u32 = 5;

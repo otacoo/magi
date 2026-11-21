@@ -49,6 +49,8 @@ struct StateFile {
     #[serde(default)]
     interface: Option<u8>,
     #[serde(default)]
+    show_clock: Option<bool>,
+    #[serde(default)]
     auto_art: Option<bool>,
     #[serde(default)]
     art_type: Option<u8>,
@@ -110,6 +112,9 @@ impl StateFile {
         let mut p = Prefs::default();
         if let Some(v) = self.interface {
             p.interface = v.min(1);
+        }
+        if let Some(v) = self.show_clock {
+            p.show_clock = v;
         }
         if let Some(v) = self.auto_art {
             p.auto_art = v;
@@ -540,6 +545,7 @@ impl LibraryState {
             },
             volume: self.volume_pct,
             interface: Some(self.prefs.interface),
+            show_clock: Some(self.prefs.show_clock),
             auto_art: Some(self.prefs.auto_art),
             art_type: Some(self.prefs.art_type),
             art_bg: Some(self.prefs.art_bg),
@@ -1317,42 +1323,45 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &mut LibraryState, t: f32) {
     );
 
     // Clock.
-    let mut clock = st.clock.clone().unwrap_or_else(|| "--:--".into());
-    let mut pm = None;
-    if st.prefs.clock_12h {
-        if let Some((text, is_pm)) = util::clock_12h_from_hhmm(&clock) {
-            clock = text;
-            pm = Some(is_pm);
+    let mut icons_x = w - p(12.0);
+    if st.prefs.show_clock {
+        let mut clock = st.clock.clone().unwrap_or_else(|| "--:--".into());
+        let mut pm = None;
+        if st.prefs.clock_12h {
+            if let Some((text, is_pm)) = util::clock_12h_from_hhmm(&clock) {
+                clock = text;
+                pm = Some(is_pm);
+            }
         }
-    }
-    let clock_h = p(14.0);
-    let cw = crate::theme::seven_segment_width(&clock, clock_h);
-    let suffix = pm.map(|pm| if pm { "PM" } else { "AM" });
-    let suffix_w = suffix
-        .map(|s| fonts.text_width(s, 9.0) + p(3.0))
-        .unwrap_or(0);
-    let clock_x = w - p(12.0) - suffix_w - cw;
-    crate::theme::seven_segment(
-        cv,
-        clock_x,
-        (top_h - clock_h) / 2,
-        clock_h,
-        &clock,
-        pal().clock,
-    );
-    if let Some(suffix) = suffix {
-        fonts.draw(
+        let clock_h = p(14.0);
+        let cw = crate::theme::seven_segment_width(&clock, clock_h);
+        let suffix = pm.map(|pm| if pm { "PM" } else { "AM" });
+        let suffix_w = suffix
+            .map(|s| fonts.text_width(s, 9.0) + p(3.0))
+            .unwrap_or(0);
+        let clock_x = w - p(12.0) - suffix_w - cw;
+        crate::theme::seven_segment(
             cv,
-            clock_x + cw + p(3.0),
-            top_h / 2 + 4,
-            suffix,
-            9.0,
+            clock_x,
+            (top_h - clock_h) / 2,
+            clock_h,
+            &clock,
             pal().clock,
         );
+        if let Some(suffix) = suffix {
+            fonts.draw(
+                cv,
+                clock_x + cw + p(3.0),
+                top_h / 2 + 4,
+                suffix,
+                9.0,
+                pal().clock,
+            );
+        }
+        icons_x = clock_x - p(8.0);
     }
 
     // Radio icons.
-    let mut icons_x = clock_x - p(8.0);
     if st.headphones {
         crate::theme::headphone_icon(cv, icons_x - p(14.0), p(9.0), pal().accent);
         icons_x -= p(16.0);
@@ -2282,13 +2291,15 @@ mod state_tests {
         assert_eq!(empty.prefs().text_scale, Defaults::TEXT_SCALE);
         assert_eq!(empty.prefs().ff_sound, Defaults::FF_SOUND);
         assert_eq!(empty.prefs().charge_limit, Defaults::CHARGE_LIMIT);
+        assert_eq!(empty.prefs().show_clock, Defaults::SHOW_CLOCK);
 
         let stored: StateFile = serde_json::from_str(
-            r#"{"ff_sound":false,"text_scale":9.0,"theme":99,"background":9}"#,
+            r#"{"ff_sound":false,"text_scale":9.0,"theme":99,"background":9,"show_clock":false}"#,
         )
         .unwrap();
         let p = stored.prefs();
         assert!(!p.ff_sound, "explicit value wins");
+        assert!(!p.show_clock, "explicit value wins");
         assert_eq!(p.text_scale, 1.5, "clamped to the largest step");
         assert_eq!(p.theme, (crate::theme::themes().len() - 1) as u8);
         assert_eq!(p.background, (crate::theme::bg_styles().len() - 1) as u8);

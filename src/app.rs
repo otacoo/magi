@@ -382,6 +382,7 @@ impl Ui {
     fn settings_adjust(&mut self, delta: i32) {
         match self.settings.rows()[self.settings.sel] {
             "INTERFACE" => self.settings.adjust_interface(delta),
+            "SHOW CLOCK" => self.settings.prefs.show_clock = !self.settings.prefs.show_clock,
             "AUTO DOWNLOAD ART" => self.settings.toggle_auto_art(),
             "ART TYPE" => self.settings.adjust_art_type(delta),
             "ART BACKGROUND" => self.settings.adjust_art_bg(delta),
@@ -879,12 +880,12 @@ impl Ui {
                 Action::Left => self.settings_adjust(-1),
                 Action::Right => self.settings_adjust(1),
                 Action::Confirm => match self.settings.rows()[self.settings.sel] {
-                    "INTERFACE" | "AUTO DOWNLOAD ART" | "ART TYPE" | "ART BACKGROUND"
-                    | "FAST FORWARD" | "FF SOUND" | "RUMBLE" | "COLOUR THEME" | "TEXT SIZE"
-                    | "BACKGROUND" | "SHELF BACKGROUND" | "ANIM BACKGROUND" | "GLOW FX"
-                    | "SCREENSHOT" | "SHOW BATTERY %" | "LID SLEEP" | "LID SHUTDOWN AFTER"
-                    | "IDLE SHUTDOWN" | "BATTERY SHUTDOWN" | "CHARGE LIMIT" | "LED"
-                    | "HDMI AUTO" => self.settings_adjust(1),
+                    "INTERFACE" | "SHOW CLOCK" | "AUTO DOWNLOAD ART" | "ART TYPE"
+                    | "ART BACKGROUND" | "FAST FORWARD" | "FF SOUND" | "RUMBLE"
+                    | "COLOUR THEME" | "TEXT SIZE" | "BACKGROUND" | "SHELF BACKGROUND"
+                    | "ANIM BACKGROUND" | "GLOW FX" | "SCREENSHOT" | "SHOW BATTERY %"
+                    | "LID SLEEP" | "LID SHUTDOWN AFTER" | "IDLE SHUTDOWN" | "BATTERY SHUTDOWN"
+                    | "CHARGE LIMIT" | "LED" | "HDMI AUTO" => self.settings_adjust(1),
                     "SHELF" => self.settings.open_page(settings::Page::Shelf),
                     "THEME" => self.settings.open_page(settings::Page::Theme),
                     "SYSTEM" => self.settings.open_page(settings::Page::System),

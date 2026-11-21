@@ -21,14 +21,15 @@ pub const MAIN_ROWS: [&str; 8] = [
 const MAIN_GROUPS: [(usize, &str); 2] = [(0, "CONFIGS"), (3, "GENERAL")];
 const NO_GROUPS: [(usize, &str); 0] = [];
 
-pub const SHELF_ROWS: [&str; 4] = [
+pub const SHELF_ROWS: [&str; 5] = [
     "INTERFACE",
+    "SHOW CLOCK",
     "AUTO DOWNLOAD ART",
     "ART TYPE",
     "ART BACKGROUND",
 ];
-/// The art choices; SIMPLE has no covers, so only the interface stays.
-const SHELF_ROWS_SIMPLE: [&str; 1] = ["INTERFACE"];
+/// SIMPLE keeps only the shared rows.
+const SHELF_ROWS_SIMPLE: [&str; 2] = ["INTERFACE", "SHOW CLOCK"];
 
 /// ART BACKGROUND values.
 pub const ART_BG_LABELS: [&str; 2] = ["NONE", "CARD"];
@@ -96,6 +97,7 @@ pub struct Prefs {
     pub ff_steps: u32,
     /// Shelf list layout (see views::View): text rows or cover art.
     pub interface: u8,
+    pub show_clock: bool,
     /// Fetch missing art when a system with wifi up is opened.
     pub auto_art: bool,
     /// ART TYPE: 0 = boxart, 1 = snap, 2 = title, 3 = logo.
@@ -155,6 +157,7 @@ impl Default for Prefs {
         Self {
             ff_steps: Defaults::FF_STEPS,
             interface: Defaults::INTERFACE,
+            show_clock: Defaults::SHOW_CLOCK,
             auto_art: Defaults::AUTO_ART,
             art_type: Defaults::ART_TYPE,
             art_bg: Defaults::ART_BG,
@@ -318,6 +321,7 @@ fn row_description(row: &str) -> &'static str {
         "ANIM BACKGROUND" => "Animate the backdrop.",
         "GLOW FX" => "Neon glow on borders and selections.",
         "INTERFACE" => "Simple list or cover-art shelf.",
+        "SHOW CLOCK" => "Show the clock in the top bar.",
         "AUTO DOWNLOAD ART" => "Fetch missing covers when a system opens.",
         "ART TYPE" => "Boxart, snap, title or logo.",
         "ART BACKGROUND" => "Pick the type of art background.",
@@ -495,6 +499,7 @@ impl SettingsState {
                 ),
                 true,
             )),
+            "SHOW CLOCK" => Some((format!("< {} >", onoff(self.prefs.show_clock)), true)),
             "AUTO DOWNLOAD ART" => Some((format!("< {} >", onoff(self.prefs.auto_art)), true)),
             "ART TYPE" => {
                 let i = self.prefs.art_type.min(crate::art::LABELS.len() as u8 - 1) as usize;
@@ -850,8 +855,7 @@ mod tests {
         assert_eq!(st.rows().len(), SHELF_ROWS.len());
         st.adjust_interface(1);
         assert_eq!(st.prefs.interface, 0);
-        assert_eq!(st.rows().len(), 1);
-        assert_eq!(st.rows()[0], "INTERFACE");
+        assert_eq!(st.rows(), &["INTERFACE", "SHOW CLOCK"]);
     }
 
     #[test]
@@ -863,7 +867,7 @@ mod tests {
         };
         st.adjust_interface(1);
         assert_eq!(st.prefs.interface, 0);
-        assert_eq!(st.rows()[st.sel], "INTERFACE");
+        assert_eq!(st.rows()[st.sel], "SHOW CLOCK");
     }
 
     #[test]
