@@ -3909,6 +3909,7 @@ fn restore_auto_state(path: &Path, hud: &mut Option<(String, Instant)>) {
             util::log(&format!("auto state restored: {}", path.display()));
             let _ = std::fs::remove_file(path);
             let _ = std::fs::remove_file(state_thumb_path(path));
+            let _ = std::fs::remove_file(state_meta_path(path));
             *hud = Some(("STATE RESTORED".into(), Instant::now()));
         }
         Ok(false) => util::log("auto state rejected by core"),
@@ -3989,32 +3990,99 @@ fn save_state_to(path: &Path) -> Option<bool> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StateTag {
+    Current,
+    Legacy,
+    Reject,
+}
+
+/// Decide whether a state's `.core` sidecar allows a load. States written
+/// before the sidecar existed have no tag; a tagged state can also come from
+/// an older build. Try either once, unless the core is Flycast, whose old
+/// serializer is the known crasher.
+fn state_tag(tagged: Option<&str>, version: &str, core: &str) -> StateTag {
+    if tagged == Some(version) {
+        StateTag::Current
+    } else if core == "flycast" {
+        StateTag::Reject
+    } else {
+        StateTag::Legacy
+    }
+}
+
 fn load_state_from(path: &Path) -> std::io::Result<bool> {
     if ctx().states_blocked {
         return Ok(false);
     }
     let meta = state_meta_path(path);
-    match std::fs::read_to_string(&meta) {
-        Ok(v) if v.trim() == ctx().core_version.as_str() => {}
-        Ok(v) => {
+    let tagged = std::fs::read_to_string(&meta)
+        .ok()
+        .map(|v| v.trim().to_string());
+    let version = ctx().core_version.clone();
+    let core = ctx().opt_key.clone();
+    let tag = state_tag(tagged.as_deref(), &version, &core);
+    match tag {
+        StateTag::Current => {}
+        StateTag::Legacy => {
+            let reason = match tagged.as_deref() {
+                Some(v) => format!("has core tag {v}"),
+                None => "has no core tag".into(),
+            };
             util::log(&format!(
-                "state: {} written by core {}; this is {}",
+                "state: {} {}; trying legacy state",
                 path.display(),
-                v.trim(),
-                ctx().core_version
+                reason
             ));
-            return Ok(false);
         }
-        Err(_) => {
-            util::log(&format!(
-                "state: {} has no core tag; not loading",
-                path.display()
-            ));
+        StateTag::Reject => {
+            match tagged.as_deref() {
+                Some(v) => util::log(&format!(
+                    "state: {} written by core {}; this is {}",
+                    path.display(),
+                    v,
+                    version
+                )),
+                None => util::log(&format!(
+                    "state: {} has no core tag; not loading",
+                    path.display()
+                )),
+            }
             return Ok(false);
         }
     }
     let buf = unpack_state(std::fs::read(path)?)?;
-    Ok(unsafe { (ctx().unser)(buf.as_ptr() as *const c_void, buf.len()) })
+    // Gambatte validates the state size itself; other legacy states get a
+    // cheap size guard before the core sees them.
+    if tag == StateTag::Legacy && core != "gambatte" && buf.len() != ctx().state_size {
+        util::log(&format!(
+            "state: {} is {} bytes, core expects {}; not loading",
+            path.display(),
+            buf.len(),
+            ctx().state_size
+        ));
+        return Ok(false);
+    }
+    let ok = unsafe { (ctx().unser)(buf.as_ptr() as *const c_void, buf.len()) };
+    if !ok {
+        util::log(&format!(
+            "state: {} rejected by core {} ({} bytes)",
+            path.display(),
+            version,
+            buf.len()
+        ));
+    }
+    if ok && tag != StateTag::Current {
+        match util::write_file_atomic(&meta, version.as_bytes()) {
+            Ok(()) => util::log(&format!(
+                "state: {} tagged with core {}",
+                path.display(),
+                version
+            )),
+            Err(e) => util::log(&format!("state version tag: {}: {e}", meta.display())),
+        }
+    }
+    Ok(ok)
 }
 
 /// Push a fresh snapshot into the rewind ring, dropping the oldest states
@@ -5321,6 +5389,21 @@ mod state_slot_tests {
         let (packed, compressed) = super::pack_state(raw.clone());
         assert!(!compressed);
         assert_eq!(super::unpack_state(packed).unwrap(), raw);
+    }
+
+    #[test]
+    fn old_states_fall_back_except_for_flycast() {
+        use super::{state_tag, StateTag};
+        assert_eq!(state_tag(None, "v1", "gambatte"), StateTag::Legacy);
+        assert_eq!(state_tag(None, "v1", "snes9x2005_plus"), StateTag::Legacy);
+        assert_eq!(state_tag(None, "v1", "flycast"), StateTag::Reject);
+        assert_eq!(state_tag(Some("v1"), "v1", "gambatte"), StateTag::Current);
+        assert_eq!(state_tag(Some("v0"), "v1", "gambatte"), StateTag::Legacy);
+        assert_eq!(
+            state_tag(Some("v0"), "v1", "snes9x2005_plus"),
+            StateTag::Legacy
+        );
+        assert_eq!(state_tag(Some("v0"), "v1", "flycast"), StateTag::Reject);
     }
 }
 
