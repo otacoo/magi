@@ -2079,38 +2079,58 @@ pub fn draw_game_menu(
 /// The CONTROLS panel: every button, both on the shelf and in a game.
 fn draw_controls(cv: &mut Canvas, fonts: &mut Fonts, t: f32) {
     let (w, h) = (cv.w, cv.h);
-    cv.fill_rect(0, 0, w as u32, h as u32, pal().bg0);
-    crate::theme::background(cv, 12, 62, (w - 32) as u32, (h - 122) as u32, t);
+    let s = crate::theme::ui_scale();
+    let p = |v: f32| (v * s).round() as i32;
+    cv.clear(pal().bg0);
+    crate::theme::background(
+        cv,
+        p(10.0),
+        p(10.0),
+        (w - p(20.0)).max(1) as u32,
+        (h - p(20.0)).max(1) as u32,
+        t,
+    );
     crate::theme::glow_border(
         cv,
-        8,
-        8,
-        (w - 16) as u32,
-        (h - 16) as u32,
+        p(8.0),
+        p(8.0),
+        (w - p(16.0)).max(1) as u32,
+        (h - p(16.0)).max(1) as u32,
         pal().border,
         pal().glow,
         t,
         0.0,
     );
-    let title = "CONTROLS // MAGI";
-    fonts.draw_center(cv, w / 2, 42, title, 15.0, pal().title);
-    crate::theme::hazard_bar(cv, w / 2 - 150, 56, 300, 5, t);
-    cv.vline(w / 2, 76, (h - 130) as u32, pal().bg3);
 
-    // Section headers stand apart: bigger, tinted, underlined with stripes.
-    let section = |cv: &mut Canvas, fonts: &mut Fonts, x: i32, label: &str| {
-        fonts.draw(cv, x, 96, label, 14.0, pal().title);
-        crate::theme::hazard_bar(cv, x, 102, 150, 3, t);
-    };
-    let left_x = 44;
-    let right_x = w / 2 + 36;
-    section(cv, fonts, left_x, "SHELF");
-    section(cv, fonts, right_x, "IN GAME");
+    let left = 24;
+    let right = w - 24;
+    let title_base = 36;
+    fonts.draw_bold(cv, left, title_base, "MAGI // CONTROLS", 15.0, pal().title);
+    fonts.draw(
+        cv,
+        left,
+        title_base + 18,
+        "SHELF AND IN-GAME INPUT",
+        9.0,
+        pal().text_faint,
+    );
+    let div_y = 66;
+    cv.hline(left, div_y, (right - left).max(1) as u32, pal().border);
+    cv.fill_rect(left, div_y, 160, 3, pal().accent);
 
-    let mut shelf: Vec<(&str, &str)> = vec![
-        ("D-PAD L/R", "SWITCH SYSTEM"),
+    let left_x = 38;
+    let right_x = w / 2 + 18;
+    cv.vline(
+        w / 2,
+        84,
+        (h - 144).max(1) as u32,
+        crate::theme::mix(pal().bg0, pal().border, 0.35),
+    );
+    fonts.draw(cv, left_x, 94, "SHELF", 9.0, pal().text_faint);
+    fonts.draw(cv, right_x, 94, "IN GAME", 9.0, pal().text_faint);
+
+    let shelf = [
         ("L2 / R2", "SWITCH SYSTEM"),
-        ("D-PAD U/D", "BROWSE GAMES"),
         ("L1 / R1", "PAGE"),
         ("A", "PLAY"),
         ("X", "GAME MENU"),
@@ -2120,16 +2140,13 @@ fn draw_controls(cv: &mut Canvas, fonts: &mut Fonts, t: f32) {
         ("SELECT+U/D", "BRIGHTNESS"),
         ("SELECT+L/R", "TEMPERATURE"),
     ];
-    if crate::input::shot_chord() {
-        shelf.push(("SEL+MEN+R1", "SCREENSHOT"));
-    }
     for (i, (key, what)) in shelf.iter().enumerate() {
-        let y = 132 + i as i32 * 30;
+        let y = 120 + i as i32 * 30;
         fonts.draw(cv, left_x, y, key, 11.0, pal().text);
         fonts.draw(cv, left_x + 150, y, what, 11.0, pal().text_dim);
     }
 
-    let mut game: Vec<(&str, &str)> = vec![
+    let game = [
         ("L2 HOLD", "REWIND"),
         ("R2 HOLD", "FAST FORWARD"),
         ("R2 DOUBLE-TAP", "FF LATCH"),
@@ -2140,11 +2157,8 @@ fn draw_controls(cv: &mut Canvas, fonts: &mut Fonts, t: f32) {
         ("SELECT+L/R", "TEMPERATURE"),
         ("HOLD MENU", "SAVE + EXIT"),
     ];
-    if crate::input::shot_chord() {
-        game.push(("SEL+MEN+R1", "SCREENSHOT"));
-    }
     for (i, (key, what)) in game.iter().enumerate() {
-        let y = 132 + i as i32 * 30;
+        let y = 120 + i as i32 * 30;
         fonts.draw(cv, right_x, y, key, 11.0, pal().text);
         fonts.draw(cv, right_x + 150, y, what, 11.0, pal().text_dim);
     }
@@ -2152,15 +2166,7 @@ fn draw_controls(cv: &mut Canvas, fonts: &mut Fonts, t: f32) {
     fonts.draw_center(
         cv,
         w / 2,
-        h - 26,
-        "PAUSE MENU: STATES / CORE / VIDEO / EXIT",
-        9.0,
-        pal().text_faint,
-    );
-    fonts.draw_center(
-        cv,
-        w / 2,
-        h - 12,
+        h - 24,
         "ANY BUTTON TO CLOSE",
         9.0,
         pal().text_dim,

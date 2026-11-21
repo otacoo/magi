@@ -182,7 +182,7 @@ impl Default for Prefs {
 
 pub const FF_STEPS_MIN: u32 = 2;
 pub const FF_STEPS_MAX: u32 = 6;
-pub const TEXT_SCALES: [f32; 3] = [1.0, 1.3, 1.5];
+pub const TEXT_SCALES: [f32; 3] = [1.05, 1.3, 1.5];
 const TEXT_LABELS: [&str; 3] = ["S", "M", "L"];
 
 const FIELD_RANGES: [(i32, i32); 5] = [
@@ -596,7 +596,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &SettingsState, t: f32) {
     };
     let left = 24;
     let right = w - 24;
-    let title_base = 30;
+    let title_base = 36;
     fonts.draw_bold(cv, left, title_base, title, 15.0, pal().title);
     fonts.draw(
         cv,
@@ -606,7 +606,7 @@ pub fn draw(cv: &mut Canvas, fonts: &mut Fonts, st: &SettingsState, t: f32) {
         9.0,
         pal().text_faint,
     );
-    let div_y = 60;
+    let div_y = 66;
     cv.hline(left, div_y, (right - left).max(1) as u32, pal().border);
     cv.fill_rect(left, div_y, 160, 3, pal().accent);
 

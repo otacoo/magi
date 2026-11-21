@@ -14,26 +14,47 @@ pub fn draw(
     t: f32,
 ) {
     let (w, h) = (cv.w, cv.h);
+    let s = theme::ui_scale();
+    let p = |v: f32| (v * s).round() as i32;
     cv.clear(pal().bg0);
-    theme::background(cv, 12, 62, (w - 32) as u32, (h - 122) as u32, t);
+    theme::background(
+        cv,
+        p(10.0),
+        p(10.0),
+        (w - p(20.0)).max(1) as u32,
+        (h - p(20.0)).max(1) as u32,
+        t,
+    );
     theme::glow_border(
         cv,
-        8,
-        8,
-        (w - 16) as u32,
-        (h - 16) as u32,
+        p(8.0),
+        p(8.0),
+        (w - p(16.0)).max(1) as u32,
+        (h - p(16.0)).max(1) as u32,
         pal().border,
         pal().glow,
         t,
-        0.6,
+        0.0,
     );
+    let left = 24;
+    let right = w - 24;
     let title_text = format!("MAGI // {title}");
-    fonts.draw_center(cv, w / 2, 42, &title_text, 15.0, pal().title);
-    theme::hazard_bar(cv, w / 2 - 150, 54, 300, 5, t);
+    fonts.draw_bold(cv, left, 36, &title_text, 15.0, pal().title);
+    fonts.draw(
+        cv,
+        left,
+        54,
+        "VERSION AND BUILD INFORMATION",
+        9.0,
+        pal().text_faint,
+    );
+    let div_y = 66;
+    cv.hline(left, div_y, (right - left).max(1) as u32, pal().border);
+    cv.fill_rect(left, div_y, 160, 3, pal().accent);
 
-    let x0 = w / 2 - 230;
-    let row_w = 460;
-    let mut y = 100;
+    let x0 = 38;
+    let row_w = (w - 76).max(400);
+    let mut y = 96;
     for (i, (label, on)) in toggles.iter().enumerate() {
         let selected = i == sel;
         if selected {
@@ -72,7 +93,7 @@ pub fn draw(
             11.0,
             if selected { pal().signal } else { pal().text },
         );
-        y += 34;
+        y += 28;
     }
     if !toggles.is_empty() {
         y += 8;
@@ -82,7 +103,7 @@ pub fn draw(
         let value = clip(value, 44);
         let tw = fonts.text_width(&value, 11.0);
         fonts.draw(cv, x0 + row_w - tw, y, &value, 11.0, pal().text);
-        y += 34;
+        y += 28;
     }
 
     // Corner tags, as on the scanner station plates.

@@ -22,10 +22,10 @@ fn chrome(cv: &mut Canvas, fonts: &mut Fonts, title: &str, t: f32) -> (i32, i32)
         0.6,
     );
     let title_text = format!("MAGI // {title}");
-    fonts.draw_bold(cv, 24, 30, &title_text, 15.0, pal().title);
-    fonts.draw(cv, 24, 48, net_subtitle(title), 9.0, pal().text_faint);
-    cv.hline(24, 60, (w - 48).max(1) as u32, pal().border);
-    cv.fill_rect(24, 60, 160, 3, pal().accent);
+    fonts.draw_bold(cv, 24, 36, &title_text, 15.0, pal().title);
+    fonts.draw(cv, 24, 54, net_subtitle(title), 9.0, pal().text_faint);
+    cv.hline(24, 66, (w - 48).max(1) as u32, pal().border);
+    cv.fill_rect(24, 66, 160, 3, pal().accent);
     (w, h)
 }
 
